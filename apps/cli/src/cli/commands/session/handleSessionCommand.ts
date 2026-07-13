@@ -121,7 +121,7 @@ export async function handleSessionCommand(
       console.log('happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--plain] [--json]');
       console.log('happier session status <session-id-or-prefix> [--live] [--json]');
       console.log('happier session create [--path <path>] [--backend <backend-target>] [--tag <tag>] [--title <title>] [--prompt <text>|--message <text>] [--json]');
-      console.log('happier session send <session-id-or-prefix> <message> [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]');
+      console.log('happier session send <session-id-or-prefix> <message> [--local-id <id>] [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]');
       console.log('happier session wait <session-id-or-prefix> [--timeout <seconds>] [--json]');
       console.log('happier session stop <session-id-or-prefix> [--json]');
       console.log('happier session history <session-id-or-prefix> [--limit N] [--format compact|raw] [--include-meta] [--include-structured-payload] [--json]');

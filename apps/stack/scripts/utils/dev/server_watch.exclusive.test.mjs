@@ -170,9 +170,11 @@ test('planned server termination honors the server shutdown deadline plus bounde
         },
       }),
       {
+        platform: 'win32',
         preflightDevServerRestartImpl: async () => {},
         listListenPidsImpl: async () => [101],
         getProcessGroupIdImpl: async (pid) => Number(pid),
+        readProcessInstanceFingerprintImpl: (pid) => `win32-cim:${pid}:incumbent`,
         killProcessGroupOwnedByStackImpl: async (_pid, options) => {
           terminationOptions = options;
           return { killed: false };
@@ -183,6 +185,43 @@ test('planned server termination honors the server shutdown deadline plus bounde
 
     await assert.rejects(() => executor.restart(), /could not be stopped safely/i);
     assert.equal(terminationOptions?.graceMs, 1450);
+    assert.equal(terminationOptions?.processInstanceFingerprint, 'win32-cim:101:incumbent');
+  });
+});
+
+test('planned Windows server termination refuses reload when the incumbent fingerprint is unavailable', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let killCount = 0;
+    let spawnCount = 0;
+    const executor = createDevServerReloadExecutor(
+      createExecutorOptions(serverDir, {
+        proxyController: {
+          pid: 91,
+          async enterMaintenance() {},
+          async flipUpstream() {},
+        },
+      }),
+      {
+        platform: 'win32',
+        preflightDevServerRestartImpl: async () => {},
+        listListenPidsImpl: async () => [101],
+        getProcessGroupIdImpl: async (pid) => Number(pid),
+        readProcessInstanceFingerprintImpl: () => null,
+        killProcessGroupOwnedByStackImpl: async () => {
+          killCount += 1;
+          return { killed: true };
+        },
+        pmSpawnScriptImpl: async () => {
+          spawnCount += 1;
+          return { pid: 202, exitCode: null };
+        },
+        logger: { log() {}, warn() {}, error() {} },
+      },
+    );
+
+    await assert.rejects(() => executor.restart(), /could not be stopped safely/i);
+    assert.equal(killCount, 0);
+    assert.equal(spawnCount, 0);
   });
 });
 

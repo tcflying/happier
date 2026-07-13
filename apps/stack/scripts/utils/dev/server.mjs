@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
+import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
+
 import { ensureDepsInstalled, pmExecBin, pmSpawnScript } from '../proc/pm.mjs';
 import { killProcessTree, markSpawnedProcessPlannedExit } from '../proc/proc.mjs';
 import {
@@ -635,18 +637,33 @@ async function killServerProcessGroupForPlannedReload({
   envPath,
   serverEnv,
   killProcessGroupOwnedByStackImpl,
+  platform,
+  readProcessInstanceFingerprintImpl,
   onTerminationRequested,
 }) {
   const clearPlannedExit = markSpawnedProcessPlannedExit(child, 'dev-reload');
   let result = null;
   try {
     onTerminationRequested?.();
+    let processInstanceFingerprint;
+    if (platform === 'win32') {
+      try {
+        processInstanceFingerprint = readProcessInstanceFingerprintImpl(pid);
+      } catch {
+        processInstanceFingerprint = null;
+      }
+      if (!String(processInstanceFingerprint ?? '').trim()) {
+        clearPlannedExit();
+        return { killed: false, reason: 'process_instance_unavailable' };
+      }
+    }
     result = await killProcessGroupOwnedByStackImpl(pid, {
       stackName,
       envPath,
       label: 'server',
       json: false,
       graceMs: resolveServerShutdownGraceMs(serverEnv),
+      ...(processInstanceFingerprint ? { processInstanceFingerprint } : {}),
     });
   } catch (error) {
     clearPlannedExit();
@@ -1072,6 +1089,8 @@ export function createDevServerReloadExecutor({
   probeTcpPortBindingImpl = probeTcpPortBinding,
   getProcessGroupIdImpl = getProcessGroupId,
   isPidAliveImpl = isPidAlive,
+  platform = process.platform,
+  readProcessInstanceFingerprintImpl = readProcessInstanceFingerprintSync,
   killSpawnedChildImpl = killProcessTree,
   terminateSpawnedChildImpl,
   preflightDevServerRestartImpl = preflightDevServerRestart,
@@ -1547,6 +1566,8 @@ export function createDevServerReloadExecutor({
         envPath,
         serverEnv,
         killProcessGroupOwnedByStackImpl,
+        platform,
+        readProcessInstanceFingerprintImpl,
         onTerminationRequested: () => emitTransitionEvent('old_server_shutdown_requested', {
           generation: reloadPlan.generation,
           pid,
@@ -2017,6 +2038,8 @@ export function createDevServerReloadExecutor({
         envPath,
         serverEnv,
         killProcessGroupOwnedByStackImpl,
+        platform,
+        readProcessInstanceFingerprintImpl,
         onTerminationRequested: () => emitTransitionEvent('old_server_shutdown_requested', {
           generation: reloadPlan.generation,
           pid,

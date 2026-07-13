@@ -30,6 +30,7 @@ function createWatcherOptions(serverDir, overrides = {}) {
     children: [],
     serverProcRef: { current: { pid: process.pid, exitCode: null } },
     isShuttingDown: () => false,
+    platform: 'linux',
     ...overrides,
   };
 }
@@ -773,6 +774,7 @@ test('startDevServer cleans up a spawned child when ownership proof fails', asyn
             quiet: true,
           },
           {
+            platform: 'linux',
             ensureDepsInstalledImpl: async () => {},
             pmSpawnScriptImpl: async () => ({ pid: 201, exitCode: null }),
             waitForServerReadyImpl: async () => {},
@@ -793,6 +795,99 @@ test('startDevServer cleans up a spawned child when ownership proof fails', asyn
     assert.deepEqual(children, []);
     assert.deepEqual(killedPids, [201]);
     assert.deepEqual(updates, []);
+  });
+});
+
+test('startDevServer accepts a Windows descendant listener owned by the spawned root', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const children = [];
+    const out = await startDevServer(
+      {
+        serverComponentName: 'happier-server-light',
+        serverDir,
+        autostart: { stackName: 'watch-test', baseDir: serverDir },
+        baseEnv: {
+          HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+          HAPPIER_STACK_PRISMA_PUSH: '0',
+          HAPPIER_STACK_MANAGED_INFRA: '0',
+          HAPPIER_STACK_PRISMA_MIGRATE: '0',
+        },
+        serverPort: 34567,
+        internalServerUrl: 'http://127.0.0.1:34567',
+        publicServerUrl: 'http://127.0.0.1:34567',
+        envPath: join(serverDir, 'env'),
+        stackMode: true,
+        runtimeStatePath: join(serverDir, 'stack.runtime.json'),
+        serverAlreadyRunning: false,
+        restart: false,
+        children,
+        quiet: true,
+      },
+      {
+        ensureDepsInstalledImpl: async () => {},
+        pmSpawnScriptImpl: async () => ({ pid: 100, exitCode: null }),
+        waitForServerReadyImpl: async () => {},
+        listListenPidsImpl: async () => [300],
+        platform: 'win32',
+        isWindowsPidDescendantOfImpl: async (candidatePid, ancestorPid) => {
+          assert.deepEqual([candidatePid, ancestorPid], [300, 100]);
+          return true;
+        },
+        getProcessGroupIdImpl: async () => {
+          throw new Error('Windows ownership must not use process groups');
+        },
+        recordStackRuntimeUpdateImpl: async () => {},
+      }
+    );
+
+    assert.equal(out.serverProc.pid, 100);
+  });
+});
+
+test('startDevServer rejects a Windows listener without proven ancestry', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const children = [];
+    await assert.rejects(
+      () => startDevServer(
+        {
+          serverComponentName: 'happier-server-light',
+          serverDir,
+          autostart: { stackName: 'watch-test', baseDir: serverDir },
+          baseEnv: {
+            HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+            HAPPIER_STACK_PRISMA_PUSH: '0',
+            HAPPIER_STACK_MANAGED_INFRA: '0',
+            HAPPIER_STACK_PRISMA_MIGRATE: '0',
+          },
+          serverPort: 34567,
+          internalServerUrl: 'http://127.0.0.1:34567',
+          publicServerUrl: 'http://127.0.0.1:34567',
+          envPath: join(serverDir, 'env'),
+          stackMode: true,
+          runtimeStatePath: join(serverDir, 'stack.runtime.json'),
+          serverAlreadyRunning: false,
+          restart: false,
+          children,
+          quiet: true,
+        },
+        {
+          ensureDepsInstalledImpl: async () => {},
+          pmSpawnScriptImpl: async () => ({ pid: 100, exitCode: null }),
+          waitForServerReadyImpl: async () => {},
+          listListenPidsImpl: async () => [300],
+          platform: 'win32',
+          isWindowsPidDescendantOfImpl: async () => false,
+          getProcessGroupIdImpl: async () => {
+            throw new Error('Windows ownership must not use process groups');
+          },
+          killProcessGroupOwnedByStackImpl: async () => ({ killed: true }),
+          recordStackRuntimeUpdateImpl: async () => {},
+        }
+      ),
+      /answered by another process/
+    );
+
+    assert.deepEqual(children, []);
   });
 });
 
@@ -827,6 +922,7 @@ test('startDevServer directly terminates a spawned child when marker cleanup ref
             quiet: true,
           },
           {
+            platform: 'linux',
             ensureDepsInstalledImpl: async () => {},
             pmSpawnScriptImpl: async () => ({ pid: 201, exitCode: null }),
             waitForServerReadyImpl: async () => {},
@@ -880,6 +976,7 @@ test('startDevServer runs stack restart cleanup even when existing server health
         quiet: true,
       },
       {
+        platform: 'linux',
         ensureDepsInstalledImpl: async () => {
           order.push('deps');
         },

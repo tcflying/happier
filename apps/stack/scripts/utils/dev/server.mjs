@@ -11,6 +11,7 @@ import { resolveServerReadyTimeoutMs, waitForServerReady } from '../server/serve
 import { isTcpPortFree, listListenPids, listListenPidsWithStatus, pickNextFreeTcpPort, waitForTcpPortFree } from '../net/ports.mjs';
 import { isPidAlive, readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { getProcessGroupId, isPidOwnedByStack, killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
+import { isWindowsPidDescendantOf } from '../proc/windows_process_tree.mjs';
 import { watchDebounced } from '../proc/watch.mjs';
 import { pickMetroPort, resolveStablePortStart } from '../expo/metro_ports.mjs';
 
@@ -159,6 +160,8 @@ async function assertServerPortOwnedBySpawnedProcessGroup({
   listListenPidsImpl = listListenPids,
   listListenPidsWithStatusImpl = listListenPidsWithStatus,
   getProcessGroupIdImpl = getProcessGroupId,
+  platform = process.platform,
+  isWindowsPidDescendantOfImpl = isWindowsPidDescendantOf,
 }) {
   const rootPid = Number(spawnedPid);
   const listenResult = await readListenPidsForOwnership({
@@ -184,6 +187,17 @@ async function assertServerPortOwnedBySpawnedProcessGroup({
 
   for (const listenPid of listenPids) {
     if (Number(listenPid) === rootPid) {
+      continue;
+    }
+    if (platform === 'win32') {
+      // eslint-disable-next-line no-await-in-loop
+      const isDescendant = await isWindowsPidDescendantOfImpl(Number(listenPid), rootPid).catch(() => false);
+      if (!isDescendant) {
+        throw new Error(
+          `[local] server readiness was answered by another process on port ${serverPort}; ` +
+            `spawned pid=${spawnedPid}, listeners=${listenPids.join(', ')}`
+        );
+      }
       continue;
     }
     if (!rootPgid) {
@@ -213,6 +227,8 @@ async function isServerPortOwnedByProcessGroup({
   listListenPidsImpl = listListenPids,
   listListenPidsWithStatusImpl = listListenPidsWithStatus,
   getProcessGroupIdImpl = getProcessGroupId,
+  platform = process.platform,
+  isWindowsPidDescendantOfImpl = isWindowsPidDescendantOf,
 }) {
   try {
     await assertServerPortOwnedBySpawnedProcessGroup({
@@ -221,6 +237,8 @@ async function isServerPortOwnedByProcessGroup({
       listListenPidsImpl,
       listListenPidsWithStatusImpl,
       getProcessGroupIdImpl,
+      platform,
+      isWindowsPidDescendantOfImpl,
     });
     return true;
   } catch {
@@ -540,6 +558,8 @@ export async function startDevServer({
   waitForServerReadyImpl = waitForServerReady,
   listListenPidsImpl = listListenPids,
   getProcessGroupIdImpl = getProcessGroupId,
+  platform = process.platform,
+  isWindowsPidDescendantOfImpl = isWindowsPidDescendantOf,
   recordStackRuntimeUpdateImpl = recordStackRuntimeUpdate,
   killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
   killSpawnedChildImpl = killProcessTree,
@@ -622,6 +642,8 @@ export async function startDevServer({
       spawnedPid: server.pid,
       listListenPidsImpl,
       getProcessGroupIdImpl,
+      platform,
+      isWindowsPidDescendantOfImpl,
     });
     if (hasChildExited(server)) {
       throw new Error(
@@ -663,6 +685,7 @@ export function watchDevServerAndRestart({
   children,
   serverProcRef,
   isShuttingDown,
+  platform = process.platform,
 }, {
   watchDebouncedImpl = watchDebounced,
   killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
@@ -673,6 +696,7 @@ export function watchDevServerAndRestart({
   waitForServerReadyImpl = waitForServerReady,
   listListenPidsImpl = listListenPids,
   getProcessGroupIdImpl = getProcessGroupId,
+  isWindowsPidDescendantOfImpl = isWindowsPidDescendantOf,
   isPidAliveImpl = isPidAlive,
   killSpawnedChildImpl = killProcessTree,
   signalSpawnedProcessGroupImpl = signalSpawnedProcessGroup,
@@ -730,6 +754,8 @@ export function watchDevServerAndRestart({
       rootPid: pid,
       listListenPidsImpl,
       getProcessGroupIdImpl,
+      platform,
+      isWindowsPidDescendantOfImpl,
     });
     if (ownsCurrentListener) {
       const killResult = await killProcessGroupOwnedByStackImpl(pid, { stackName, envPath, label: 'server', json: false });
@@ -773,6 +799,8 @@ export function watchDevServerAndRestart({
         spawnedPid: next.pid,
         listListenPidsImpl,
         getProcessGroupIdImpl,
+        platform,
+        isWindowsPidDescendantOfImpl,
       });
       if (hasChildExited(next)) {
         throw new Error(

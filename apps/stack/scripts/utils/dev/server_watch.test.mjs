@@ -798,6 +798,114 @@ test('startDevServer cleans up a spawned child when ownership proof fails', asyn
   });
 });
 
+test('watchDevServerAndRestart restarts Windows server after re-proving a listener descendant', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let spawned = false;
+    const current = { pid: 100, exitCode: null };
+    const children = [current];
+    const terminationRoots = [];
+    const ancestryChecks = [];
+    const serverProcRef = { current };
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { platform: 'win32', children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async () => {
+          throw new Error('Windows restart must use the spawned-root tree terminator');
+        },
+        terminateWindowsProcessTreeImpl: async (child) => {
+          terminationRoots.push(child);
+          return { killed: true };
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => (spawned ? [201] : [300]),
+        isWindowsPidDescendantOfImpl: async (candidatePid, ancestorPid) => {
+          ancestryChecks.push([candidatePid, ancestorPid]);
+          return true;
+        },
+        getProcessGroupIdImpl: async () => {
+          throw new Error('Windows ownership must not use process groups');
+        },
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.deepEqual(terminationRoots, [current], 'only the in-memory spawned root may be terminated');
+      assert.deepEqual(ancestryChecks, [[300, 100], [300, 100]]);
+      assert.equal(serverProcRef.current.pid, 201);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart rejects an unproven Windows listener without terminating either PID', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    const current = { pid: 100, exitCode: null };
+    const children = [current];
+    const terminationRoots = [];
+    const errors = [];
+    const serverProcRef = { current };
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { platform: 'win32', children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        terminateWindowsProcessTreeImpl: async (child) => {
+          terminationRoots.push(child);
+          return { killed: true };
+        },
+        isTcpPortFreeImpl: async () => true,
+        isPidAliveImpl: () => true,
+        listListenPidsImpl: async () => [300],
+        isWindowsPidDescendantOfImpl: async () => false,
+        getProcessGroupIdImpl: async () => {
+          throw new Error('Windows ownership must not use process groups');
+        },
+        pmSpawnScriptImpl: async () => {
+          throw new Error('must not spawn after unproven ownership');
+        },
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: {
+          log() {},
+          error(message) {
+            errors.push(String(message));
+          },
+        },
+      }
+    );
+
+    try {
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.deepEqual(terminationRoots, []);
+      assert.equal(serverProcRef.current, current);
+      assert.ok(errors.some((message) => message.includes('server restart failed')));
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
 test('startDevServer accepts a Windows descendant listener owned by the spawned root', async (t) => {
   await withTempServerDir(t, async (serverDir) => {
     const children = [];

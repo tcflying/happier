@@ -2,7 +2,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { ensureDepsInstalled, pmSpawnScript } from '../proc/pm.mjs';
-import { killProcessTree, run } from '../proc/proc.mjs';
+import { killProcessTree, run, runCapture } from '../proc/proc.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
 import { applyServerLightEnvDefaults } from '../server/apply_server_light_env_defaults.mjs';
 import { resolveServerDevScript } from '../server/flavor_scripts.mjs';
@@ -418,6 +418,21 @@ function signalSpawnedProcessGroup(child, signal) {
   }
 }
 
+async function terminateWindowsSpawnedProcessTree(
+  child,
+  { runCaptureImpl = runCapture, timeoutMs = 2_000 } = {},
+) {
+  const pid = Number(child?.pid);
+  if (!Number.isInteger(pid) || pid <= 1) return { killed: false, reason: 'invalid-root-pid' };
+
+  try {
+    await runCaptureImpl('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeoutMs });
+    return { killed: true, reason: 'killed_root_tree' };
+  } catch {
+    return { killed: false, reason: 'termination-error' };
+  }
+}
+
 async function terminateSpawnedChildForCleanup(
   child,
   {
@@ -697,6 +712,7 @@ export function watchDevServerAndRestart({
   listListenPidsImpl = listListenPids,
   getProcessGroupIdImpl = getProcessGroupId,
   isWindowsPidDescendantOfImpl = isWindowsPidDescendantOf,
+  terminateWindowsProcessTreeImpl = terminateWindowsSpawnedProcessTree,
   isPidAliveImpl = isPidAlive,
   killSpawnedChildImpl = killProcessTree,
   signalSpawnedProcessGroupImpl = signalSpawnedProcessGroup,
@@ -758,7 +774,28 @@ export function watchDevServerAndRestart({
       isWindowsPidDescendantOfImpl,
     });
     if (ownsCurrentListener) {
-      const killResult = await killProcessGroupOwnedByStackImpl(pid, { stackName, envPath, label: 'server', json: false });
+      let killResult;
+      if (platform === 'win32') {
+        // TOCTOU boundary: refresh listener ancestry immediately before taskkill.
+        // The command targets only this in-memory spawned root with /T; never the listener PID.
+        const stillOwnsCurrentListener = await isServerPortOwnedByProcessGroup({
+          serverPort,
+          rootPid: pid,
+          listListenPidsImpl,
+          getProcessGroupIdImpl,
+          platform,
+          isWindowsPidDescendantOfImpl,
+        });
+        if (!stillOwnsCurrentListener) {
+          throw new Error(
+            `[local] watch restart refused: server listener ownership could not be re-proven immediately before Windows termination ` +
+              `(pid=${pid}, port=${serverPort}).`
+          );
+        }
+        killResult = await terminateWindowsProcessTreeImpl(currentServerProc);
+      } else {
+        killResult = await killProcessGroupOwnedByStackImpl(pid, { stackName, envPath, label: 'server', json: false });
+      }
       if (!killResult.killed) {
         throw new Error(
           `[local] watch restart refused: server pid ${pid} owns port ${serverPort} but could not be stopped safely.\n` +

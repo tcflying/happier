@@ -47,3 +47,19 @@ test('readWindowsProcessParents uses the constant PowerShell snapshot script', a
     { timeoutMs: 1234 },
   ]]);
 });
+
+test('readWindowsProcessParents parses a single process snapshot object', async () => {
+  const result = await readWindowsProcessParents({
+    runCaptureImpl: async () => '{"ProcessId":300,"ParentProcessId":200}',
+  });
+
+  assert.deepEqual(result, new Map([[300, 200]]));
+});
+
+test('isWindowsPidDescendantOf fails closed for null, empty, and malformed snapshots', async () => {
+  for (const raw of ['null', '', '{']) {
+    assert.equal(await isWindowsPidDescendantOf(300, 100, {
+      readParentsImpl: () => readWindowsProcessParents({ runCaptureImpl: async () => raw }),
+    }), false, `snapshot ${JSON.stringify(raw)} must fail closed`);
+  }
+});

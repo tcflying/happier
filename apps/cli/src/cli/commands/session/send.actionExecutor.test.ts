@@ -20,7 +20,7 @@ describe('happier session send (action executor)', () => {
 
     const output = captureConsoleJsonOutput();
     try {
-      await handleSessionCommand(['send', 'sess-1', 'Hello', '--permission-mode', 'read_only', '--model', 'gpt-4o', '--wait', '--timeout', '30', '--json'], {
+      await handleSessionCommand(['send', 'sess-1', 'Hello', '--local-id', 'opaque id / retry\t', '--permission-mode', 'read_only', '--model', 'gpt-4o', '--wait', '--timeout', '30', '--json'], {
         readCredentialsFn: async () => ({
           token: 'token_test',
           encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
@@ -33,6 +33,7 @@ describe('happier session send (action executor)', () => {
         expect.objectContaining({
           sessionId: 'sess-1',
           message: 'Hello',
+          localId: 'opaque id / retry\t',
           permissionModeOverride: 'read-only',
           modelOverride: 'gpt-4o',
           wait: true,
@@ -50,6 +51,16 @@ describe('happier session send (action executor)', () => {
     } finally {
       output.restore();
     }
+  });
+
+  it('rejects a blank explicit local id before authentication or dispatch', async () => {
+    execute.mockClear();
+    const { handleSessionCommand } = await import('./handleSessionCommand');
+
+    await expect(handleSessionCommand(['send', 'sess-1', 'Hello', '--local-id', '   '], {
+      readCredentialsFn: async () => null,
+    })).rejects.toThrow('Invalid --local-id');
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('prints approval_request_created as the JSON envelope data', async () => {

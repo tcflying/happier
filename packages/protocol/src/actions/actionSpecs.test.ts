@@ -111,6 +111,18 @@ function sorted(values: readonly string[]): string[] {
 }
 
 describe('Action Spec Registry', () => {
+  it('exposes opaque session message idempotency ids only on the session send action', () => {
+    const sessionSend = getActionSpec('session.message.send');
+    const executionSend = getActionSpec('execution.run.send');
+    const localId = 'opaque id / retry\t';
+
+    expect(sessionSend).toBeDefined();
+    expect(sessionSend?.inputSchema.parse({ message: 'Continue', localId }).localId).toBe(localId);
+    expect(sessionSend?.inputSchema.safeParse({ message: 'Continue', localId: '   ' }).success).toBe(false);
+    expect(sessionSend?.inputHints?.fields?.some((field) => field.path === 'localId')).toBe(true);
+    expect(executionSend?.inputHints?.fields?.some((field) => field.path === 'localId')).toBe(false);
+  });
+
   it('supports session_agent as an action surface', () => {
     const parsed = ActionSurfaceSchema.parse({
       ui_button: false,

@@ -90,7 +90,7 @@ function printSessionSubcommandHelp(subcommand: string): boolean {
       console.log(SESSION_CREATE_USAGE);
       return true;
     case 'send':
-      console.log('happier session send <session-id-or-prefix> <message> [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]');
+      console.log('happier session send <session-id-or-prefix> <message> [--local-id <id>] [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]');
       return true;
     case 'set-title':
       console.log('happier session set-title <session-id-or-prefix> <title> [--json]');

@@ -58,6 +58,7 @@ describe('createActionExecutor (session control)', () => {
       {
         sessionId: 's1',
         message: 'Hello',
+        localId: 'fusion-msg-1',
         permissionModeOverride: 'read_only',
         modelOverride: 'gpt-4o',
         wait: true,
@@ -70,6 +71,7 @@ describe('createActionExecutor (session control)', () => {
     expect(sessionSendMessage).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 's1',
       message: 'Hello',
+      localId: 'fusion-msg-1',
       permissionModeOverride: 'read_only',
       modelOverride: 'gpt-4o',
       wait: true,
@@ -871,12 +873,14 @@ describe('createActionExecutor (session control)', () => {
       {
         sessionId: 'higher-privilege-session',
         message: 'Continue',
+        localId: 'opaque id / retry\t',
       },
       { surface: 'session_agent', defaultSessionId: 'caller', callerPermissionMode: 'read-only' } as any,
     );
 
     expect(res).toEqual({ ok: true, result: { ok: true } });
     expect(sessionSendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      localId: 'opaque id / retry\t',
       permissionModeOverride: 'read-only',
       callerSurface: 'session_agent',
       callerPermissionMode: 'read-only',

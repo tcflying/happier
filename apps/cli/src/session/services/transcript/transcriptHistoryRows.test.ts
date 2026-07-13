@@ -258,6 +258,23 @@ describe('extractCompactRow', () => {
 });
 
 describe('extractRawRow', () => {
+  it('preserves a transcript local id for protocol-level correlation', () => {
+    const row = extractRawRow({
+      decrypted: { role: 'user', content: { type: 'text', text: 'hello' } },
+      createdAt: 123,
+      fallbackId: 'server-row-1',
+      localId: 'fusion-msg-1',
+      includeMeta: false,
+      includeStructuredPayload: false,
+    });
+
+    expect(row).toMatchObject({
+      id: 'server-row-1',
+      localId: 'fusion-msg-1',
+      createdAt: 123,
+      role: 'user',
+    });
+  });
   it.each(localCommandArtifactRows)('does not emit raw rows for persisted $label artifacts', ({ decrypted }) => {
     const row = extractRawRow({
       createdAt: 1,

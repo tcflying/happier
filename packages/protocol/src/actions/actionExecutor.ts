@@ -255,6 +255,7 @@ export type ActionExecutorDeps = Readonly<{
   sessionSendMessage: (args: Readonly<{
     sessionId: string;
     message: string;
+    localId?: string;
     permissionModeOverride?: string;
     modelOverride?: string | null;
     wait?: boolean;
@@ -1971,6 +1972,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ? (parsed.data as any).modelOverride
             : undefined;
           const permissionOverrideRaw = (parsed.data as any).permissionModeOverride;
+          const localId = (parsed.data as Readonly<{ localId?: unknown }>).localId;
           const permissionModeForAgent = isSessionAgentCaller(ctx)
             && !(typeof permissionOverrideRaw === 'string' && permissionOverrideRaw.trim().length > 0)
               ? ctx.callerPermissionMode ?? 'default'
@@ -1984,6 +1986,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const res = await deps.sessionSendMessage({
             sessionId,
             message: (parsed.data as any).message,
+            ...(typeof localId === 'string' ? { localId } : {}),
             ...(permissionDecision?.ok === true
               ? { permissionModeOverride: permissionDecision.normalizedMode }
               : permissionOverrideRaw ? { permissionModeOverride: permissionOverrideRaw } : {}),

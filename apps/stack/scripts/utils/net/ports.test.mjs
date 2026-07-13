@@ -121,6 +121,20 @@ test('listListenPidsWithStatus fails closed when netstat command cannot be resol
   assert.deepEqual(result, { supported: false, pids: [], reason: 'listener-discovery-error' });
 });
 
+test('listListenPidsWithStatus fails closed when netstat command resolution throws', async () => {
+  const { listListenPidsWithStatus } = await import('./ports.mjs');
+  const result = await listListenPidsWithStatus(52211, {
+    platform: 'win32',
+    resolveCommandPathImpl: async () => {
+      throw new Error('netstat resolution failed');
+    },
+    runCaptureImpl: async () => {
+      throw new Error('must not run when netstat resolution throws');
+    },
+  });
+  assert.deepEqual(result, { supported: false, pids: [], reason: 'listener-discovery-error' });
+});
+
 test('listListenPidsWithStatus fails closed when netstat command execution fails', async () => {
   const { listListenPidsWithStatus } = await import('./ports.mjs');
   const result = await listListenPidsWithStatus(52211, {
@@ -131,4 +145,33 @@ test('listListenPidsWithStatus fails closed when netstat command execution fails
     },
   });
   assert.deepEqual(result, { supported: false, pids: [], reason: 'listener-discovery-error' });
+});
+
+test('isTcpPortFree fails closed when listener discovery reports an error', async () => {
+  const { isTcpPortFree } = await import('./ports.mjs');
+  const port = await getUnusedLoopbackPort();
+  const calls = [];
+  const result = await isTcpPortFree(port, {
+    timeoutMs: 37,
+    listListenPidsWithStatusImpl: async (discoveredPort, options) => {
+      calls.push({ discoveredPort, options });
+      return { supported: false, pids: [], reason: 'listener-discovery-error' };
+    },
+  });
+  assert.deepEqual(calls, [{ discoveredPort: port, options: { timeoutMs: 37 } }]);
+  assert.equal(result, false);
+});
+
+test('isTcpPortFree keeps bind fallback when listener discovery is unavailable', async () => {
+  const { isTcpPortFree } = await import('./ports.mjs');
+  const port = await getUnusedLoopbackPort();
+  const calls = [];
+  const result = await isTcpPortFree(port, {
+    listListenPidsWithStatusImpl: async (discoveredPort, options) => {
+      calls.push({ discoveredPort, options });
+      return { supported: false, pids: [], reason: 'missing-listener-discovery-command' };
+    },
+  });
+  assert.deepEqual(calls, [{ discoveredPort: port, options: { timeoutMs: 250 } }]);
+  assert.equal(result, true);
 });

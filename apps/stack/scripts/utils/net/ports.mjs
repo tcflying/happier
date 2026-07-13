@@ -168,13 +168,22 @@ export async function killPortListeners(port, { label = 'port' } = {}) {
   return pids;
 }
 
-export async function isTcpPortFree(port, { host = '127.0.0.1', timeoutMs = 250 } = {}) {
+export async function isTcpPortFree(
+  port,
+  { host = '127.0.0.1', timeoutMs = 250, listListenPidsWithStatusImpl = listListenPidsWithStatus } = {}
+) {
   if (!Number.isFinite(port) || port <= 0) return false;
 
   // Prefer lsof-based detection to catch IPv6 listeners (e.g. TCP *:8081 (LISTEN))
   // which can make a "bind 127.0.0.1" probe incorrectly report "free" on macOS.
-  const pids = await listListenPids(port, { timeoutMs });
-  if (pids.length) return false;
+  let discovery;
+  try {
+    discovery = await listListenPidsWithStatusImpl(port, { timeoutMs });
+  } catch {
+    return false;
+  }
+  if (discovery.pids.length) return false;
+  if (!discovery.supported && discovery.reason === 'listener-discovery-error') return false;
 
   // Fallback: attempt to bind.
   return await new Promise((resolvePromise) => {

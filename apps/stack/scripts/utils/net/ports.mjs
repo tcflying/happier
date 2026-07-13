@@ -53,12 +53,18 @@ export function parseWindowsNetstatListenPids(raw, port) {
   const pids = new Set();
   for (const line of String(raw ?? '').split(/\r?\n/)) {
     const fields = line.trim().split(/\s+/);
-    if (fields.length < 5 || fields[0].toUpperCase() !== 'TCP' || fields[3].toUpperCase() !== 'LISTENING') continue;
+    if (fields[0]?.toUpperCase() !== 'TCP') continue;
+    if (fields.length < 5) throw new Error('invalid-netstat-output');
+    const state = fields[3].toUpperCase();
+    if (state !== 'LISTEN' && state !== 'LISTENING') continue;
     const endpoint = fields[1] ?? '';
     const separator = endpoint.lastIndexOf(':');
     const endpointPort = Number(endpoint.slice(separator + 1));
     const pid = Number(fields[4]);
-    if (endpointPort === targetPort && Number.isInteger(pid) && pid > 0) pids.add(pid);
+    if (separator < 0 || !Number.isInteger(endpointPort) || !Number.isInteger(pid) || pid <= 0) {
+      throw new Error('invalid-netstat-output');
+    }
+    if (endpointPort === targetPort) pids.add(pid);
   }
   return [...pids].sort((a, b) => a - b);
 }

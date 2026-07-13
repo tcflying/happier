@@ -65,10 +65,11 @@ test('parseWindowsNetstatListenPids returns exact IPv4 and IPv6 listener PIDs', 
   const raw = [
     '  TCP    0.0.0.0:52211          0.0.0.0:0              LISTENING       66988',
     '  TCP    [::]:52211             [::]:0                 LISTENING       66988',
+    '  TCP    [2001:db8::1]:52211    [::]:0                 LISTEN           12345',
     '  TCP    127.0.0.1:522110       0.0.0.0:0              LISTENING       77777',
     '  TCP    127.0.0.1:52211        127.0.0.1:60000        ESTABLISHED     88888',
   ].join('\r\n');
-  assert.deepEqual(parseWindowsNetstatListenPids(raw, 52211), [66988]);
+  assert.deepEqual(parseWindowsNetstatListenPids(raw, 52211), [12345, 66988]);
 });
 
 test('listListenPidsWithStatus uses netstat on Windows', async () => {
@@ -76,12 +77,58 @@ test('listListenPidsWithStatus uses netstat on Windows', async () => {
   const calls = [];
   const result = await listListenPidsWithStatus(52211, {
     platform: 'win32',
-    resolveCommandPathImpl: async (name) => name === 'netstat' ? 'C:\\Windows\\System32\\netstat.exe' : '',
-    runCaptureImpl: async (command, args) => {
-      calls.push({ command, args });
+    timeoutMs: 4321,
+    resolveCommandPathImpl: async (name, options) => {
+      calls.push({ dependency: 'resolve', name, options });
+      return name === 'netstat' ? 'C:\\Windows\\System32\\netstat.exe' : '';
+    },
+    runCaptureImpl: async (command, args, options) => {
+      calls.push({ dependency: 'run', command, args, options });
       return 'TCP 0.0.0.0:52211 0.0.0.0:0 LISTENING 66988';
     },
   });
   assert.deepEqual(result, { supported: true, pids: [66988] });
-  assert.deepEqual(calls, [{ command: 'C:\\Windows\\System32\\netstat.exe', args: ['-ano', '-p', 'tcp'] }]);
+  assert.deepEqual(calls, [
+    { dependency: 'resolve', name: 'netstat', options: { timeoutMs: 4321 } },
+    {
+      dependency: 'run',
+      command: 'C:\\Windows\\System32\\netstat.exe',
+      args: ['-ano', '-p', 'tcp'],
+      options: { timeoutMs: 4321 },
+    },
+  ]);
+});
+
+test('listListenPidsWithStatus fails closed when netstat output cannot be parsed', async () => {
+  const { listListenPidsWithStatus } = await import('./ports.mjs');
+  const result = await listListenPidsWithStatus(52211, {
+    platform: 'win32',
+    resolveCommandPathImpl: async () => 'C:\\Windows\\System32\\netstat.exe',
+    runCaptureImpl: async () => 'TCP 0.0.0.0:52211 0.0.0.0:0 LISTENING not-a-pid',
+  });
+  assert.deepEqual(result, { supported: false, pids: [], reason: 'listener-discovery-error' });
+});
+
+test('listListenPidsWithStatus fails closed when netstat command cannot be resolved', async () => {
+  const { listListenPidsWithStatus } = await import('./ports.mjs');
+  const result = await listListenPidsWithStatus(52211, {
+    platform: 'win32',
+    resolveCommandPathImpl: async () => '',
+    runCaptureImpl: async () => {
+      throw new Error('must not run without a resolved netstat command');
+    },
+  });
+  assert.deepEqual(result, { supported: false, pids: [], reason: 'listener-discovery-error' });
+});
+
+test('listListenPidsWithStatus fails closed when netstat command execution fails', async () => {
+  const { listListenPidsWithStatus } = await import('./ports.mjs');
+  const result = await listListenPidsWithStatus(52211, {
+    platform: 'win32',
+    resolveCommandPathImpl: async () => 'C:\\Windows\\System32\\netstat.exe',
+    runCaptureImpl: async () => {
+      throw new Error('netstat failed');
+    },
+  });
+  assert.deepEqual(result, { supported: false, pids: [], reason: 'listener-discovery-error' });
 });

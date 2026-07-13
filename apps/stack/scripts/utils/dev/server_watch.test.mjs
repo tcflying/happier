@@ -51,6 +51,7 @@ async function runWindowsWatcherChange(serverDir, {
   runCaptureImpl = async () => '',
   waitForChildExitImpl = async () => true,
   isPidAliveImpl = () => true,
+  changeCount = 1,
 } = {}) {
   let capturedOnChange = null;
   let spawned = false;
@@ -59,9 +60,52 @@ async function runWindowsWatcherChange(serverDir, {
   const taskkillCalls = [];
   const ancestryChecks = [];
   const errors = [];
-  const serverProcRef = { current };
+  const cleanupCalls = [];
   const identityQueue = [...identityResults];
   const ancestryQueue = [...ancestryResults];
+
+  let started;
+  if (current?.exitCode !== null && current?.exitCode !== undefined) {
+    started = { serverProc: current };
+  } else {
+    started = await startDevServer(
+      {
+        serverComponentName: 'happier-server-light',
+        serverDir,
+        autostart: { stackName: 'watch-test', baseDir: serverDir },
+        baseEnv: {
+          HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+          HAPPIER_STACK_PRISMA_PUSH: '0',
+          HAPPIER_STACK_MANAGED_INFRA: '0',
+          HAPPIER_STACK_PRISMA_MIGRATE: '0',
+        },
+        serverPort: 34567,
+        internalServerUrl: 'http://127.0.0.1:34567',
+        publicServerUrl: 'http://127.0.0.1:34567',
+        envPath: join(serverDir, 'env'),
+        stackMode: true,
+        runtimeStatePath: join(serverDir, 'stack.runtime.json'),
+        serverAlreadyRunning: false,
+        restart: false,
+        children,
+        quiet: true,
+      },
+      {
+        ensureDepsInstalledImpl: async () => {},
+        pmSpawnScriptImpl: async () => current,
+        waitForServerReadyImpl: async () => {},
+        listListenPidsImpl: async () => [300],
+        platform: 'win32',
+        readWindowsProcessIdentityImpl: async () => identityQueue.shift() ?? null,
+        isWindowsPidDescendantOfImpl: async () => true,
+        getProcessGroupIdImpl: async () => {
+          throw new Error('Windows ownership must not use process groups');
+        },
+        recordStackRuntimeUpdateImpl: async () => {},
+      },
+    );
+  }
+  const serverProcRef = { current: started.serverProc };
 
   const watcher = watchDevServerAndRestart(
     createWatcherOptions(serverDir, { platform: 'win32', children, serverProcRef }),
@@ -86,6 +130,10 @@ async function runWindowsWatcherChange(serverDir, {
         spawned = true;
         return { pid: 201, exitCode: null };
       },
+      terminateSpawnedChildImpl: async (child) => {
+        cleanupCalls.push(child);
+        return true;
+      },
       listListenPidsImpl: async () => (spawned ? [201] : [300]),
       isWindowsPidDescendantOfImpl: async (candidatePid, ancestorPid) => {
         ancestryChecks.push([candidatePid, ancestorPid]);
@@ -107,12 +155,14 @@ async function runWindowsWatcherChange(serverDir, {
   );
 
   try {
-    await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+    for (let index = 0; index < changeCount; index += 1) {
+      await capturedOnChange({ eventType: 'change', filename: `change-${index}.ts` });
+    }
   } finally {
     watcher?.close?.();
   }
 
-  return { serverProcRef, taskkillCalls, ancestryChecks, errors, spawnCalls };
+  return { serverProcRef, taskkillCalls, ancestryChecks, errors, spawnCalls, cleanupCalls };
 }
 
 test('watchDevServerAndRestart watches server-light because dev:light does not self-reload', async (t) => {
@@ -967,6 +1017,38 @@ test('watchDevServerAndRestart does not spawn when the Windows root does not exi
     assert.equal(result.taskkillCalls.length, 1);
     assert.equal(result.serverProcRef.current.pid, 100);
     assert.equal(result.spawnCalls, 0);
+  });
+});
+
+test('watchDevServerAndRestart never late-binds a Windows root after initial identity capture fails', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const identity = { pid: 100, creationDate: '20260713143000.000000+480' };
+    const result = await runWindowsWatcherChange(serverDir, {
+      changeCount: 2,
+      ancestryResults: [true, true, true, true],
+      identityResults: [null, identity, identity, identity],
+    });
+
+    assert.deepEqual(result.taskkillCalls, []);
+    assert.equal(result.serverProcRef.current.pid, 100);
+    assert.equal(result.spawnCalls, 0);
+  });
+});
+
+test('watchDevServerAndRestart does not adopt a Windows replacement without initial identity capture', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const result = await runWindowsWatcherChange(serverDir, {
+      identityResults: [
+        { pid: 100, creationDate: '20260713143000.000000+480' },
+        { pid: 100, creationDate: '20260713143000.000000+480' },
+        null,
+      ],
+    });
+
+    assert.equal(result.taskkillCalls.length, 1);
+    assert.equal(result.serverProcRef.current.pid, 100);
+    assert.equal(result.spawnCalls, 1);
+    assert.deepEqual(result.cleanupCalls, [{ pid: 201, exitCode: null }]);
   });
 });
 

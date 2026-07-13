@@ -422,12 +422,18 @@ function signalSpawnedProcessGroup(child, signal) {
 
 async function bindWindowsProcessIdentity(child, readWindowsProcessIdentityImpl) {
   if (!child || windowsProcessIdentities.has(child)) return windowsProcessIdentities.get(child) ?? null;
-  const identity = await readWindowsProcessIdentityImpl(Number(child.pid)).catch(() => null);
-  if (identity?.pid === Number(child.pid) && typeof identity.creationDate === 'string' && identity.creationDate.length > 0) {
-    windowsProcessIdentities.set(child, identity);
-    return identity;
+  // Cache null as an explicit untrusted state; watcher restarts never late-bind a held root.
+  let identity = null;
+  try {
+    identity = await readWindowsProcessIdentityImpl(Number(child.pid));
+  } catch {
+    identity = null;
   }
-  return null;
+  const trusted = identity?.pid === Number(child.pid)
+    && typeof identity.creationDate === 'string'
+    && identity.creationDate.length > 0;
+  windowsProcessIdentities.set(child, trusted ? identity : null);
+  return trusted ? identity : null;
 }
 
 async function terminateWindowsSpawnedProcessTree(
@@ -786,10 +792,6 @@ export function watchDevServerAndRestart({
     const pid = Number(currentServerProc?.pid);
     if (!Number.isFinite(pid) || pid <= 1) return false;
 
-    if (platform === 'win32') {
-      await bindWindowsProcessIdentity(currentServerProc, readWindowsProcessIdentityImpl);
-    }
-
     await preflightDevServerRestartImpl({ serverDir, serverComponentName, serverEnv, logger });
 
     logger.log('[local] watch: server preflight passed → restarting...');
@@ -868,7 +870,13 @@ export function watchDevServerAndRestart({
     try {
       next = await pmSpawnScriptImpl({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
       if (platform === 'win32') {
-        await bindWindowsProcessIdentity(next, readWindowsProcessIdentityImpl);
+        const identity = await bindWindowsProcessIdentity(next, readWindowsProcessIdentityImpl);
+        if (!identity) {
+          throw new Error(
+            `[local] watch restart refused: Windows replacement process identity could not be captured ` +
+              `(pid=${Number(next?.pid)}).`
+          );
+        }
       }
       children.push(next);
       await waitForServerReadyImpl(internalServerUrl, {

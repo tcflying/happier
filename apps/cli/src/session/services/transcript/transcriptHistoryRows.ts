@@ -12,6 +12,7 @@ export type CompactHistoryRow = Readonly<{
 
 export type RawHistoryRow = Readonly<{
   id: string;
+  localId?: string;
   createdAt: number;
   role: string;
   raw: Record<string, unknown>;
@@ -194,6 +195,7 @@ export function extractRawRow(params: Readonly<{
   decrypted: unknown;
   createdAt: number;
   fallbackId: string;
+  localId?: string;
   includeMeta: boolean;
   includeStructuredPayload: boolean;
 }>): RawHistoryRow | null {
@@ -223,6 +225,7 @@ export function extractRawRow(params: Readonly<{
 
   return {
     id: params.fallbackId,
+    ...(params.localId ? { localId: params.localId } : {}),
     createdAt: params.createdAt,
     role,
     raw,

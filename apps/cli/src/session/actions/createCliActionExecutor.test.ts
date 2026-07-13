@@ -1081,7 +1081,7 @@ describe('createCliActionExecutor', () => {
 
     const result = await executor.execute(
       'session.message.send',
-      { sessionId: 'sess-1', message: 'Hello', wait: false, timeoutSeconds: 10 },
+      { sessionId: 'sess-1', message: 'Hello', localId: 'fusion-msg-1', wait: false, timeoutSeconds: 10 },
       { surface: 'cli', defaultSessionId: 'sess-1' },
     );
 
@@ -1093,6 +1093,7 @@ describe('createCliActionExecutor', () => {
       credentials: expect.objectContaining({ token: 'token' }),
       idOrPrefix: 'sess-1',
       message: 'Hello',
+      localId: 'fusion-msg-1',
       wait: false,
       timeoutMs: 10_000,
     }));

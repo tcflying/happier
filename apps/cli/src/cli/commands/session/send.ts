@@ -28,6 +28,9 @@ export async function cmdSessionSend(
   const message = String(argv[2] ?? '').trim();
   const wait = hasFlag(argv, '--wait');
   const timeoutSecondsRaw = readIntFlagValue(argv, '--timeout');
+  const localIdFlagRaw = readFlagValue(argv, '--local-id');
+  const hasLocalIdFlag = localIdFlagRaw !== null;
+  const localId = typeof localIdFlagRaw === 'string' ? localIdFlagRaw.trim() : '';
   const permissionModeFlag = (readFlagValue(argv, '--permission-mode') ?? '').trim();
   const modelFlagRaw = readFlagValue(argv, '--model');
   const hasModelFlag = modelFlagRaw !== null;
@@ -38,7 +41,13 @@ export async function cmdSessionSend(
       : 300;
 
   if (!idOrPrefix || !message) {
-    throw new Error('Usage: happier session send <session-id-or-prefix> <message> [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]');
+    throw new Error('Usage: happier session send <session-id-or-prefix> <message> [--local-id <id>] [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]');
+  }
+
+  if (hasLocalIdFlag && (!localId || localId.length > 128 || !/^[A-Za-z0-9._:-]+$/u.test(localId))) {
+    const err = new Error('Invalid --local-id: expected 1-128 characters from A-Z, a-z, 0-9, dot, underscore, colon, or hyphen');
+    (err as any).code = 'invalid_arguments';
+    throw err;
   }
 
   const credentials = await deps.readCredentialsFn();
@@ -70,6 +79,7 @@ export async function cmdSessionSend(
     {
       sessionId: idOrPrefix,
       message,
+      ...(hasLocalIdFlag ? { localId } : {}),
       ...(permissionModeOverride ? { permissionModeOverride } : {}),
       ...(modelOverride !== undefined ? { modelOverride } : {}),
       ...(wait ? { wait: true } : {}),

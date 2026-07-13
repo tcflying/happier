@@ -126,6 +126,7 @@ export type ActionExecutorDeps = Readonly<{
   sessionSendMessage: (args: Readonly<{
     sessionId: string;
     message: string;
+    localId?: string;
     permissionModeOverride?: string;
     modelOverride?: string | null;
     wait?: boolean;
@@ -1417,6 +1418,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const res = await deps.sessionSendMessage({
             sessionId,
             message: (parsed.data as any).message,
+            ...(((parsed.data as any).localId) ? { localId: (parsed.data as any).localId } : {}),
             ...(((parsed.data as any).permissionModeOverride) ? { permissionModeOverride: (parsed.data as any).permissionModeOverride } : {}),
             ...(modelOverrideRaw === null
               ? { modelOverride: null }

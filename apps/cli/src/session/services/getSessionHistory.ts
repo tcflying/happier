@@ -78,6 +78,7 @@ async function readSessionHistoryRows(params: Readonly<{
             decrypted,
             createdAt,
             fallbackId,
+            ...(typeof row.localId === 'string' && row.localId.length > 0 ? { localId: row.localId } : {}),
             includeMeta: params.includeMeta,
             includeStructuredPayload: params.includeStructuredPayload,
           })

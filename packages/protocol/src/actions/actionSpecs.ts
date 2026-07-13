@@ -576,6 +576,7 @@ const ActionOptionsResolveInputSchema = z.object({
 const SessionSendMessageInputSchema = z.object({
   sessionId: z.string().min(1).optional(),
   message: z.string().min(1),
+  localId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/u).optional(),
   permissionModeOverride: z.string().trim().min(1).optional(),
   modelOverride: z.union([z.string().trim().min(1), z.null()]).optional(),
   wait: z.boolean().optional(),
@@ -1213,6 +1214,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       fields: [
         { path: 'runId', title: 'Run id', widget: 'text', required: true },
         { path: 'message', title: 'Message', widget: 'textarea', required: true },
+        { path: 'localId', title: 'Idempotency id (optional)', widget: 'text' },
         { path: 'resume', title: 'Resume if needed', widget: 'toggle' },
       ],
     },

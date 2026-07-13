@@ -1,6 +1,12 @@
 import { runCapture } from './proc.mjs';
 
 const PROCESS_SNAPSHOT_SCRIPT = 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress';
+const PROCESS_IDENTITY_SNAPSHOT_SCRIPT = 'Get-CimInstance Win32_Process | Select-Object ProcessId,CreationDate | ConvertTo-Json -Compress';
+
+function parseSnapshotRows(raw) {
+  const records = JSON.parse(raw);
+  return Array.isArray(records) ? records : [records];
+}
 
 export async function readWindowsProcessParents({ runCaptureImpl = runCapture, timeoutMs = 2000 } = {}) {
   const raw = await runCaptureImpl(
@@ -8,8 +14,7 @@ export async function readWindowsProcessParents({ runCaptureImpl = runCapture, t
     ['-NoProfile', '-NonInteractive', '-Command', PROCESS_SNAPSHOT_SCRIPT],
     { timeoutMs },
   );
-  const records = JSON.parse(raw);
-  const rows = Array.isArray(records) ? records : [records];
+  const rows = parseSnapshotRows(raw);
   return new Map(rows.flatMap((row) => {
     const pid = Number(row?.ProcessId);
     const parentPid = Number(row?.ParentProcessId);
@@ -17,6 +22,27 @@ export async function readWindowsProcessParents({ runCaptureImpl = runCapture, t
       ? [[pid, parentPid]]
       : [];
   }));
+}
+
+export async function readWindowsProcessIdentity(
+  pid,
+  { runCaptureImpl = runCapture, timeoutMs = 2000 } = {},
+) {
+  const expectedPid = Number(pid);
+  if (!Number.isInteger(expectedPid) || expectedPid <= 1) return null;
+
+  try {
+    const raw = await runCaptureImpl(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', PROCESS_IDENTITY_SNAPSHOT_SCRIPT],
+      { timeoutMs },
+    );
+    const row = parseSnapshotRows(raw).find((candidate) => Number(candidate?.ProcessId) === expectedPid);
+    const creationDate = String(row?.CreationDate ?? '').trim();
+    return creationDate ? { pid: expectedPid, creationDate } : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function isWindowsPidDescendantOf(

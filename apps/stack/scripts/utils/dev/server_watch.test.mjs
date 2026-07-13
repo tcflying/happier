@@ -40,6 +40,81 @@ function createChangingSignatureReader() {
   return () => String(value++);
 }
 
+async function runWindowsWatcherChange(serverDir, {
+  current = { pid: 100, exitCode: null },
+  ancestryResults = [true, true],
+  identityResults = [
+    { pid: 100, creationDate: '20260713143000.000000+480' },
+    { pid: 100, creationDate: '20260713143000.000000+480' },
+    { pid: 201, creationDate: '20260713143001.000000+480' },
+  ],
+  runCaptureImpl = async () => '',
+  waitForChildExitImpl = async () => true,
+  isPidAliveImpl = () => true,
+} = {}) {
+  let capturedOnChange = null;
+  let spawned = false;
+  let spawnCalls = 0;
+  const children = [current];
+  const taskkillCalls = [];
+  const ancestryChecks = [];
+  const errors = [];
+  const serverProcRef = { current };
+  const identityQueue = [...identityResults];
+  const ancestryQueue = [...ancestryResults];
+
+  const watcher = watchDevServerAndRestart(
+    createWatcherOptions(serverDir, { platform: 'win32', children, serverProcRef }),
+    {
+      watchDebouncedImpl: ({ onChange }) => {
+        capturedOnChange = onChange;
+        return { close() {} };
+      },
+      killProcessGroupOwnedByStackImpl: async () => {
+        throw new Error('Windows restart must not use POSIX marker/process-group ownership');
+      },
+      runCaptureImpl: async (...args) => {
+        taskkillCalls.push(args);
+        return await runCaptureImpl(...args);
+      },
+      waitForChildExitImpl,
+      readWindowsProcessIdentityImpl: async () => identityQueue.shift() ?? null,
+      isPidAliveImpl,
+      waitForTcpPortFreeImpl: async () => true,
+      pmSpawnScriptImpl: async () => {
+        spawnCalls += 1;
+        spawned = true;
+        return { pid: 201, exitCode: null };
+      },
+      listListenPidsImpl: async () => (spawned ? [201] : [300]),
+      isWindowsPidDescendantOfImpl: async (candidatePid, ancestorPid) => {
+        ancestryChecks.push([candidatePid, ancestorPid]);
+        return ancestryQueue.shift() ?? false;
+      },
+      getProcessGroupIdImpl: async () => {
+        throw new Error('Windows ownership must not use process groups');
+      },
+      recordStackRuntimeUpdateImpl: async () => {},
+      waitForServerReadyImpl: async () => {},
+      readWatchChangeSignatureImpl: createChangingSignatureReader(),
+      logger: {
+        log() {},
+        error(message) {
+          errors.push(String(message));
+        },
+      },
+    }
+  );
+
+  try {
+    await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+  } finally {
+    watcher?.close?.();
+  }
+
+  return { serverProcRef, taskkillCalls, ancestryChecks, errors, spawnCalls };
+}
+
 test('watchDevServerAndRestart watches server-light because dev:light does not self-reload', async (t) => {
   await withTempServerDir(t, async (serverDir) => {
     const watcher = watchDevServerAndRestart(createWatcherOptions(serverDir));
@@ -800,109 +875,98 @@ test('startDevServer cleans up a spawned child when ownership proof fails', asyn
 
 test('watchDevServerAndRestart restarts Windows server after re-proving a listener descendant', async (t) => {
   await withTempServerDir(t, async (serverDir) => {
-    let capturedOnChange = null;
-    let spawned = false;
-    const current = { pid: 100, exitCode: null };
-    const children = [current];
-    const terminationRoots = [];
-    const ancestryChecks = [];
-    const serverProcRef = { current };
+    const result = await runWindowsWatcherChange(serverDir);
 
-    const watcher = watchDevServerAndRestart(
-      createWatcherOptions(serverDir, { platform: 'win32', children, serverProcRef }),
-      {
-        watchDebouncedImpl: ({ onChange }) => {
-          capturedOnChange = onChange;
-          return { close() {} };
-        },
-        killProcessGroupOwnedByStackImpl: async () => {
-          throw new Error('Windows restart must use the spawned-root tree terminator');
-        },
-        terminateWindowsProcessTreeImpl: async (child) => {
-          terminationRoots.push(child);
-          return { killed: true };
-        },
-        waitForTcpPortFreeImpl: async () => true,
-        pmSpawnScriptImpl: async () => {
-          spawned = true;
-          return { pid: 201, exitCode: null };
-        },
-        listListenPidsImpl: async () => (spawned ? [201] : [300]),
-        isWindowsPidDescendantOfImpl: async (candidatePid, ancestorPid) => {
-          ancestryChecks.push([candidatePid, ancestorPid]);
-          return true;
-        },
-        getProcessGroupIdImpl: async () => {
-          throw new Error('Windows ownership must not use process groups');
-        },
-        recordStackRuntimeUpdateImpl: async () => {},
-        waitForServerReadyImpl: async () => {},
-        readWatchChangeSignatureImpl: createChangingSignatureReader(),
-        logger: { log() {}, error() {} },
-      }
-    );
-
-    try {
-      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
-
-      assert.deepEqual(terminationRoots, [current], 'only the in-memory spawned root may be terminated');
-      assert.deepEqual(ancestryChecks, [[300, 100], [300, 100]]);
-      assert.equal(serverProcRef.current.pid, 201);
-    } finally {
-      watcher?.close?.();
-    }
+    assert.deepEqual(result.taskkillCalls, [[
+      'taskkill.exe',
+      ['/PID', '100', '/T', '/F'],
+      { timeoutMs: 2000 },
+    ]]);
+    assert.deepEqual(result.ancestryChecks, [[300, 100], [300, 100]]);
+    assert.equal(result.serverProcRef.current.pid, 201);
+    assert.equal(result.spawnCalls, 1);
   });
 });
 
 test('watchDevServerAndRestart rejects an unproven Windows listener without terminating either PID', async (t) => {
   await withTempServerDir(t, async (serverDir) => {
-    let capturedOnChange = null;
-    const current = { pid: 100, exitCode: null };
-    const children = [current];
-    const terminationRoots = [];
-    const errors = [];
-    const serverProcRef = { current };
+    const result = await runWindowsWatcherChange(serverDir, { ancestryResults: [false] });
 
-    const watcher = watchDevServerAndRestart(
-      createWatcherOptions(serverDir, { platform: 'win32', children, serverProcRef }),
-      {
-        watchDebouncedImpl: ({ onChange }) => {
-          capturedOnChange = onChange;
-          return { close() {} };
-        },
-        terminateWindowsProcessTreeImpl: async (child) => {
-          terminationRoots.push(child);
-          return { killed: true };
-        },
-        isTcpPortFreeImpl: async () => true,
-        isPidAliveImpl: () => true,
-        listListenPidsImpl: async () => [300],
-        isWindowsPidDescendantOfImpl: async () => false,
-        getProcessGroupIdImpl: async () => {
-          throw new Error('Windows ownership must not use process groups');
-        },
-        pmSpawnScriptImpl: async () => {
-          throw new Error('must not spawn after unproven ownership');
-        },
-        readWatchChangeSignatureImpl: createChangingSignatureReader(),
-        logger: {
-          log() {},
-          error(message) {
-            errors.push(String(message));
-          },
-        },
-      }
-    );
+    assert.deepEqual(result.taskkillCalls, []);
+    assert.equal(result.serverProcRef.current.pid, 100);
+    assert.equal(result.spawnCalls, 0);
+    assert.ok(result.errors.some((message) => message.includes('server restart failed')));
+  });
+});
 
-    try {
-      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+test('watchDevServerAndRestart refuses Windows taskkill when immediate ancestry re-proof fails', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const result = await runWindowsWatcherChange(serverDir, { ancestryResults: [true, false] });
 
-      assert.deepEqual(terminationRoots, []);
-      assert.equal(serverProcRef.current, current);
-      assert.ok(errors.some((message) => message.includes('server restart failed')));
-    } finally {
-      watcher?.close?.();
-    }
+    assert.deepEqual(result.taskkillCalls, []);
+    assert.equal(result.serverProcRef.current.pid, 100);
+    assert.equal(result.spawnCalls, 0);
+  });
+});
+
+test('watchDevServerAndRestart refuses a Windows creation identity mismatch', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const result = await runWindowsWatcherChange(serverDir, {
+      identityResults: [
+        { pid: 100, creationDate: 'created-first' },
+        { pid: 100, creationDate: 'created-different' },
+      ],
+    });
+
+    assert.deepEqual(result.taskkillCalls, []);
+    assert.equal(result.serverProcRef.current.pid, 100);
+    assert.equal(result.spawnCalls, 0);
+  });
+});
+
+test('watchDevServerAndRestart fails closed for invalid or exited Windows roots', async (t) => {
+  for (const current of [{ pid: 1, exitCode: null }, { pid: 100, exitCode: 0 }, { pid: 100, closed: true }]) {
+    await withTempServerDir(t, async (serverDir) => {
+      const result = await runWindowsWatcherChange(serverDir, {
+        current,
+        identityResults: [{ pid: current.pid, creationDate: 'created' }, { pid: current.pid, creationDate: 'created' }],
+      });
+
+      assert.deepEqual(result.taskkillCalls, []);
+      assert.equal(result.serverProcRef.current, current);
+      assert.equal(result.spawnCalls, 0);
+    });
+  }
+});
+
+test('watchDevServerAndRestart fails closed when Windows taskkill fails or times out', async (t) => {
+  for (const runCaptureImpl of [
+    async () => {
+      throw new Error('taskkill nonzero');
+    },
+    async () => {
+      throw new Error('taskkill timeout');
+    },
+  ]) {
+    await withTempServerDir(t, async (serverDir) => {
+      const result = await runWindowsWatcherChange(serverDir, { runCaptureImpl });
+
+      assert.equal(result.taskkillCalls.length, 1);
+      assert.equal(result.serverProcRef.current.pid, 100);
+      assert.equal(result.spawnCalls, 0);
+    });
+  }
+});
+
+test('watchDevServerAndRestart does not spawn when the Windows root does not exit after taskkill', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const result = await runWindowsWatcherChange(serverDir, {
+      waitForChildExitImpl: async () => false,
+    });
+
+    assert.equal(result.taskkillCalls.length, 1);
+    assert.equal(result.serverProcRef.current.pid, 100);
+    assert.equal(result.spawnCalls, 0);
   });
 });
 

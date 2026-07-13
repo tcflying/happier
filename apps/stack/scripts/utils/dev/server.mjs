@@ -11,9 +11,11 @@ import { resolveServerReadyTimeoutMs, waitForServerReady } from '../server/serve
 import { isTcpPortFree, listListenPids, listListenPidsWithStatus, pickNextFreeTcpPort, waitForTcpPortFree } from '../net/ports.mjs';
 import { isPidAlive, readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { getProcessGroupId, isPidOwnedByStack, killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
-import { isWindowsPidDescendantOf } from '../proc/windows_process_tree.mjs';
+import { isWindowsPidDescendantOf, readWindowsProcessIdentity } from '../proc/windows_process_tree.mjs';
 import { watchDebounced } from '../proc/watch.mjs';
 import { pickMetroPort, resolveStablePortStart } from '../expo/metro_ports.mjs';
+
+const windowsProcessIdentities = new WeakMap();
 
 function readPackageScripts(dir) {
   try {
@@ -418,16 +420,28 @@ function signalSpawnedProcessGroup(child, signal) {
   }
 }
 
+async function bindWindowsProcessIdentity(child, readWindowsProcessIdentityImpl) {
+  if (!child || windowsProcessIdentities.has(child)) return windowsProcessIdentities.get(child) ?? null;
+  const identity = await readWindowsProcessIdentityImpl(Number(child.pid)).catch(() => null);
+  if (identity?.pid === Number(child.pid) && typeof identity.creationDate === 'string' && identity.creationDate.length > 0) {
+    windowsProcessIdentities.set(child, identity);
+    return identity;
+  }
+  return null;
+}
+
 async function terminateWindowsSpawnedProcessTree(
   child,
-  { runCaptureImpl = runCapture, timeoutMs = 2_000 } = {},
+  { runCaptureImpl = runCapture, waitForChildExitImpl = waitForChildExit, timeoutMs = 2_000 } = {},
 ) {
   const pid = Number(child?.pid);
   if (!Number.isInteger(pid) || pid <= 1) return { killed: false, reason: 'invalid-root-pid' };
+  if (hasChildExited(child) || child?.closed === true) return { killed: false, reason: 'root-already-exited' };
 
   try {
     await runCaptureImpl('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeoutMs });
-    return { killed: true, reason: 'killed_root_tree' };
+    const exited = await waitForChildExitImpl(child, timeoutMs);
+    return exited ? { killed: true, reason: 'killed_root_tree' } : { killed: false, reason: 'root-exit-timeout' };
   } catch {
     return { killed: false, reason: 'termination-error' };
   }
@@ -575,6 +589,7 @@ export async function startDevServer({
   getProcessGroupIdImpl = getProcessGroupId,
   platform = process.platform,
   isWindowsPidDescendantOfImpl = isWindowsPidDescendantOf,
+  readWindowsProcessIdentityImpl = readWindowsProcessIdentity,
   recordStackRuntimeUpdateImpl = recordStackRuntimeUpdate,
   killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
   killSpawnedChildImpl = killProcessTree,
@@ -646,6 +661,9 @@ export async function startDevServer({
     options: spawnOptions,
     quiet,
   });
+  if (platform === 'win32') {
+    await bindWindowsProcessIdentity(server, readWindowsProcessIdentityImpl);
+  }
   children.push(server);
   try {
     await waitForServerReadyImpl(internalServerUrl, {
@@ -712,7 +730,13 @@ export function watchDevServerAndRestart({
   listListenPidsImpl = listListenPids,
   getProcessGroupIdImpl = getProcessGroupId,
   isWindowsPidDescendantOfImpl = isWindowsPidDescendantOf,
-  terminateWindowsProcessTreeImpl = terminateWindowsSpawnedProcessTree,
+  readWindowsProcessIdentityImpl = readWindowsProcessIdentity,
+  runCaptureImpl = runCapture,
+  waitForChildExitImpl = waitForChildExit,
+  terminateWindowsProcessTreeImpl = (child) => terminateWindowsSpawnedProcessTree(child, {
+    runCaptureImpl,
+    waitForChildExitImpl,
+  }),
   isPidAliveImpl = isPidAlive,
   killSpawnedChildImpl = killProcessTree,
   signalSpawnedProcessGroupImpl = signalSpawnedProcessGroup,
@@ -762,6 +786,10 @@ export function watchDevServerAndRestart({
     const pid = Number(currentServerProc?.pid);
     if (!Number.isFinite(pid) || pid <= 1) return false;
 
+    if (platform === 'win32') {
+      await bindWindowsProcessIdentity(currentServerProc, readWindowsProcessIdentityImpl);
+    }
+
     await preflightDevServerRestartImpl({ serverDir, serverComponentName, serverEnv, logger });
 
     logger.log('[local] watch: server preflight passed → restarting...');
@@ -789,6 +817,19 @@ export function watchDevServerAndRestart({
         if (!stillOwnsCurrentListener) {
           throw new Error(
             `[local] watch restart refused: server listener ownership could not be re-proven immediately before Windows termination ` +
+              `(pid=${pid}, port=${serverPort}).`
+          );
+        }
+        const expectedIdentity = windowsProcessIdentities.get(currentServerProc);
+        const currentIdentity = await readWindowsProcessIdentityImpl(pid).catch(() => null);
+        if (
+          !expectedIdentity ||
+          !currentIdentity ||
+          currentIdentity.pid !== expectedIdentity.pid ||
+          currentIdentity.creationDate !== expectedIdentity.creationDate
+        ) {
+          throw new Error(
+            `[local] watch restart refused: Windows process identity could not be re-proven immediately before termination ` +
               `(pid=${pid}, port=${serverPort}).`
           );
         }
@@ -826,6 +867,9 @@ export function watchDevServerAndRestart({
     let next = null;
     try {
       next = await pmSpawnScriptImpl({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
+      if (platform === 'win32') {
+        await bindWindowsProcessIdentity(next, readWindowsProcessIdentityImpl);
+      }
       children.push(next);
       await waitForServerReadyImpl(internalServerUrl, {
         timeoutMs: resolveServerReadyTimeoutMs({ serverComponentName, env: serverEnv }),

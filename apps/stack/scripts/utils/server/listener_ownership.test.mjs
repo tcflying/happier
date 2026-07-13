@@ -70,6 +70,66 @@ test('spawned listener proof rejects a listener from a foreign process group', a
   );
 });
 
+test('spawned listener proof accepts a Windows descendant listener owned by the spawned wrapper', async () => {
+  const ancestryCalls = [];
+  const pid = await resolveSpawnedProcessGroupListenPid(
+    { port: 4101, spawnedPid: 301 },
+    {
+      platform: 'win32',
+      listenerOwnershipRetryDelayMs: 0,
+      listListenPidsWithStatusImpl: async (_port, options) => options.processGroupId
+        ? { status: 'unsupported', supported: false, pids: [], reason: 'process-group-listener-discovery-unsupported' }
+        : { status: 'ok', supported: true, pids: [902] },
+      getProcessGroupIdImpl: async () => null,
+      isWindowsPidDescendantOfImpl: async (candidatePid, rootPid) => {
+        ancestryCalls.push([candidatePid, rootPid]);
+        return true;
+      },
+    },
+  );
+
+  assert.equal(pid, 902);
+  assert.deepEqual(ancestryCalls, [[902, 301]]);
+});
+
+test('spawned listener proof rejects a Windows listener without proven ancestry', async () => {
+  await assert.rejects(
+    () => resolveSpawnedProcessGroupListenPid(
+      { port: 4101, spawnedPid: 301 },
+      {
+        platform: 'win32',
+        listenerOwnershipRetryDelayMs: 0,
+        listListenPidsWithStatusImpl: async (_port, options) => options.processGroupId
+          ? { status: 'unsupported', supported: false, pids: [], reason: 'process-group-listener-discovery-unsupported' }
+          : { status: 'ok', supported: true, pids: [902] },
+        getProcessGroupIdImpl: async () => null,
+        isWindowsPidDescendantOfImpl: async () => false,
+      },
+    ),
+    /answered by another process/,
+  );
+});
+
+test('spawned listener proof fails closed when Windows ancestry discovery is unavailable', async () => {
+  await assert.rejects(
+    () => resolveSpawnedProcessGroupListenPid(
+      { port: 4101, spawnedPid: 301 },
+      {
+        platform: 'win32',
+        listenerOwnershipRetryDelayMs: 0,
+        listListenPidsWithStatusImpl: async (_port, options) => options.processGroupId
+          ? { status: 'unsupported', supported: false, pids: [], reason: 'process-group-listener-discovery-unsupported' }
+          : { status: 'ok', supported: true, pids: [902] },
+        getProcessGroupIdImpl: async () => null,
+        isWindowsPidDescendantOfImpl: async () => {
+          throw new Error('CIM unavailable');
+        },
+      },
+    ),
+    /answered by another process/,
+  );
+});
+
 test('command-scoped listener observation enforces one total deadline and reuses its terminal verdict', async () => {
   let now = 1_000;
   const timeoutBudgets = [];

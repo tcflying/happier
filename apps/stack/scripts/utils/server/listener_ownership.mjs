@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { listListenPids, listListenPidsWithStatus, probeTcpPortBinding } from '../net/ports.mjs';
 import { getProcessGroupId, isPidOwnedByStack, resolvePidStackOwnership } from '../proc/ownership.mjs';
+import { isWindowsPidDescendantOf } from '../proc/windows_process_tree.mjs';
 
 function inconclusiveListenerError(observation) {
   const error = new Error(`listener discovery is inconclusive: ${observation?.reason ?? observation?.status ?? 'error'}`);
@@ -306,6 +307,8 @@ export async function resolveSpawnedProcessGroupListenPid(
     listListenPidsImpl = listListenPids,
     listListenPidsWithStatusImpl = listListenPidsWithStatus,
     getProcessGroupIdImpl = getProcessGroupId,
+    platform = process.platform,
+    isWindowsPidDescendantOfImpl = isWindowsPidDescendantOf,
     observationScope,
     listenerOwnershipTimeoutMs = 3_000,
     listenerOwnershipRetryDelayMs = 25,
@@ -359,6 +362,20 @@ export async function resolveSpawnedProcessGroupListenPid(
 
   for (const listenPid of listenPids) {
     if (Number(listenPid) === rootPid) continue;
+    if (platform === 'win32') {
+      // Windows has no POSIX process-group identity. Prove that a listener
+      // spawned behind a package-manager wrapper is a descendant of the
+      // wrapper root; missing or failed CIM evidence must fail closed.
+      // eslint-disable-next-line no-await-in-loop
+      const isDescendant = await isWindowsPidDescendantOfImpl(Number(listenPid), rootPid).catch(() => false);
+      if (!isDescendant) {
+        throw new Error(
+          `[local] server readiness was answered by another process on port ${serverPort}; ` +
+            `spawned pid=${spawnedPid}, listeners=${listenPids.join(', ')}`,
+        );
+      }
+      continue;
+    }
     if (!rootPgid) {
       // eslint-disable-next-line no-await-in-loop
       rootPgid = await getProcessGroupIdImpl(spawnedPid, {

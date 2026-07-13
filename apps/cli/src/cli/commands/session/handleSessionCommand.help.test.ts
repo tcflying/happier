@@ -14,7 +14,7 @@ describe('handleSessionCommand help output', () => {
       expect(output.text()).toContain('happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--plain] [--json]');
       expect(output.text()).toContain('happier session status <session-id-or-prefix> [--live] [--json]');
       expect(output.text()).toContain(SESSION_CREATE_USAGE);
-      expect(output.text()).toContain('happier session send <session-id-or-prefix> <message> [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]');
+      expect(output.text()).toContain('happier session send <session-id-or-prefix> <message> [--local-id <id>] [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]');
       expect(output.text()).toContain('happier session wait <session-id-or-prefix> [--timeout <seconds>] [--json]');
       expect(output.text()).toContain('happier session stop <session-id-or-prefix> [--json]');
       expect(output.text()).toContain('happier session set-title <session-id-or-prefix> <title> [--json]');
@@ -39,7 +39,7 @@ describe('handleSessionCommand help output', () => {
   it.each([
     ['list', 'happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--plain] [--json]'],
     ['status', 'happier session status <session-id-or-prefix> [--live] [--json]'],
-    ['send', 'happier session send <session-id-or-prefix> <message> [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]'],
+    ['send', 'happier session send <session-id-or-prefix> <message> [--local-id <id>] [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]'],
     ['set-title', 'happier session set-title <session-id-or-prefix> <title> [--json]'],
     ['set-permission-mode', 'happier session set-permission-mode <session-id-or-prefix> <mode> [--json]'],
     ['set-model', 'happier session set-model <session-id-or-prefix> <model-id> [--json]'],

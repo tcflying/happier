@@ -59,3 +59,29 @@ test('listListenPidsWithStatus reports unsupported listener discovery when lsof 
   assert.equal(out.supported, false);
   assert.deepEqual(out.pids, []);
 });
+
+test('parseWindowsNetstatListenPids returns exact IPv4 and IPv6 listener PIDs', async () => {
+  const { parseWindowsNetstatListenPids } = await import('./ports.mjs');
+  const raw = [
+    '  TCP    0.0.0.0:52211          0.0.0.0:0              LISTENING       66988',
+    '  TCP    [::]:52211             [::]:0                 LISTENING       66988',
+    '  TCP    127.0.0.1:522110       0.0.0.0:0              LISTENING       77777',
+    '  TCP    127.0.0.1:52211        127.0.0.1:60000        ESTABLISHED     88888',
+  ].join('\r\n');
+  assert.deepEqual(parseWindowsNetstatListenPids(raw, 52211), [66988]);
+});
+
+test('listListenPidsWithStatus uses netstat on Windows', async () => {
+  const { listListenPidsWithStatus } = await import('./ports.mjs');
+  const calls = [];
+  const result = await listListenPidsWithStatus(52211, {
+    platform: 'win32',
+    resolveCommandPathImpl: async (name) => name === 'netstat' ? 'C:\\Windows\\System32\\netstat.exe' : '',
+    runCaptureImpl: async (command, args) => {
+      calls.push({ command, args });
+      return 'TCP 0.0.0.0:52211 0.0.0.0:0 LISTENING 66988';
+    },
+  });
+  assert.deepEqual(result, { supported: true, pids: [66988] });
+  assert.deepEqual(calls, [{ command: 'C:\\Windows\\System32\\netstat.exe', args: ['-ano', '-p', 'tcp'] }]);
+});

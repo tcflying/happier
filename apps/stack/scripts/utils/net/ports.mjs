@@ -48,6 +48,21 @@ function parseListenPidOutput(raw) {
   );
 }
 
+export function parseWindowsNetstatListenPids(raw, port) {
+  const targetPort = Number(port);
+  const pids = new Set();
+  for (const line of String(raw ?? '').split(/\r?\n/)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 5 || fields[0].toUpperCase() !== 'TCP' || fields[3].toUpperCase() !== 'LISTENING') continue;
+    const endpoint = fields[1] ?? '';
+    const separator = endpoint.lastIndexOf(':');
+    const endpointPort = Number(endpoint.slice(separator + 1));
+    const pid = Number(fields[4]);
+    if (endpointPort === targetPort && Number.isInteger(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids].sort((a, b) => a - b);
+}
+
 export async function listListenPidsWithStatus(
   port,
   {
@@ -61,7 +76,22 @@ export async function listListenPidsWithStatus(
     return { supported: true, pids: [] };
   }
   if (platform === 'win32') {
-    return { supported: false, pids: [], reason: 'unsupported-platform' };
+    let resolved = '';
+    try {
+      resolved = await resolveCommandPathImpl('netstat', { timeoutMs });
+    } catch {
+      return { supported: false, pids: [], reason: 'listener-discovery-error' };
+    }
+    if (!resolved) {
+      return { supported: false, pids: [], reason: 'listener-discovery-error' };
+    }
+
+    try {
+      const raw = await runCaptureImpl(resolved, ['-ano', '-p', 'tcp'], { timeoutMs });
+      return { supported: true, pids: parseWindowsNetstatListenPids(raw, port) };
+    } catch {
+      return { supported: false, pids: [], reason: 'listener-discovery-error' };
+    }
   }
 
   const candidates = platform === 'darwin' ? ['lsof', '/usr/sbin/lsof', '/usr/bin/lsof'] : ['lsof'];

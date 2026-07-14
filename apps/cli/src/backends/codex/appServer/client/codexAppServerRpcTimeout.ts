@@ -14,7 +14,9 @@ export function readCodexAppServerRpcTimeoutMs(env?: NodeJS.ProcessEnv): number 
 
 export function readCodexAppServerStartupRpcTimeoutMs(env?: NodeJS.ProcessEnv, baseTimeoutMs?: number): number {
     const base = baseTimeoutMs ?? readCodexAppServerRpcTimeoutMs(env);
-    const configured = clampRpcTimeoutMs(env?.HAPPIER_CODEX_APP_SERVER_STARTUP_RPC_TIMEOUT_MS, 20_000, 120_000);
+    // Cold thread creation on Windows can exceed 20s while Codex loads its session state.
+    // Keep the override bounded, but default startup RPCs to a load-tolerant window.
+    const configured = clampRpcTimeoutMs(env?.HAPPIER_CODEX_APP_SERVER_STARTUP_RPC_TIMEOUT_MS, 60_000, 120_000);
     return Math.max(base, configured);
 }
 

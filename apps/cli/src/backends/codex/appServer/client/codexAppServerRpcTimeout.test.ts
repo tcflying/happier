@@ -11,6 +11,11 @@ describe('codexAppServerRpcTimeout', () => {
         expect(readCodexAppServerRpcTimeoutMs({} as NodeJS.ProcessEnv)).toBe(15_000);
     });
 
+    it('allows a cold thread start sixty seconds by default', () => {
+        expect(readCodexAppServerStartupRpcTimeoutMs({} as NodeJS.ProcessEnv)).toBe(60_000);
+        expect(readCodexAppServerRequestTimeoutMs('thread/start', {} as NodeJS.ProcessEnv)).toBe(60_000);
+    });
+
     it('clamps base RPC timeout to the configured value when set', () => {
         expect(readCodexAppServerRpcTimeoutMs({ HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '1200' } as NodeJS.ProcessEnv)).toBe(1200);
         expect(readCodexAppServerRpcTimeoutMs({ HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '0' } as NodeJS.ProcessEnv)).toBe(15_000);

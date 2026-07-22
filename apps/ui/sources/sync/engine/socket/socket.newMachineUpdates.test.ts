@@ -514,6 +514,41 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         expect(applyMessages).not.toHaveBeenCalled();
     });
 
+    it('keeps live stream segments out of provider-owned direct session transcripts', async () => {
+        const sessionId = 'direct_stream_session';
+        markSessionVisible(sessionId);
+        storage.getState().applySessions([{
+            ...buildSession(sessionId, 'plain'),
+            metadata: {
+                path: 'G:\\repo',
+                host: 'test-host',
+                directSessionV1: {
+                    v: 1,
+                    providerId: 'codex',
+                    machineId: 'machine-1',
+                    remoteSessionId: 'remote-1',
+                    source: { kind: 'codexHome', home: 'user' },
+                },
+            },
+        }]);
+        const applyMessages = vi.fn();
+
+        await handleEphemeralSocketUpdate({
+            update: buildTranscriptStreamSegmentUpdate(
+                sessionId,
+                buildPlainTranscriptStreamSegmentContent('provider-owned final reply', 'segment-direct'),
+                'segment-direct',
+            ),
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => null),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages,
+        });
+
+        expect(applyMessages).not.toHaveBeenCalled();
+    });
+
     it('drops hidden non-coalesced encrypted stream segments before decrypting', async () => {
         const sessionId = 'hidden_non_coalesced_stream_session';
         storage.getState().applySessions([buildSession(sessionId, 'e2ee')]);
@@ -769,6 +804,59 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         });
 
         await vi.runAllTimersAsync();
+    });
+
+    it('drops a queued live segment when the session becomes provider-owned before flush', async () => {
+        vi.useFakeTimers();
+        const sessionId = 'stream_to_direct_session';
+        enableTranscriptStreamingCoalescingForTest();
+        markSessionVisible(sessionId);
+        storage.getState().applySessions([buildSession(sessionId, 'plain')]);
+        const applyMessages = vi.fn();
+        const baseStreamParams = {
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => null),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages,
+        };
+
+        await handleEphemeralSocketUpdate({
+            ...baseStreamParams,
+            update: buildTranscriptStreamSegmentUpdate(
+                sessionId,
+                buildPlainTranscriptStreamSegmentContent('visible before direct', 'segment-before-direct'),
+                'segment-before-direct',
+            ),
+        });
+        await handleEphemeralSocketUpdate({
+            ...baseStreamParams,
+            update: buildTranscriptStreamSegmentUpdate(
+                sessionId,
+                buildPlainTranscriptStreamSegmentContent('queued before direct', 'segment-queued-before-direct'),
+                'segment-queued-before-direct',
+            ),
+        });
+        expect(applyMessages).toHaveBeenCalledTimes(1);
+
+        storage.getState().applySessions([{
+            ...storage.getState().sessions[sessionId]!,
+            metadata: {
+                path: 'G:\\repo',
+                host: 'test-host',
+                directSessionV1: {
+                    v: 1,
+                    providerId: 'codex',
+                    machineId: 'machine-1',
+                    remoteSessionId: 'remote-1',
+                    source: { kind: 'codexHome', home: 'user' },
+                },
+            },
+        }]);
+
+        await vi.runAllTimersAsync();
+
+        expect(applyMessages).toHaveBeenCalledTimes(1);
     });
 
     it('requires encryption before applying encrypted stream segments', async () => {

@@ -6,6 +6,7 @@ import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isSessionVisible } from '@/sync/domains/session/activeViewingSession';
 import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
+import { getSessionStorageKind } from '@/sync/domains/session/sessionStorageKind';
 import { computeNextSessionSeqFromUpdate } from '@/sync/domains/session/sequence/realtimeSessionSeq';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
 import { resolveSessionReadableSeq } from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
@@ -231,6 +232,21 @@ function getSocketSessionApplyBase(sessionId: string): Session | undefined {
     const queued = socketSessionApplyCoalescer.getQueuedSession(sessionId);
     if (queued) return normalizeSocketSession(queued);
     return storage.getState().sessions[sessionId];
+}
+
+function acknowledgeCanonicalDirectSessionUserMessage(sessionId: string, message: ApiMessage): void {
+    if (message.messageRole !== 'user' || !message.localId) return;
+    const sessionProjection = getSocketSessionApplyBase(sessionId)
+        ?? storage.getState().sessionListRenderables[sessionId];
+    if (getSessionStorageKind(sessionProjection) !== 'direct') return;
+
+    const matchingPending = (storage.getState().sessionPending[sessionId]?.messages ?? []).filter((candidate) => (
+        candidate.source === 'local_outbound'
+        && candidate.localId === message.localId
+    ));
+    for (const pending of matchingPending) {
+        storage.getState().removePendingMessage(sessionId, pending.id);
+    }
 }
 
 function isSessionFullContentConsumerActiveForRealtime(
@@ -1235,6 +1251,8 @@ export async function handleUpdateContainer(params: {
     if (!shouldContinue()) return;
 
     if (updateData.body.t === 'new-message') {
+        acknowledgeCanonicalDirectSessionUserMessage(updateData.body.sid, updateData.body.message);
+
         const getSessionMaterializedMaxSeqForGapDetection = (sessionId: string) =>
             Math.max(
                 getSessionMaterializedMaxSeq(sessionId),

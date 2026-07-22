@@ -5,6 +5,7 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { NormalizedMessage } from '@/sync/typesRaw';
 import { storage } from '@/sync/domains/state/storage';
+import { getSessionStorageKind } from '@/sync/domains/session/sessionStorageKind';
 import {
     clearActiveViewingSessionsForServerScopeReset,
     markSessionVisible,
@@ -108,7 +109,14 @@ function buildPlainTranscriptStreamSegmentContent(text: string, localId = 'segme
     };
 }
 
-function buildPlainNewMessageUpdate(params: { sessionId: string; messageId: string; messageSeq: number; text: string }): ApiUpdateContainer {
+function buildPlainNewMessageUpdate(params: {
+    sessionId: string;
+    messageId: string;
+    messageSeq: number;
+    text: string;
+    localId?: string | null;
+    messageRole?: ApiMessage['messageRole'];
+}): ApiUpdateContainer {
     return {
         id: `${params.messageId}-update`,
         seq: params.messageSeq,
@@ -119,13 +127,54 @@ function buildPlainNewMessageUpdate(params: { sessionId: string; messageId: stri
             message: {
                 id: params.messageId,
                 seq: params.messageSeq,
-                localId: null,
+                localId: params.localId ?? null,
+                messageRole: params.messageRole ?? 'user',
                 createdAt: 1_000 + params.messageSeq,
                 updatedAt: 1_000 + params.messageSeq,
                 content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: params.text } } },
             },
         },
     } satisfies ApiUpdateContainer;
+}
+
+function installSessionPending(sessionId: string, options: {
+    direct?: boolean;
+    localId?: string;
+    pendingSource?: 'local_outbound' | 'server_pending';
+    projectionOnly?: boolean;
+} = {}): void {
+    const localId = options.localId ?? 'pending-local-id';
+    storage.getState().applySessions([{
+        ...buildSession(sessionId),
+        metadata: options.direct === false ? null : {
+            path: 'G:\\repo',
+            host: 'test-host',
+            directSessionV1: {
+                v: 1,
+                providerId: 'codex',
+                machineId: 'machine-1',
+                remoteSessionId: 'remote-1',
+                source: { kind: 'codexHome', home: 'user' },
+            },
+        },
+    }]);
+    if (options.projectionOnly) {
+        storage.setState((state) => {
+            const sessions = { ...state.sessions };
+            delete sessions[sessionId];
+            return { ...state, sessions };
+        });
+    }
+    storage.getState().upsertPendingMessage(sessionId, {
+        id: localId,
+        localId,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        source: options.pendingSource ?? 'local_outbound',
+        deliveryStatus: 'accepted',
+        text: 'canonical direct prompt',
+        rawRecord: { role: 'user', content: { type: 'text', text: 'canonical direct prompt' } },
+    });
 }
 
 function enableTranscriptStreamingCoalescingForTest(): void {
@@ -143,6 +192,95 @@ function enableTranscriptStreamingCoalescingForTest(): void {
 describe('socket update handling: new-machine', () => {
     beforeEach(() => {
         storage.setState(initialStorageState, true);
+    });
+
+    it.each([
+        { label: 'a fully hydrated session', projectionOnly: false },
+        { label: 'a projection-only hidden session', projectionOnly: true },
+    ])('acknowledges direct-session local pending for $label without rendering it', async ({ projectionOnly }) => {
+        const sessionId = `direct-canonical-echo-${projectionOnly ? 'projection' : 'hydrated'}`;
+        installSessionPending(sessionId, { projectionOnly });
+        const sessionProjection = storage.getState().sessions[sessionId]
+            ?? storage.getState().sessionListRenderables[sessionId];
+        expect(getSessionStorageKind(sessionProjection)).toBe('direct');
+        const params = buildBaseParams();
+
+        await handleUpdateContainer({
+            ...params,
+            updateData: buildPlainNewMessageUpdate({
+                sessionId,
+                messageId: 'canonical-message-id',
+                messageSeq: 1,
+                localId: 'pending-local-id',
+                text: 'canonical direct prompt',
+            }),
+        });
+
+        expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+        expect(params.applyMessages).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        {
+            testId: 'different-local-id',
+            label: 'a different local id',
+            localId: 'other-local-id',
+            messageRole: 'user' as const,
+            install: {},
+            shouldContinue: true,
+        },
+        {
+            testId: 'agent-role',
+            label: 'an agent message',
+            localId: 'pending-local-id',
+            messageRole: 'agent' as const,
+            install: {},
+            shouldContinue: true,
+        },
+        {
+            testId: 'server-pending',
+            label: 'a server-pending row',
+            localId: 'pending-local-id',
+            messageRole: 'user' as const,
+            install: { pendingSource: 'server_pending' as const },
+            shouldContinue: true,
+        },
+        {
+            testId: 'non-direct',
+            label: 'a non-direct session',
+            localId: 'pending-local-id',
+            messageRole: 'user' as const,
+            install: { direct: false },
+            shouldContinue: true,
+        },
+        {
+            testId: 'stale-server-scope',
+            label: 'a stale server scope',
+            localId: 'pending-local-id',
+            messageRole: 'user' as const,
+            install: {},
+            shouldContinue: false,
+        },
+    ])('does not acknowledge local pending from $label', async ({ testId, localId, messageRole, install, shouldContinue }) => {
+        const sessionId = `canonical-negative-${testId}`;
+        installSessionPending(sessionId, install);
+
+        await handleUpdateContainer({
+            ...buildBaseParams(),
+            shouldContinue: () => shouldContinue,
+            updateData: buildPlainNewMessageUpdate({
+                sessionId,
+                messageId: 'non-matching-canonical-message-id',
+                messageSeq: 1,
+                localId,
+                messageRole,
+                text: 'canonical direct prompt',
+            }),
+        });
+
+        expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
+            expect.objectContaining({ id: 'pending-local-id', localId: 'pending-local-id' }),
+        ]);
     });
 
     it('applies a placeholder machine and invalidates machines sync', async () => {

@@ -14,12 +14,14 @@ describe('createOnChildExited', () => {
       emitSessionEnd: vi.fn(),
       enqueueSessionEndMutation: vi.fn(),
     };
+    const onSessionRuntimeEnded = vi.fn();
 
     const onChildExited = createOnChildExited({
       pidToTrackedSession,
       spawnResourceCleanupByPid,
       sessionAttachCleanupByPid,
       getApiMachineForSessions: () => apiMachine,
+      onSessionRuntimeEnded,
     } as any);
 
     onChildExited(pid, { reason: 'process-exited', code: 0, signal: null });
@@ -33,6 +35,59 @@ describe('createOnChildExited', () => {
       }),
     }));
     expect(apiMachine.emitSessionEnd).not.toHaveBeenCalled();
+    expect(onSessionRuntimeEnded).toHaveBeenCalledWith(
+      'session-1',
+      tracked,
+      { reason: 'process-exited', code: 0, signal: null },
+      { isUnexpected: false, respawnPending: false },
+    );
+  });
+
+  it('reports whether a final runner exit is unexpected so ownership can stay fenced during respawn', () => {
+    const pid = 124;
+    const tracked = { pid, startedBy: 'daemon', happySessionId: 'session-respawn-fence' };
+    const onSessionRuntimeEnded = vi.fn();
+    const onChildExited = createOnChildExited({
+      pidToTrackedSession: new Map([[pid, tracked]]),
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => null,
+      onSessionRuntimeEnded,
+    } as any);
+
+    onChildExited(pid, { reason: 'process-missing', code: null, signal: null });
+
+    expect(onSessionRuntimeEnded).toHaveBeenCalledWith(
+      'session-respawn-fence',
+      tracked,
+      { reason: 'process-missing', code: null, signal: null },
+      { isUnexpected: true, respawnPending: false },
+    );
+  });
+
+  it('reports a pending respawn before runtime ownership cleanup runs', () => {
+    const pid = 125;
+    const tracked = { pid, startedBy: 'daemon', happySessionId: 'session-respawn-pending' };
+    const onSessionRuntimeEnded = vi.fn();
+    const onUnexpectedExit = vi.fn(() => true);
+    const onChildExited = createOnChildExited({
+      pidToTrackedSession: new Map([[pid, tracked]]),
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => null,
+      onSessionRuntimeEnded,
+      onUnexpectedExit,
+    } as any);
+
+    onChildExited(pid, { reason: 'process-error', code: 1, signal: null });
+
+    expect(onUnexpectedExit).toHaveBeenCalledBefore(onSessionRuntimeEnded);
+    expect(onSessionRuntimeEnded).toHaveBeenCalledWith(
+      'session-respawn-pending',
+      tracked,
+      { reason: 'process-error', code: 1, signal: null },
+      { isUnexpected: true, respawnPending: true },
+    );
   });
 
   it('does not queue session-end for an obsolete pid when another live pid owns the same session', () => {
@@ -52,6 +107,7 @@ describe('createOnChildExited', () => {
       enqueueSessionEndMutation: vi.fn(),
     };
     const onUnexpectedExit = vi.fn();
+    const onSessionRuntimeEnded = vi.fn();
     const originalKill = process.kill.bind(process);
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
       if (targetPid === livePid && signal === 0) {
@@ -66,6 +122,7 @@ describe('createOnChildExited', () => {
       sessionAttachCleanupByPid,
       getApiMachineForSessions: () => apiMachine,
       onUnexpectedExit,
+      onSessionRuntimeEnded,
     } as any);
 
     onChildExited(obsoletePid, { reason: 'process-missing', code: null, signal: null });
@@ -73,6 +130,7 @@ describe('createOnChildExited', () => {
     expect(apiMachine.enqueueSessionEndMutation).not.toHaveBeenCalled();
     expect(apiMachine.emitSessionEnd).not.toHaveBeenCalled();
     expect(onUnexpectedExit).not.toHaveBeenCalled();
+    expect(onSessionRuntimeEnded).not.toHaveBeenCalled();
     expect(pidToTrackedSession.has(obsoletePid)).toBe(false);
     expect(pidToTrackedSession.get(livePid)).toEqual(expect.objectContaining({
       happySessionId: 'session-1',

@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { writeFakeCodexAppServerThreadListScript } from '@/backends/codex/appServer/testkit/fakeCodexAppServer';
 import type { SpawnSessionOptions, SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
+import { createDirectSessionFollowLeaseManager } from '@/api/directSessions/leases/createDirectSessionFollowLeaseManager';
 
 const readCredentialsMock = vi.fn();
 const fetchSessionByIdMock = vi.fn();
@@ -20,6 +21,7 @@ vi.mock('@/configuration', () => ({
     happyHomeDir: '/tmp/happier-test-home',
     logsDir: '/tmp',
     isDaemonProcess: false,
+    daemonReattachCatchUpConcurrency: 0,
   },
 }));
 
@@ -52,6 +54,55 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     vi.unstubAllEnvs();
   });
 
+  it('rejects stale direct attach after persisted conversion removed directSessionV1', async () => {
+    vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', '/tmp/.claude');
+    readCredentialsMock.mockResolvedValue({
+      token: 'token-stale-attach',
+      encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3]) },
+    });
+    fetchSessionByIdMock.mockResolvedValue({
+      id: 'sess-persisted-native',
+      metadataVersion: 2,
+      encryptionMode: 'plain',
+      metadata: JSON.stringify({
+        path: '/tmp/native-session',
+        externalHistoryImportV1: { v: 1, providerId: 'claude', remoteSessionId: 'remote-old' },
+      }),
+    });
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const followLeaseManager = createDirectSessionFollowLeaseManager();
+    registerMachineDirectSessionsRpcHandlers({
+      rpcHandlerManager: {
+        registerHandler: (method: string, handler: (params: any) => Promise<any>) => registered.set(method, handler),
+      } as any,
+      followLeaseManager,
+    });
+    const attach = registered.get(RPC_METHODS.DAEMON_DIRECT_SESSION_ATTACH);
+    const setFollowPolicy = registered.get(RPC_METHODS.DAEMON_DIRECT_SESSION_FOLLOW_POLICY_SET);
+
+    const result = await attach!({
+      machineId: 'm1',
+      sessionId: 'sess-persisted-native',
+      providerId: 'claude',
+      remoteSessionId: 'remote-old',
+      source: { kind: 'claudeConfig', configDir: '/tmp/.claude', projectId: 'project-old' },
+      ttlMs: 30_000,
+    });
+
+    expect(result).toEqual({ ok: false, errorCode: 'invalid_request', error: 'session_is_not_direct' });
+    const policyResult = await setFollowPolicy!({
+      machineId: 'm1',
+      sessionId: 'sess-persisted-native',
+      providerId: 'claude',
+      remoteSessionId: 'remote-old',
+      source: { kind: 'claudeConfig', configDir: '/tmp/.claude', projectId: 'project-old' },
+      enabled: true,
+    });
+    expect(policyResult).toEqual({ ok: false, errorCode: 'invalid_request', error: 'session_is_not_direct' });
+    expect(followLeaseManager.countActiveLeases('sess-persisted-native')).toBe(0);
+    expect(followLeaseManager.hasBackgroundFollowLease('sess-persisted-native')).toBe(false);
+  });
+
   it('takes over a direct claude session using provider cwd and config dir', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-directSessions-rpc-takeover-'));
     const configDir = join(root, '.claude');
@@ -82,11 +133,11 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     );
     vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', configDir);
 
-    readCredentialsMock.mockResolvedValueOnce({
+    readCredentialsMock.mockResolvedValue({
       token: 'token-direct',
       encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3]) },
     });
-    fetchSessionByIdMock.mockResolvedValueOnce({
+    fetchSessionByIdMock.mockResolvedValue({
       id: 'sess_happy_direct',
       metadataVersion: 1,
       encryptionMode: 'plain',
@@ -117,8 +168,16 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
         registered.set(method, handler);
       },
     } as any;
+    const followLeaseManager = createDirectSessionFollowLeaseManager();
+    const viewerFollowRelease = vi.fn(async () => {});
+    const attachedViewer = await followLeaseManager.attach({
+      sessionId: 'sess_happy_direct',
+      ttlMs: 30_000,
+      acquireFollowLease: async () => ({ release: viewerFollowRelease }),
+    });
+    const releaseForTakeover = vi.spyOn(followLeaseManager, 'releaseForTakeover');
 
-    registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager, spawnSession, stopSession });
+    registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager, spawnSession, stopSession, followLeaseManager });
 
     const handler = registered.get(RPC_METHODS.DAEMON_DIRECT_SESSION_TAKEOVER);
     expect(handler).toBeDefined();
@@ -129,6 +188,8 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     });
 
     expect(res).toEqual({ ok: true });
+    expect(releaseForTakeover).toHaveBeenCalledWith('sess_happy_direct');
+    expect(viewerFollowRelease).toHaveBeenCalledTimes(1);
     expect(stopSession).not.toHaveBeenCalled();
     expect(spawnSession).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -141,6 +202,32 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
         environmentVariables: { CLAUDE_CONFIG_DIR: resolvedConfigDir },
       }),
     );
+
+    releaseForTakeover.mockClear();
+    spawnSession.mockResolvedValueOnce({
+      type: 'error',
+      errorCode: 'UNEXPECTED',
+      errorMessage: 'direct_spawn_failed',
+    });
+    const failed = await handler!({ machineId: 'm1', sessionId: 'sess_happy_direct' });
+    expect(failed).toEqual({ ok: false, errorCode: 'internal_error', error: 'direct_spawn_failed' });
+    expect(releaseForTakeover).not.toHaveBeenCalled();
+
+    spawnSession.mockResolvedValueOnce({
+      type: 'requestToApproveDirectoryCreation',
+      directory: '/tmp/direct-claude-worktree',
+    });
+    const approvalRequired = await handler!({ machineId: 'm1', sessionId: 'sess_happy_direct' });
+    expect(approvalRequired).toEqual({
+      ok: false,
+      errorCode: 'internal_error',
+      error: 'directory_approval_required',
+    });
+    expect(releaseForTakeover).not.toHaveBeenCalled();
+    await followLeaseManager.detach({
+      sessionId: 'sess_happy_direct',
+      leaseId: attachedViewer.leaseId,
+    });
   });
 
   it('requires forceStop before taking over when a trusted local runner still owns the provider session', async () => {
@@ -297,8 +384,17 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
         registered.set(method, handler);
       },
     } as any;
+    const followLeaseManager = createDirectSessionFollowLeaseManager();
+    const backgroundFollowRelease = vi.fn(async () => {});
+    const backgroundFollowAcquire = vi.fn(async () => ({ release: backgroundFollowRelease }));
+    await followLeaseManager.setBackgroundFollowEnabled({
+      sessionId: 'sess_happy_persist',
+      enabled: true,
+      acquireFollowLease: backgroundFollowAcquire,
+    });
+    const retireForPersistedTakeover = vi.spyOn(followLeaseManager, 'retireForPersistedTakeover');
 
-    registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager, spawnSession, stopSession });
+    registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager, spawnSession, stopSession, followLeaseManager });
 
     const handler = registered.get(RPC_METHODS.DAEMON_DIRECT_SESSION_TAKEOVER_PERSIST);
     expect(handler).toBeDefined();
@@ -309,6 +405,8 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     });
 
     expect(res).toEqual({ ok: true, converted: true });
+    expect(retireForPersistedTakeover).toHaveBeenCalledWith('sess_happy_persist');
+    expect(backgroundFollowRelease).toHaveBeenCalledTimes(1);
     expect(commitSessionStoredMessageMock).toHaveBeenCalledTimes(2);
     expect(spawnSession).toHaveBeenCalledTimes(1);
     expect(updateSessionMetadataWithRetryMock).toHaveBeenCalledTimes(1);
@@ -322,6 +420,9 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
         approvedNewDirectoryCreation: true,
       }),
     );
+    await followLeaseManager.setRuntimeOwned('sess_happy_persist', false);
+    expect(backgroundFollowAcquire).toHaveBeenCalledTimes(1);
+    expect(followLeaseManager.hasBackgroundFollowLease('sess_happy_persist')).toBe(false);
     expect(spawnSession).toHaveBeenCalledWith(
       expect.not.objectContaining({
         transcriptStorage: 'direct',
@@ -398,8 +499,10 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
         registered.set(method, handler);
       },
     } as any;
+    const followLeaseManager = createDirectSessionFollowLeaseManager();
+    const releaseForTakeover = vi.spyOn(followLeaseManager, 'releaseForTakeover');
 
-    registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager, spawnSession, stopSession });
+    registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager, spawnSession, stopSession, followLeaseManager });
 
     const handler = registered.get(RPC_METHODS.DAEMON_DIRECT_SESSION_TAKEOVER_PERSIST);
     expect(handler).toBeDefined();
@@ -410,6 +513,7 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     });
 
     expect(res).toEqual({ ok: false, errorCode: 'internal_error', error: 'persisted_spawn_failed' });
+    expect(releaseForTakeover).not.toHaveBeenCalled();
     expect(commitSessionStoredMessageMock).toHaveBeenCalledTimes(2);
     expect(spawnSession).toHaveBeenCalledTimes(1);
     expect(updateSessionMetadataWithRetryMock).not.toHaveBeenCalled();
@@ -876,6 +980,25 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     );
     vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', configDir);
     vi.stubEnv('HAPPIER_DIRECT_SESSIONS_FOLLOW_POLL_MS', '10');
+    readCredentialsMock.mockResolvedValue({
+      token: 'token-direct-follow',
+      encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3]) },
+    });
+    fetchSessionByIdMock.mockResolvedValue({
+      id: 'sess_happy_follow',
+      metadataVersion: 1,
+      encryptionMode: 'plain',
+      metadata: JSON.stringify({
+        directSessionV1: {
+          v: 1,
+          providerId: 'claude',
+          machineId: 'm1',
+          remoteSessionId: 'sess-follow',
+          source: { kind: 'claudeConfig', configDir, projectId: 'proj-follow' },
+          linkedAtMs: 1,
+        },
+      }),
+    });
 
     const emitDirectSessionTranscriptUpdate = vi.fn();
     const registered = new Map<string, (params: any) => Promise<any>>();
@@ -1238,8 +1361,18 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
           registered.set(method, handler);
         },
       } as any;
+      let nowMs = Date.now();
+      const backgroundRelease = vi.fn(async () => {});
+      const backgroundAcquire = vi.fn(async () => ({ release: backgroundRelease }));
+      const followLeaseManager = createDirectSessionFollowLeaseManager({ now: () => nowMs });
+      await followLeaseManager.setBackgroundFollowEnabled({
+        sessionId: 'sess_happy_runner',
+        enabled: true,
+        acquireFollowLease: backgroundAcquire,
+      });
+      const reconcileRuntimeOwnership = vi.spyOn(followLeaseManager, 'reconcileRuntimeOwnership');
 
-      registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager });
+      registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager, followLeaseManager });
 
       const handler = registered.get(RPC_METHODS.DAEMON_DIRECT_SESSION_STATUS_GET);
       expect(handler).toBeDefined();
@@ -1256,6 +1389,21 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
       expect(res.runnerActive).toBe(true);
       expect(res.activity).toBe('running');
       expect(res.canTakeOverDirect).toBe(false);
+      expect(reconcileRuntimeOwnership).toHaveBeenCalledWith('sess_happy_runner', true);
+      expect(backgroundRelease).toHaveBeenCalledTimes(1);
+
+      await rm(markerPath, { force: true });
+      nowMs += 10_001;
+      const stopped = await handler!({
+        machineId: 'm1',
+        sessionId: 'sess_happy_runner',
+        providerId: 'claude',
+        remoteSessionId: 'sess-1',
+        source: { kind: 'claudeConfig', configDir: '/tmp', projectId: null },
+      });
+      expect(stopped.runnerActive).toBe(false);
+      expect(backgroundAcquire).toHaveBeenCalledTimes(2);
+      expect(followLeaseManager.hasBackgroundFollowLease('sess_happy_runner')).toBe(true);
     } finally {
       await rm(markerPath, { force: true });
     }

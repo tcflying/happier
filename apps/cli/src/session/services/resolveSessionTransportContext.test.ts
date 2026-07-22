@@ -105,4 +105,36 @@ describe('resolveSessionTransportContext', () => {
         }
         expect(Array.from(result.ctx.encryptionKey)).toEqual(Array.from(sessionDataKey));
     });
+
+    it('resolves an exact session id without prefix or tag fallback', async () => {
+        fetchSessionById.mockResolvedValueOnce({
+            id: 'sess-exact-telemetry',
+            active: true,
+            activeAt: 1,
+            encryptionMode: 'plain',
+            metadata: null,
+        });
+
+        const { resolveExactSessionTransportContext } = await import('./resolveSessionTransportContext');
+
+        const result = await resolveExactSessionTransportContext({
+            credentials: {
+                token: 'token',
+                encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+            },
+            sessionId: 'sess-exact-telemetry',
+        });
+
+        expect(result).toMatchObject({
+            ok: true,
+            sessionId: 'sess-exact-telemetry',
+            mode: 'plain',
+        });
+        expect(resolveSessionIdOrPrefix).not.toHaveBeenCalled();
+        expect(fetchSessionById).toHaveBeenCalledTimes(1);
+        expect(fetchSessionById).toHaveBeenCalledWith({
+            token: 'token',
+            sessionId: 'sess-exact-telemetry',
+        });
+    });
 });

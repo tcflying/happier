@@ -1137,6 +1137,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
     let currentServiceTier: string | null = null;
     let hasServiceTierOverride = false;
     let pendingTurnStartSeqInclusive: number | null = null;
+    let resumeReplaySuppressionDepth = 0;
+    let suppressedResumeTurnCandidate: Readonly<{
+        notificationParams: unknown;
+        turnId: string | null;
+    }> | null = null;
     let permissionSupport: CodexAppServerPermissionSupport = 'unknown';
     let lastRateLimitSnapshot: unknown = null;
     let onPromptAcceptedByProvider: CodexAppServerPromptAcceptedCallback | null = null;
@@ -2799,6 +2804,46 @@ export function createCodexAppServerRuntime(params: Readonly<{
         recordInProgressBestEffort(startedTurnId);
     };
 
+    const handleTurnStartedNotification = async (notificationParams: unknown): Promise<void> => {
+        const notificationTurnId = readProviderEventTurnId(notificationParams, {
+            allowTopLevelId: true,
+        });
+        const activeTurn = pendingTurn ?? await adoptNativeTurnFromProviderActivity(notificationParams, {
+            turnId: notificationTurnId,
+        });
+        if (!activeTurn || !notificationMatchesPendingTurn(notificationParams)) {
+            return;
+        }
+        await bindActiveNativeTurnIdFromProviderActivity(activeTurn, notificationParams, {
+            turnId: notificationTurnId,
+        });
+        markPendingProviderPromptAccepted(activeTurn.providerPrompt);
+        const nextThreadId = readThreadId(notificationParams);
+        if (nextThreadId && nextThreadId !== threadId) {
+            threadId = nextThreadId;
+            publishThreadId();
+        }
+        await publishRuntimeContextWindow(readCodexRuntimeContextWindowTokens(notificationParams));
+        turnInFlight = true;
+        setThinking(true);
+    };
+
+    const captureSuppressedResumeTurnStarted = (notificationParams: unknown): void => {
+        suppressedResumeTurnCandidate = {
+            notificationParams,
+            turnId: readProviderEventTurnId(notificationParams, { allowTopLevelId: true }),
+        };
+    };
+
+    const captureSuppressedResumeTurnTerminal = (notificationParams: unknown): void => {
+        const candidate = suppressedResumeTurnCandidate;
+        if (!candidate) return;
+        const terminalTurnId = readProviderEventTurnId(notificationParams, { allowTopLevelId: true });
+        if (!terminalTurnId || !candidate.turnId || terminalTurnId === candidate.turnId) {
+            suppressedResumeTurnCandidate = null;
+        }
+    };
+
     const ensureActiveTurnForProviderRequest = async (requestParams: unknown): Promise<boolean> => {
         const requestTurnId = readProviderEventTurnId(requestParams);
         if (hasProviderTurnAlreadyTerminated(requestParams, requestTurnId)) {
@@ -2872,6 +2917,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         method: string,
     ): void => {
         client.registerNotificationHandler(method, (notificationParams) => {
+            if (resumeReplaySuppressionDepth > 0) return;
             return runBridgeWork(async () => {
                 const context = await resolveStreamUpdateContext(method, notificationParams);
                 if (!context) {
@@ -2925,31 +2971,16 @@ export function createCodexAppServerRuntime(params: Readonly<{
             })
                 .then((client) => {
                     client.registerNotificationHandler('turn/started', (notificationParams) => {
+                        if (resumeReplaySuppressionDepth > 0) {
+                            captureSuppressedResumeTurnStarted(notificationParams);
+                            return;
+                        }
                         void runBridgeWork(async () => {
-                            const notificationTurnId = readProviderEventTurnId(notificationParams, {
-                                allowTopLevelId: true,
-                            });
-                            const activeTurn = pendingTurn ?? await adoptNativeTurnFromProviderActivity(notificationParams, {
-                                turnId: notificationTurnId,
-                            });
-                            if (!activeTurn || !notificationMatchesPendingTurn(notificationParams)) {
-                                return;
-                            }
-                            await bindActiveNativeTurnIdFromProviderActivity(activeTurn, notificationParams, {
-                                turnId: notificationTurnId,
-                            });
-                            markPendingProviderPromptAccepted(activeTurn.providerPrompt);
-                            const nextThreadId = readThreadId(notificationParams);
-                            if (nextThreadId && nextThreadId !== threadId) {
-                                threadId = nextThreadId;
-                                publishThreadId();
-                            }
-                            await publishRuntimeContextWindow(readCodexRuntimeContextWindowTokens(notificationParams));
-                            turnInFlight = true;
-                            setThinking(true);
+                            await handleTurnStartedNotification(notificationParams);
                         });
                     });
                     client.registerNotificationHandler('thread/tokenUsage/updated', (notificationParams) => {
+                        if (resumeReplaySuppressionDepth > 0) return;
                         void runBridgeWork(async () => {
                             const notificationThreadId = readThreadId(notificationParams);
                             if (notificationThreadId && threadId && notificationThreadId !== threadId) {
@@ -3063,6 +3094,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     });
                     const registerTerminalHandler = (method: string): void => {
                         client.registerNotificationHandler(method, async (notificationParams) => {
+                            if (resumeReplaySuppressionDepth > 0) {
+                                captureSuppressedResumeTurnTerminal(notificationParams);
+                                return;
+                            }
                             await runBridgeWork(async () => {
                                 const terminalTurnId = readProviderEventTurnId(notificationParams, {
                                     allowTopLevelId: true,
@@ -3163,8 +3198,20 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const resumeThread = async (
         client: DisposableCodexAppServerClient,
         requestedThreadId: string,
-        options: Readonly<{ preserveRequestedThreadId: boolean; allowOversizedResponseRecovery?: boolean }>,
+        options: Readonly<{
+            preserveRequestedThreadId: boolean;
+            allowOversizedResponseRecovery?: boolean;
+            suppressTranscriptReplay?: boolean;
+        }>,
     ): Promise<Readonly<{ nextThreadId: string; response: unknown }>> => {
+        const suppressTranscriptReplay = options.suppressTranscriptReplay !== false;
+        if (suppressTranscriptReplay) {
+            if (resumeReplaySuppressionDepth === 0) {
+                suppressedResumeTurnCandidate = null;
+            }
+            resumeReplaySuppressionDepth += 1;
+        }
+        try {
         const requestOptions = options.allowOversizedResponseRecovery
             ? { timeoutMs: readCodexAppServerResumeRecoveryTimeoutMs(runtimeEnv) }
             : undefined;
@@ -3251,6 +3298,18 @@ export function createCodexAppServerRuntime(params: Readonly<{
             nextThreadId: options.preserveRequestedThreadId ? requestedThreadId : readThreadId(response) ?? requestedThreadId,
             response,
         };
+        } finally {
+            if (suppressTranscriptReplay) {
+                resumeReplaySuppressionDepth = Math.max(0, resumeReplaySuppressionDepth - 1);
+                if (resumeReplaySuppressionDepth === 0) {
+                    const candidate = suppressedResumeTurnCandidate;
+                    suppressedResumeTurnCandidate = null;
+                    if (candidate) {
+                        await handleTurnStartedNotification(candidate.notificationParams);
+                    }
+                }
+            }
+        }
     };
 
     const applyStartOrLoadResponse = async (
@@ -3300,12 +3359,14 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 return await resumeThread(client, resumeId, {
                     preserveRequestedThreadId: false,
                     allowOversizedResponseRecovery: !importHistory,
+                    suppressTranscriptReplay: !importHistory,
                 });
             }
             if (existingSessionId) {
                 return await resumeThread(client, existingSessionId, {
                     preserveRequestedThreadId: false,
                     allowOversizedResponseRecovery: !importHistory,
+                    suppressTranscriptReplay: !importHistory,
                 });
             }
             const requestParams = {

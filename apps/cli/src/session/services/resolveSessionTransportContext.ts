@@ -112,6 +112,50 @@ async function fetchSessionTransportRecord(params: Readonly<{
     return rawSession;
 }
 
+function createResolvedSessionTransportContext(params: Readonly<{
+    credentials: Credentials;
+    sessionId: string;
+    rawSession: RawSessionRecord;
+}>): Extract<ResolveSessionTransportContextResult, { ok: true }> {
+    return {
+        ok: true,
+        sessionId: params.sessionId,
+        rawSession: params.rawSession,
+        ctx: resolveSessionEncryptionContextFromCredentials(params.credentials, params.rawSession),
+        mode: resolveSessionStoredContentEncryptionMode(params.rawSession),
+    };
+}
+
+/**
+ * FNXC:FusionProviderTelemetry 2026-07-21-03:28:
+ * Fusion stores an exact Happier Session identity for its read-only telemetry bridge.
+ * This path must not expand that opaque identity as a prefix or metadata tag before
+ * reading the session record, so a shortened input cannot select another Session.
+ */
+export async function resolveExactSessionTransportContext(params: Readonly<{
+    credentials: Credentials;
+    sessionId: string;
+}>): Promise<ResolveSessionTransportContextResult> {
+    const sessionId = params.sessionId.trim();
+    if (!sessionId) {
+        return { ok: false, code: 'session_not_found' };
+    }
+
+    const rawSession = await fetchSessionTransportRecord({
+        credentials: params.credentials,
+        sessionId,
+    });
+    if (!rawSession || rawSession.id !== sessionId) {
+        return { ok: false, code: 'session_not_found', sessionId };
+    }
+
+    return createResolvedSessionTransportContext({
+        credentials: params.credentials,
+        sessionId,
+        rawSession,
+    });
+}
+
 export async function resolveSessionTransportContext(params: Readonly<{
     credentials: Credentials;
     idOrPrefix: string;
@@ -140,11 +184,9 @@ export async function resolveSessionTransportContext(params: Readonly<{
         };
     }
 
-    return {
-        ok: true,
+    return createResolvedSessionTransportContext({
+        credentials: params.credentials,
         sessionId: resolved.sessionId,
         rawSession,
-        ctx: resolveSessionEncryptionContextFromCredentials(params.credentials, rawSession),
-        mode: resolveSessionStoredContentEncryptionMode(rawSession),
-    };
+    });
 }

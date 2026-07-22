@@ -32,6 +32,7 @@ import { importDirectSessionTranscript } from '@/api/directSessions/import/impor
 import { createManagedDirectSessionFollowLease } from '@/api/directSessions/backgroundFollow/createManagedDirectSessionFollowLease';
 import { updateSessionMetadataWithDirectSessionFollowPolicy } from '@/api/directSessions/backgroundFollow/directSessionBackgroundFollowMetadata';
 import { createDirectSessionFollowLeaseManager } from '@/api/directSessions/leases/createDirectSessionFollowLeaseManager';
+import type { DirectSessionFollowLeaseManager } from '@/api/directSessions/leases/createDirectSessionFollowLeaseManager';
 import { ensureDirectSessionLink } from '@/api/directSessions/linking/ensureDirectSessionLink';
 import { validateDirectMachineSource } from '@/api/directSessions/security/validateDirectMachineSource';
 import { findTrustedDirectSessionOwner } from '@/api/directSessions/takeover/findTrustedDirectSessionOwner';
@@ -100,16 +101,47 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
   spawnSession?: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   stopSession?: (sessionId: string) => Promise<boolean>;
   emitDirectSessionTranscriptUpdate?: (payload: DirectSessionTranscriptDeltaEphemeral) => void;
-}>): void {
+  followLeaseManager?: ReturnType<typeof createDirectSessionFollowLeaseManager>;
+}>): DirectSessionFollowLeaseManager {
   const { rpcHandlerManager, emitDirectSessionTranscriptUpdate } = params;
-  const followLeaseManager = createDirectSessionFollowLeaseManager();
+  const followLeaseManager = params.followLeaseManager ?? createDirectSessionFollowLeaseManager();
+  const loadAuthoritativeLinkedSession = async (input: Readonly<{
+    machineId: string;
+    sessionId: string;
+    providerId: string;
+    remoteSessionId: string;
+  }>) => {
+    const credentials = await readCredentials().catch(() => null);
+    if (!credentials) {
+      return { ok: false as const, response: err('provider_unavailable', 'not_authenticated') };
+    }
+    const linked = await loadLinkedDirectSession({
+      credentials,
+      sessionId: input.sessionId,
+      machineId: input.machineId,
+    });
+    if (!linked.ok) {
+      return { ok: false as const, response: err(linked.errorCode, linked.error) };
+    }
+    if (
+      linked.session.providerId !== input.providerId
+      || linked.session.remoteSessionId !== input.remoteSessionId
+    ) {
+      return { ok: false as const, response: err('invalid_request', 'direct_session_identity_mismatch') };
+    }
+    return { ok: true as const, credentials, session: linked.session };
+  };
 
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_DIRECT_SESSION_ATTACH, async (raw: unknown) => {
     const parsed = DirectSessionAttachRequestSchema.safeParse(raw);
     if (!parsed.success) return err('invalid_request') satisfies DirectSessionAttachResponse;
+    const authoritative = await loadAuthoritativeLinkedSession(parsed.data);
+    if (!authoritative.ok) {
+      return authoritative.response satisfies DirectSessionAttachResponse;
+    }
     const validatedSource = validateDirectMachineSource({
-      providerId: parsed.data.providerId,
-      source: parsed.data.source,
+      providerId: authoritative.session.providerId,
+      source: authoritative.session.source,
       env: process.env,
     });
     if (!validatedSource.ok) {
@@ -117,7 +149,7 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
     }
 
     try {
-      const providerOps = await getDirectSessionProviderOps(parsed.data.providerId);
+      const providerOps = await getDirectSessionProviderOps(authoritative.session.providerId);
       const attached = await followLeaseManager.attach({
         sessionId: parsed.data.sessionId,
         leaseId: parsed.data.leaseId,
@@ -128,7 +160,7 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
             reason: 'attached_view',
             acquireProviderFollowLease: () => providerOps.acquireFollowLease!({
               source: validatedSource.source,
-              remoteSessionId: parsed.data.remoteSessionId,
+              remoteSessionId: authoritative.session.remoteSessionId,
               reason: 'attached_view',
             }),
             emitDirectSessionTranscriptUpdate,
@@ -164,9 +196,13 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_DIRECT_SESSION_FOLLOW_POLICY_SET, async (raw: unknown) => {
     const parsed = DirectSessionFollowPolicySetRequestSchema.safeParse(raw);
     if (!parsed.success) return err('invalid_request') satisfies DirectSessionFollowPolicySetResponse;
+    const authoritative = await loadAuthoritativeLinkedSession(parsed.data);
+    if (!authoritative.ok) {
+      return authoritative.response satisfies DirectSessionFollowPolicySetResponse;
+    }
     const validatedSource = validateDirectMachineSource({
-      providerId: parsed.data.providerId,
-      source: parsed.data.source,
+      providerId: authoritative.session.providerId,
+      source: authoritative.session.source,
       env: process.env,
     });
     if (!validatedSource.ok) {
@@ -175,7 +211,7 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
 
     let providerOps: Awaited<ReturnType<typeof getDirectSessionProviderOps>>;
     try {
-      providerOps = await getDirectSessionProviderOps(parsed.data.providerId);
+      providerOps = await getDirectSessionProviderOps(authoritative.session.providerId);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'follow_policy_set_failed';
       return err('internal_error', message) satisfies DirectSessionFollowPolicySetResponse;
@@ -185,16 +221,10 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
       return err('provider_unavailable', 'background_follow_not_supported') satisfies DirectSessionFollowPolicySetResponse;
     }
 
-    const credentials = await readCredentials().catch(() => null);
-    if (!credentials) {
-      return err('provider_unavailable', 'not_authenticated') satisfies DirectSessionFollowPolicySetResponse;
-    }
+    const { credentials } = authoritative;
 
     try {
-      const rawSession = await fetchSessionById({
-        token: credentials.token,
-        sessionId: parsed.data.sessionId,
-      }).catch(() => null);
+      const rawSession = authoritative.session.rawSession;
       const updatedAtMs = Date.now();
       const persistFollowPolicy = async (): Promise<DirectSessionFollowPolicySetResponse | null> => {
         if (!rawSession) {
@@ -232,7 +262,7 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
             reason: 'background_follow',
             acquireProviderFollowLease: () => providerOps.acquireFollowLease!({
               source: validatedSource.source,
-              remoteSessionId: parsed.data.remoteSessionId,
+              remoteSessionId: authoritative.session.remoteSessionId,
               reason: 'background_follow',
             }),
             emitDirectSessionTranscriptUpdate,
@@ -372,6 +402,7 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
     const liveMarkers = markers.filter((m) => Number.isFinite(m.pid) && m.pid > 0 && isPidAlive(m.pid));
 
     runnerActive = liveMarkers.some((m) => m.happySessionId === parsed.data.sessionId);
+    await followLeaseManager.reconcileRuntimeOwnership(parsed.data.sessionId, runnerActive);
 
     if (!runnerActive) {
       const owner = findTrustedDirectSessionOwner({
@@ -558,6 +589,7 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
     });
 
     if (trustedOwner && trustedOwner.happySessionId === parsed.data.sessionId) {
+      await followLeaseManager.releaseForTakeover(parsed.data.sessionId);
       return { ok: true } satisfies DirectSessionTakeoverResponse;
     }
 
@@ -587,6 +619,8 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
         spawnResult.type === 'error' ? spawnResult.errorMessage : 'directory_approval_required',
       ) satisfies DirectSessionTakeoverResponse;
     }
+
+    await followLeaseManager.releaseForTakeover(parsed.data.sessionId);
 
     return { ok: true } satisfies DirectSessionTakeoverResponse;
   });
@@ -675,6 +709,8 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
       ) satisfies DirectSessionTakeoverPersistResponse;
     }
 
+    await followLeaseManager.releaseForTakeover(parsed.data.sessionId);
+
     await updateSessionMetadataWithRetry({
       token: credentials.token,
       credentials,
@@ -697,6 +733,10 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
       },
     });
 
+    await followLeaseManager.retireForPersistedTakeover(parsed.data.sessionId);
+
     return { ok: true, converted: true } satisfies DirectSessionTakeoverPersistResponse;
   });
+
+  return followLeaseManager;
 }

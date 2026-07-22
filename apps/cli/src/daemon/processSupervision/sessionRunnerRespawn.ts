@@ -20,7 +20,7 @@ export type SessionRunnerRespawnManager = Readonly<{
     trackedSession: TrackedSession,
     exit: DaemonChildExit,
     options?: Readonly<{ forceRestart?: boolean }>,
-  ) => void;
+  ) => boolean;
 }>;
 
 export type SessionRunnerRespawnOptionsResolver = (input: Readonly<{
@@ -103,6 +103,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   jitterMs: number;
   isSessionAlreadyRunning: (sessionId: string) => boolean | Promise<boolean>;
   spawnSession: (opts: SpawnSessionOptions) => Promise<unknown>;
+  stopSpawnedSession?: (input: Readonly<{ sessionId: string; result: unknown }>) => boolean | Promise<boolean>;
   resolveRespawnOptions?: SessionRunnerRespawnOptionsResolver;
   onRespawnSuccess?: (input: Readonly<{
     sessionId: string;
@@ -122,7 +123,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   const stopRequestedBySessionId = new Map<string, StopRequest>();
   const stateBySessionId = new Map<
     string,
-    Readonly<{ controller: RestartController; timer: NodeJS.Timeout | null }>
+    Readonly<{ controller: RestartController; timer: NodeJS.Timeout | null; previousPid: number | null }>
   >();
 
   const getOrCreateController = (sessionId: string): RestartController => {
@@ -143,7 +144,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     const stopRequest = stopRequestedBySessionId.get(sessionId);
     if (stopRequest) controller.markStopRequested(stopRequest);
 
-    stateBySessionId.set(sessionId, { controller, timer: null });
+    stateBySessionId.set(sessionId, { controller, timer: null, previousPid: null });
     return controller;
   };
 
@@ -151,7 +152,11 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     const existing = stateBySessionId.get(sessionId);
     if (!existing?.timer) return;
     clearTimeout(existing.timer);
-    stateBySessionId.set(sessionId, { controller: existing.controller, timer: null });
+    stateBySessionId.set(sessionId, {
+      controller: existing.controller,
+      timer: null,
+      previousPid: existing.previousPid,
+    });
   };
 
   const scheduleRetryFromTermination = (
@@ -192,6 +197,13 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
 
     const timer = setTimeout(() => {
       void (async () => {
+        const scheduled = stateBySessionId.get(sessionId);
+        if (!scheduled) return;
+        stateBySessionId.set(sessionId, {
+          controller: scheduled.controller,
+          timer: null,
+          previousPid,
+        });
         const alreadyRunning = await params.isSessionAlreadyRunning(sessionId);
         if (alreadyRunning) {
           stateBySessionId.delete(sessionId);
@@ -209,6 +221,12 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         const respawnOptions = params.resolveRespawnOptions
           ? await params.resolveRespawnOptions({ sessionId, spawnOptions, vendorResumeId, defaultOptions })
           : defaultOptions;
+        const stopRequestAfterResolve = stopRequestedBySessionId.get(sessionId);
+        if (stopRequestAfterResolve) {
+          stateBySessionId.delete(sessionId);
+          params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'stop_requested' });
+          return;
+        }
         params.logDebug(
           `[DAEMON RUN] Respawning runner for session ${sessionId} after ${delayMs}ms (attempt ${attempt})`,
           { exit: event },
@@ -216,8 +234,28 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
 
         void params
           .spawnSession(respawnOptions)
-          .then((result) => {
+          .then(async (result) => {
             if (result && typeof result === 'object' && (result as any).type === 'success') {
+              if (stopRequestedBySessionId.has(sessionId)) {
+                let replacementStopConfirmed = false;
+                try {
+                  replacementStopConfirmed = await params.stopSpawnedSession?.({ sessionId, result }) === true;
+                } catch (error) {
+                  params.logDebug(
+                    `[DAEMON RUN] Failed to stop replacement spawned after cancellation for session ${sessionId}`,
+                    error,
+                  );
+                }
+                if (!replacementStopConfirmed) {
+                  params.logWarn(
+                    `[DAEMON RUN] Retaining runtime ownership for session ${sessionId}; replacement stop was not confirmed`,
+                  );
+                  return;
+                }
+                stateBySessionId.delete(sessionId);
+                params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'stop_requested' });
+                return;
+              }
               params.onRespawnSuccess?.({ sessionId, previousPid, result });
               stateBySessionId.delete(sessionId);
               return;
@@ -268,7 +306,11 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       });
     }, delayMs) as unknown as { unref?: () => void };
     timer.unref?.();
-    stateBySessionId.set(sessionId, { controller: existing.controller, timer: timer as any });
+    stateBySessionId.set(sessionId, {
+      controller: existing.controller,
+      timer: timer as any,
+      previousPid,
+    });
   };
 
   return {
@@ -279,7 +321,17 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       const existing = stateBySessionId.get(sessionId);
       if (existing) {
         existing.controller.markStopRequested(request);
-        clearTimer(sessionId);
+        if (existing.timer) {
+          clearTimeout(existing.timer);
+          stateBySessionId.delete(sessionId);
+          if (existing.previousPid !== null) {
+            params.onRespawnTerminal?.({
+              sessionId,
+              previousPid: existing.previousPid,
+              reason: 'stop_requested',
+            });
+          }
+        }
       }
     },
     clearStopRequested: (sessionIdRaw: string) => {
@@ -292,10 +344,10 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       }
     },
     handleUnexpectedExit: (trackedSession: TrackedSession, exit: DaemonChildExit, options) => {
-      if (!params.enabled && options?.forceRestart !== true) return;
-      if (trackedSession.startedBy !== 'daemon') return;
+      if (!params.enabled && options?.forceRestart !== true) return false;
+      if (trackedSession.startedBy !== 'daemon') return false;
       const sessionId = normalizeSessionId(trackedSession.happySessionId);
-      if (!sessionId) return;
+      if (!sessionId) return false;
       const forceRestart = options?.forceRestart === true;
       if (forceRestart) {
         // A connected-service-initiated forced restart explicitly supersedes any prior stop request
@@ -308,14 +360,14 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         stateBySessionId.get(sessionId)?.controller.clearStopRequested();
       }
       const stopRequest = stopRequestedBySessionId.get(sessionId);
-      if (stopRequest) return;
+      if (stopRequest) return false;
 
       const spawnOptions = trackedSession.spawnOptions;
       if (!spawnOptions || typeof (spawnOptions as any).directory !== 'string' || !String((spawnOptions as any).directory).trim()) {
         if (forceRestart) {
           params.onRespawnTerminal?.({ sessionId, previousPid: trackedSession.pid, reason: 'missing_spawn_options' });
         }
-        return;
+        return false;
       }
 
       const vendorResumeId = normalizeOptionalString(trackedSession.vendorResumeId);
@@ -333,7 +385,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
           reason: 'no_restart',
           detail: decision.reason,
         });
-        return;
+        return false;
       }
 
       scheduleSpawn(
@@ -345,6 +397,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         event,
         trackedSession.pid,
       );
+      return true;
     },
   };
 }

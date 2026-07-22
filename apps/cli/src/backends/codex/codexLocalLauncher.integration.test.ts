@@ -33,6 +33,71 @@ async function sleep(ms: number): Promise<void> {
 }
 
 describe('codexLocalLauncher', () => {
+	  it('mirrors only rollout bytes appended after an explicit vendor resume starts', async () => {
+    const fixture = await createCodexBinaryFixture();
+    const sessionId = randomUUID();
+    const rolloutPath = join(fixture.sessionsRoot, 'rollout-test.jsonl');
+    const historicalTimestamp = new Date(Date.now() - 60_000).toISOString();
+    await writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          type: 'session_meta',
+          payload: { id: sessionId, timestamp: historicalTimestamp, cwd: fixture.sessionsRoot },
+        }),
+        JSON.stringify({
+          type: 'response_item',
+          payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'historical-answer' }] },
+        }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    await writeFakeCodexScript(fixture.fakeCodex, {
+      terminatedFlag: fixture.terminatedFlag,
+      assistantText: 'live-answer',
+      recordArgv: false,
+      exitAfterMs: 1_500,
+    });
+
+    const { session, codexMessages } = createLocalSessionHarness();
+    const messageQueue = createLocalMessageQueue();
+    const restoreEnv = applyCodexLauncherEnv({
+      HAPPIER_CODEX_SESSIONS_DIR: fixture.sessionsRoot,
+      HAPPIER_CODEX_TUI_BIN: fixture.fakeCodex,
+      TEST_CODEX_SESSION_ID: sessionId,
+      TEST_CODEX_TIMESTAMP: new Date().toISOString(),
+      CODEX_HOME: undefined,
+    });
+
+    try {
+      const launcherPromise = codexLocalLauncher({
+        path: fixture.sessionsRoot,
+        api: {},
+        session,
+        messageQueue,
+        permissionMode: 'default',
+        resumeId: sessionId,
+        rolloutDiscovery: {
+          initialTimeoutMs: 250,
+          initialPollIntervalMs: 25,
+          extendedPollIntervalMs: 25,
+        },
+      });
+
+      await waitFor(() => {
+        expect(codexMessages.some((message) => message.message === 'live-answer')).toBe(true);
+      });
+      expect(codexMessages.some((message) => message.message === 'historical-answer')).toBe(false);
+
+      messageQueue.push('switch remote', { permissionMode: 'default' });
+      await expect(launcherPromise).resolves.toEqual({ type: 'switch', resumeId: sessionId });
+    } finally {
+      restoreEnv();
+      await cleanupCodexBinaryFixture(fixture);
+    }
+  });
+
 	  it('does not forward CODEX_THREAD_ID to the Codex TUI child process', async () => {
     const fixture = await createCodexBinaryFixture();
     const threadIdPath = join(fixture.binDir, 'thread-id.txt');

@@ -50,7 +50,13 @@ export function createOnChildExited(params: Readonly<{
   spawnResourceCleanupByPid: Map<number, () => void>;
   sessionAttachCleanupByPid: Map<number, () => Promise<void>>;
   getApiMachineForSessions: () => ApiMachineClient | null;
-  onUnexpectedExit?: (trackedSession: TrackedSession, exit: ChildExit) => void;
+  onSessionRuntimeEnded?: (
+    sessionId: string,
+    trackedSession: TrackedSession,
+    exit: ChildExit,
+    lifecycle: Readonly<{ isUnexpected: boolean; respawnPending: boolean }>,
+  ) => void;
+  onUnexpectedExit?: (trackedSession: TrackedSession, exit: ChildExit) => boolean | void;
   isExitUnexpectedOverride?: (trackedSession: TrackedSession, exit: ChildExit) => boolean | null | undefined;
   onPidPromoted?: (input: Readonly<{ fromPid: number; toPid: number; trackedSession: TrackedSession }>) => void;
   shouldPreserveSessionMarkerOnExit?: (input: Readonly<{ pid: number; trackedSession: TrackedSession; exit: ChildExit }>) => boolean;
@@ -61,6 +67,7 @@ export function createOnChildExited(params: Readonly<{
     spawnResourceCleanupByPid,
     sessionAttachCleanupByPid,
     getApiMachineForSessions,
+    onSessionRuntimeEnded,
     onUnexpectedExit,
     isExitUnexpectedOverride,
     onPidPromoted,
@@ -119,11 +126,21 @@ export function createOnChildExited(params: Readonly<{
         });
       }
 
+      const endedSessionId = normalizeSessionId(tracked.happySessionId);
+      let respawnPending = false;
       if (shouldReportSessionEnd && isUnexpected && typeof tracked.happySessionId === 'string' && tracked.happySessionId.trim().length > 0) {
         try {
-          onUnexpectedExit?.(tracked, exit);
+          respawnPending = onUnexpectedExit?.(tracked, exit) === true;
         } catch (e) {
           logger.debug('[DAEMON RUN] Failed to run onUnexpectedExit handler', e);
+        }
+      }
+
+      if (shouldReportSessionEnd && endedSessionId) {
+        try {
+          onSessionRuntimeEnded?.(endedSessionId, tracked, exit, { isUnexpected, respawnPending });
+        } catch (e) {
+          logger.debug('[DAEMON RUN] Failed to run onSessionRuntimeEnded handler', e);
         }
       }
 

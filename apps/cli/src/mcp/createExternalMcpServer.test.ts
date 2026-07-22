@@ -10,6 +10,8 @@ describe('createExternalMcpServer', () => {
   beforeEach(() => {
     process.env = { ...env };
     delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    delete process.env.HAPPIER_ENABLE_FUSION_RECONCILIATION_HISTORY_V1;
+    delete process.env.HAPPIER_ENABLE_FUSION_PROVIDER_TELEMETRY_V1;
   });
 
   it('returns toolNames aligned with per-surface action settings', async () => {
@@ -49,6 +51,57 @@ describe('createExternalMcpServer', () => {
     });
 
     expect(toolNames).toEqual(expect.arrayContaining(['action_execute', 'session_list']));
+  });
+
+  it('exposes the Fusion ACP model snapshot only through the explicit local extension flag', async () => {
+    process.env.HAPPIER_ENABLE_FUSION_RUNTIME_SNAPSHOT_V1 = '1';
+    const { createExternalMcpServer } = await import('@/mcp/createExternalMcpServer');
+
+    const { toolNames } = createExternalMcpServer({
+      credentials: {
+        token: 'token',
+        encryption: {
+          type: 'legacy',
+          secret: new Uint8Array([1, 2, 3, 4]),
+        },
+      },
+    });
+
+    expect(toolNames).toContain('fusion_runtime_snapshot_get');
+  });
+
+  it('exposes the Fusion reconciliation history only through its explicit local extension flag', async () => {
+    process.env.HAPPIER_ENABLE_FUSION_RECONCILIATION_HISTORY_V1 = '1';
+    const { createExternalMcpServer } = await import('@/mcp/createExternalMcpServer');
+
+    const { toolNames } = createExternalMcpServer({
+      credentials: {
+        token: 'token',
+        encryption: {
+          type: 'legacy',
+          secret: new Uint8Array([1, 2, 3, 4]),
+        },
+      },
+    });
+
+    expect(toolNames).toContain('fusion_reconciliation_history_get');
+  });
+
+  it('exposes Fusion provider telemetry only through its explicit local extension flag', async () => {
+    process.env.HAPPIER_ENABLE_FUSION_PROVIDER_TELEMETRY_V1 = '1';
+    const { createExternalMcpServer } = await import('@/mcp/createExternalMcpServer');
+
+    const { toolNames } = createExternalMcpServer({
+      credentials: {
+        token: 'token',
+        encryption: {
+          type: 'legacy',
+          secret: new Uint8Array([1, 2, 3, 4]),
+        },
+      },
+    });
+
+    expect(toolNames).toContain('fusion_provider_telemetry_get');
   });
 
   it('registers action-spec resources for the mcp surface', async () => {

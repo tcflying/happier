@@ -63,11 +63,6 @@
       }
     }
   },
-  "bin": {
-    "happier": "./bin/happier.mjs",
-    "happier-dev": "./bin/happier-dev.mjs",
-    "happier-mcp": "./bin/happier-mcp.mjs"
-  },
   "files": [
     "dist",
     "dist/**",
@@ -93,18 +88,18 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "node scripts/rmDist.mjs && tsc --noEmit && node scripts/runPkgrollBuild.mjs && node scripts/syncPackageDist.mjs",
-    "test": "$npm_execpath run test:unit",
-    "vitest": "$npm_execpath run -s build:shared && vitest",
+    "test": "yarn run test:unit",
+    "vitest": "yarn run -s build:shared && vitest",
     "test:unit": "vitest run --config vitest.config.ts && yarn -s test:import-cycles",
     "test:import-cycles": "node scripts/importCycleGuard.mjs",
     "test:integration": "node scripts/runVitestShards.mjs --config vitest.integration.config.ts",
     "test:slow": "vitest run --config vitest.slow.config.ts",
-    "start": "$npm_execpath run build && node ./bin/happier.mjs",
+    "start": "yarn run build && node ./bin/happier.mjs",
     "dev": "tsx src/index.ts",
-    "dev:local-server": "$npm_execpath run build && tsx --env-file .env.dev-local-server src/index.ts",
-    "dev:integration-test-env": "$npm_execpath run build && tsx --env-file .env.integration-test src/index.ts",
-    "prepublishOnly": "$npm_execpath run build && $npm_execpath test",
-    "release": "$npm_execpath install && release-it",
+    "dev:local-server": "yarn run build && tsx --env-file .env.dev-local-server src/index.ts",
+    "dev:integration-test-env": "yarn run build && tsx --env-file .env.integration-test src/index.ts",
+    "prepublishOnly": "yarn run build && yarn test",
+    "release": "yarn install && release-it",
     "build:shared": "yarn -s workspace @happier-dev/cli-common build && node scripts/buildSharedDeps.mjs",
     "pretypecheck": "yarn -s build:shared",
     "prebuild": "yarn -s build:shared",

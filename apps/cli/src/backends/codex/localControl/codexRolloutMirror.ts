@@ -51,6 +51,7 @@ export class CodexRolloutMirror {
     constructor(
         private readonly opts: {
             filePath: string;
+            startOffsetBytes?: number;
             codexHome?: string | null;
             session: ApiSessionClient;
             debug: boolean;
@@ -81,6 +82,7 @@ export class CodexRolloutMirror {
             filePath: this.opts.filePath,
             pollPolicy: this.followPolicy,
             startAtEnd: false,
+            startOffsetBytes: this.opts.startOffsetBytes,
             onJson: (value) => this.onJson(value),
         });
         this.controller = controller;

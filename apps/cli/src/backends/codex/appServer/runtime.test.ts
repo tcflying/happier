@@ -96,6 +96,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     rejectStructuredSteerInput?: boolean;
     emitResumeContinuationUserInputRequest?: boolean;
     emitResumeTurnStartedBeforeResponse?: boolean;
+    emitResumeReplayThenLiveTurn?: boolean;
     resumeResponseDelayMs?: number;
     threadReadResponseDelayMs?: number;
     emitIdleMcpRequestAfterThreadStart?: boolean;
@@ -178,6 +179,14 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        const adoptsOverrideThread = Object.prototype.hasOwnProperty.call(msg.params ?? {}, "model") || Object.prototype.hasOwnProperty.call(msg.params ?? {}, "serviceTier");',
         '        const resumedThreadId = adoptsOverrideThread ? "thread-overrides" : (msg.params?.threadId ?? null);',
         '        if (resumedThreadId) resumedThreadIds.add(resumedThreadId);',
+        `        if (${JSON.stringify(params.emitResumeReplayThenLiveTurn === true)}) {`,
+        '            const replayTurnId = "turn-resume-replay";',
+        '            process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: resumedThreadId, turn: { id: replayTurnId } } }) + "\\n");',
+        '            process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { threadId: resumedThreadId, turnId: replayTurnId, itemId: "resume_replay_msg", delta: "HISTORICAL_REPLAY_SHOULD_NOT_PERSIST" } }) + "\\n");',
+        '            process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: resumedThreadId, turnId: replayTurnId, item: { id: "resume_replay_msg", type: "agentMessage", text: "HISTORICAL_REPLAY_SHOULD_NOT_PERSIST" } } }) + "\\n");',
+        '            process.stdout.write(JSON.stringify({ method: "thread/tokenUsage/updated", params: { threadId: resumedThreadId, tokenUsage: { total: { totalTokens: 999, inputTokens: 900, cachedInputTokens: 800, outputTokens: 99, reasoningOutputTokens: 9 }, modelContextWindow: 1000 } } }) + "\\n");',
+        '            process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: resumedThreadId, turn: { id: replayTurnId } } }) + "\\n");',
+        '        }',
         `        if (${JSON.stringify(params.emitResumeTurnStartedBeforeResponse === true)}) {`,
         '            const resumeTurnId = "turn-resume-start-before-response";',
         '            process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: resumedThreadId, turn: { id: resumeTurnId } } }) + "\\n");',
@@ -193,6 +202,15 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         `            setTimeout(() => { process.stdout.write(resumeResponse); }, ${JSON.stringify(params.resumeResponseDelayMs ?? 0)});`,
         '        } else {',
         '            process.stdout.write(resumeResponse);',
+        '        }',
+        `        if (${JSON.stringify(params.emitResumeReplayThenLiveTurn === true)}) {`,
+        '            const liveTurnId = "turn-resume-live";',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: resumedThreadId, turn: { id: liveTurnId } } }) + "\\n");',
+        '                process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { threadId: resumedThreadId, turnId: liveTurnId, itemId: "resume_live_msg", delta: "LIVE_AFTER_RESUME" } }) + "\\n");',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: resumedThreadId, turnId: liveTurnId, item: { id: "resume_live_msg", type: "agentMessage", text: "LIVE_AFTER_RESUME" } } }) + "\\n");',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: resumedThreadId, turn: { id: liveTurnId } } }) + "\\n");',
+        '            }, 100);',
         '        }',
         `        if (${JSON.stringify(params.emitResumeContinuationUserInputRequest === true)}) {`,
         '            const resumeTurnId = "turn-resume-request";',
@@ -1278,6 +1296,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectStructuredSteerInput?: boolean;
             emitResumeContinuationUserInputRequest?: boolean;
             emitResumeTurnStartedBeforeResponse?: boolean;
+            emitResumeReplayThenLiveTurn?: boolean;
             resumeResponseDelayMs?: number;
             threadReadResponseDelayMs?: number;
             emitIdleMcpRequestAfterThreadStart?: boolean;
@@ -1323,6 +1342,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectStructuredSteerInput: options.rejectStructuredSteerInput,
             emitResumeContinuationUserInputRequest: options.emitResumeContinuationUserInputRequest,
             emitResumeTurnStartedBeforeResponse: options.emitResumeTurnStartedBeforeResponse,
+            emitResumeReplayThenLiveTurn: options.emitResumeReplayThenLiveTurn,
             resumeResponseDelayMs: options.resumeResponseDelayMs,
             threadReadResponseDelayMs: options.threadReadResponseDelayMs,
             emitIdleMcpRequestAfterThreadStart: options.emitIdleMcpRequestAfterThreadStart,
@@ -1624,6 +1644,55 @@ describe('createCodexAppServerRuntime', () => {
                 }),
             ]),
         );
+    });
+
+    it('drops resume-time transcript replay while preserving live native output after resume', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-replay-fence-', {
+            emitResumeReplayThenLiveTurn: true,
+        });
+        const sendAgentMessageCommitted = vi.fn(async () => {});
+        const sendCodexMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendAgentMessageCommitted,
+                sendCodexMessage,
+                sessionTurnLifecycle: createSessionTurnLifecycleTestDouble(),
+            } as any,
+            permissionMode: 'read-only',
+        });
+
+        try {
+            await runtime.startOrLoad({ resumeId: 'resume-replay-fence', importHistory: false });
+            await waitForCondition(() => {
+                const committedCalls = sendAgentMessageCommitted.mock.calls as unknown as Array<
+                    [string, { type?: string; message?: string }]
+                >;
+                return committedCalls.some(([, body]) => (
+                    body.type === 'message' && body.message === 'LIVE_AFTER_RESUME'
+                ));
+            }, {
+                timeoutMs: 1_000,
+                intervalMs: 10,
+                label: 'live native output after resume replay fence',
+                debug: () => JSON.stringify({
+                    committed: sendAgentMessageCommitted.mock.calls,
+                    events: sendCodexMessage.mock.calls,
+                    active: runtime.hasActiveProviderTurn(),
+                    inFlight: runtime.isTurnInFlight(),
+                }),
+            });
+
+            expect(JSON.stringify(sendAgentMessageCommitted.mock.calls)).not.toContain('HISTORICAL_REPLAY_SHOULD_NOT_PERSIST');
+            expect(JSON.stringify(sendCodexMessage.mock.calls)).not.toContain('HISTORICAL_REPLAY_SHOULD_NOT_PERSIST');
+            expect(sendCodexMessage.mock.calls).not.toEqual(expect.arrayContaining([
+                [expect.objectContaining({ type: 'token_count', tokens: expect.objectContaining({ total: 999 }) })],
+            ]));
+        } finally {
+            await runtime.reset();
+        }
     });
 
     it('defaults resumed sessions to lean metadata recovery after app-server loads the thread', async () => {

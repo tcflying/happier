@@ -41,6 +41,7 @@ import {
     type SessionMutationSocket,
 } from './session/mutations/createSessionMutationOutbox';
 import { createSessionEndMutation, createSessionTurnMutation } from './session/mutations/sessionMutationTypes';
+import type { DirectSessionFollowLeaseManager } from './directSessions/leases/createDirectSessionFollowLeaseManager';
 
 import type { DaemonToServerEvents, ServerToDaemonEvents } from './machine/socketTypes';
 import { registerMachineRpcHandlers, type MachineRpcHandlerDeps, type MachineRpcHandlers } from './machine/rpcHandlers';
@@ -134,6 +135,7 @@ export class ApiMachineClient {
     private connectionStateListeners = new Set<(state: ManagedConnectionState) => void>();
     private connectionSupervisor: ManagedConnectionSupervisor | null = null;
     private sessionEndMutationOutboxes = new Map<string, SessionMutationOutbox>();
+    private directSessionFollowLeaseManager: DirectSessionFollowLeaseManager | null = null;
     private readonly machineRpcWorkingDirectory: string;
     private readonly filesystemAccessPolicy: FilesystemAccessPolicy;
     private readonly ownershipMetadata: Readonly<{
@@ -281,8 +283,20 @@ export class ApiMachineClient {
                 emitDirectSessionTranscriptUpdate:
                     deps?.emitDirectSessionTranscriptUpdate
                     ?? ((payload) => this.emitDirectSessionTranscriptUpdate(payload)),
+                onDirectSessionFollowLeaseManagerReady: (manager) => {
+                    this.directSessionFollowLeaseManager = manager;
+                    deps?.onDirectSessionFollowLeaseManagerReady?.(manager);
+                },
             },
         });
+    }
+
+    async releaseDirectSessionRuntimeOwnership(sessionId: string): Promise<void> {
+        await this.directSessionFollowLeaseManager?.setRuntimeOwned(sessionId, false);
+    }
+
+    async claimDirectSessionRuntimeOwnership(sessionId: string): Promise<void> {
+        await this.directSessionFollowLeaseManager?.setRuntimeOwned(sessionId, true);
     }
 
     onUpdate(listener: (update: Update) => boolean | void): () => void {

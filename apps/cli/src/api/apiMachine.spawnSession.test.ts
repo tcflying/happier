@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { Machine } from '@/api/types';
 import { encodeBase64, encrypt } from '@/api/encryption';
@@ -6,6 +6,39 @@ import { encodeBase64, encrypt } from '@/api/encryption';
 import { ApiMachineClient } from './apiMachine';
 
 describe('ApiMachineClient spawn-happy-session handler', () => {
+  it('restores a runtime ownership fence before direct follow can attach', async () => {
+    const machine: Machine = {
+      id: 'machine-runtime-ownership',
+      encryptionKey: new Uint8Array(32).fill(7),
+      encryptionVariant: 'legacy',
+      metadata: null,
+      metadataVersion: 0,
+      daemonState: null,
+      daemonStateVersion: 0,
+    };
+    const client = new ApiMachineClient('token', machine);
+    let followLeaseManager: any = null;
+    client.setRPCHandlers({
+      spawnSession: async () => ({ type: 'success', sessionId: 'session-runtime-owned' }),
+      stopSession: async () => true,
+      requestShutdown: () => {},
+    }, {
+      onDirectSessionFollowLeaseManagerReady: (manager) => {
+        followLeaseManager = manager;
+      },
+    });
+    const acquireFollowLease = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+
+    await client.claimDirectSessionRuntimeOwnership('session-runtime-owned');
+    await followLeaseManager.attach({
+      sessionId: 'session-runtime-owned',
+      ttlMs: 30_000,
+      acquireFollowLease,
+    });
+
+    expect(acquireFollowLease).not.toHaveBeenCalled();
+  });
+
   it('forwards terminal spawn options to daemon spawnSession handler', async () => {
     const machine: Machine = {
       id: 'machine-test',

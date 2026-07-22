@@ -98,6 +98,111 @@ describe('createCodexMcpMessageHandler', () => {
     expect(tracker.getPreview()).toBeNull();
   });
 
+  it('replaces cumulative agent_message snapshots instead of concatenating them', async () => {
+    vi.stubEnv('HAPPIER_STREAM_CHECKPOINT_MS', '1000000');
+    vi.stubEnv('HAPPIER_STREAM_CHECKPOINT_MIN_CHARS', '1000000');
+
+    let thinking = false;
+    let currentTaskId: string | null = null;
+    const sendAgentMessageCommitted = vi.fn(async (
+      _provider: string,
+      _body: { type?: string; message?: string },
+      _options?: { meta?: { happierStreamSegmentV1?: { segmentState?: string } } },
+    ) => {});
+    const session = {
+      sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted,
+      sendCodexMessage: vi.fn(),
+      sendSessionEvent: vi.fn(),
+      keepAlive: vi.fn(),
+    };
+    const handler = createCodexMcpMessageHandler({
+      logger: { debug: vi.fn() },
+      session,
+      messageBuffer: { addMessage: vi.fn() },
+      sendReady: vi.fn(),
+      publishCodexThreadIdToMetadata: vi.fn(),
+      diffProcessor: { processDiff: vi.fn() },
+      getCurrentTaskId: () => currentTaskId,
+      setCurrentTaskId: (next: string | null) => {
+        currentTaskId = next;
+      },
+      getThinking: () => thinking,
+      setThinking: (next: boolean) => {
+        thinking = next;
+      },
+    });
+
+    handler({ type: 'task_started' });
+    handler({ type: 'agent_message', message: '部分回答' });
+    handler({ type: 'agent_message', message: '完整最终回答' });
+    handler({ type: 'task_complete' });
+
+    await vi.waitFor(() => {
+      const completedMessages = sendAgentMessageCommitted.mock.calls
+        .filter(([, body, options]) => (
+          body?.type === 'message'
+          && options?.meta?.happierStreamSegmentV1?.segmentState === 'complete'
+        ))
+        .map(([, body]) => body.message);
+      expect(completedMessages).toEqual(['完整最终回答']);
+    });
+  });
+
+  it('continues cumulative agent_message snapshots without replaying text across tool boundaries', async () => {
+    vi.stubEnv('HAPPIER_STREAM_CHECKPOINT_MS', '1000000');
+    vi.stubEnv('HAPPIER_STREAM_CHECKPOINT_MIN_CHARS', '1000000');
+
+    let thinking = false;
+    let currentTaskId: string | null = null;
+    const sendAgentMessageCommitted = vi.fn(async (
+      _provider: string,
+      _body: { type?: string; message?: string },
+      _options?: { meta?: { happierStreamSegmentV1?: { segmentState?: string } } },
+    ) => {});
+    const session = {
+      sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted,
+      sendCodexMessage: vi.fn(),
+      sendSessionEvent: vi.fn(),
+      keepAlive: vi.fn(),
+    };
+    const handler = createCodexMcpMessageHandler({
+      logger: { debug: vi.fn() },
+      session,
+      messageBuffer: { addMessage: vi.fn() },
+      sendReady: vi.fn(),
+      publishCodexThreadIdToMetadata: vi.fn(),
+      diffProcessor: { processDiff: vi.fn() },
+      getCurrentTaskId: () => currentTaskId,
+      setCurrentTaskId: (next: string | null) => {
+        currentTaskId = next;
+      },
+      getThinking: () => thinking,
+      setThinking: (next: boolean) => {
+        thinking = next;
+      },
+    });
+
+    handler({ type: 'task_started' });
+    handler({ type: 'agent_message', message: '先检查' });
+    handler({ type: 'exec_command_begin', call_id: 'call-1', command: 'echo ok' });
+    handler({ type: 'agent_message', message: '先检查，再完成' });
+    handler({ type: 'agent_message', message: '先检查，再完成并确认' });
+    handler({ type: 'task_complete' });
+
+    await vi.waitFor(() => {
+      const completedMessages = sendAgentMessageCommitted.mock.calls
+        .filter(([, body, options]) => (
+          body?.type === 'message'
+          && options?.meta?.happierStreamSegmentV1?.segmentState === 'complete'
+        ))
+        .map(([, body]) => body.message);
+      expect(completedMessages).toEqual(['先检查', '，再完成并确认']);
+      expect(completedMessages.join('')).toBe('先检查，再完成并确认');
+    });
+  });
+
   it('logs MCP message shapes without leaking string payloads', () => {
     let thinking = false;
     let currentTaskId: string | null = null;

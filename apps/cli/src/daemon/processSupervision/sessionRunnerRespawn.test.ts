@@ -30,7 +30,7 @@ describe('createSessionRunnerRespawnManager', () => {
       spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, resume: 'vendor-sess-1' } as any,
     };
 
-    manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null });
+    expect(manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null })).toBe(true);
 
     await vi.advanceTimersByTimeAsync(50);
     expect(spawnSession).toHaveBeenCalledTimes(1);
@@ -247,7 +247,7 @@ describe('createSessionRunnerRespawnManager', () => {
       spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' } } as any,
     };
 
-    manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null });
+    expect(manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null })).toBe(false);
 
     await vi.advanceTimersByTimeAsync(50);
     expect(spawnSession).not.toHaveBeenCalled();
@@ -507,6 +507,200 @@ describe('createSessionRunnerRespawnManager', () => {
     manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null });
     await vi.advanceTimersByTimeAsync(50);
     expect(spawnSession).toHaveBeenCalledTimes(0);
+  });
+
+  it('reports terminal cancellation when stop clears a pending respawn timer', async () => {
+    vi.useFakeTimers();
+    const spawnSession = vi.fn(async () => ({ type: 'success' as const, pid: 123 }));
+    const onRespawnTerminal = vi.fn();
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 10,
+      baseDelayMs: 5_000,
+      maxDelayMs: 5_000,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession,
+      onRespawnTerminal,
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 222,
+      happySessionId: 'sess-pending-stop',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' } } as any,
+    };
+
+    expect(manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-missing', code: null, signal: null },
+    )).toBe(true);
+    manager.markStopRequested('sess-pending-stop', {
+      reason: 'daemon_stop_session',
+      requestedAtMs: 1_000,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(spawnSession).not.toHaveBeenCalled();
+    expect(onRespawnTerminal).toHaveBeenCalledWith({
+      sessionId: 'sess-pending-stop',
+      previousPid: 222,
+      reason: 'stop_requested',
+    });
+  });
+
+  it('stops a replacement that finishes spawning after a stop request', async () => {
+    vi.useFakeTimers();
+    let resolveSpawn!: (result: { type: 'success'; pid: number }) => void;
+    const spawnResult = { type: 'success' as const, pid: 333 };
+    const spawnSession = vi.fn(() => new Promise<{ type: 'success'; pid: number }>((resolve) => {
+      resolveSpawn = resolve;
+    }));
+    const stopSpawnedSession = vi.fn(async () => true);
+    const onRespawnSuccess = vi.fn();
+    const onRespawnTerminal = vi.fn();
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 1,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession,
+      stopSpawnedSession,
+      onRespawnSuccess,
+      onRespawnTerminal,
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 222,
+      happySessionId: 'sess-inflight-stop',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' } } as any,
+    };
+
+    expect(manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-missing', code: null, signal: null },
+    )).toBe(true);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+
+    manager.markStopRequested('sess-inflight-stop', {
+      reason: 'daemon_stop_session',
+      requestedAtMs: 1_000,
+    });
+    resolveSpawn(spawnResult);
+    await vi.waitFor(() => expect(onRespawnTerminal).toHaveBeenCalledTimes(1));
+
+    expect(stopSpawnedSession).toHaveBeenCalledWith({
+      sessionId: 'sess-inflight-stop',
+      result: spawnResult,
+    });
+    expect(onRespawnSuccess).not.toHaveBeenCalled();
+    expect(onRespawnTerminal).toHaveBeenCalledWith({
+      sessionId: 'sess-inflight-stop',
+      previousPid: 222,
+      reason: 'stop_requested',
+    });
+  });
+
+  it('retains respawn ownership when a replacement stop cannot be confirmed', async () => {
+    vi.useFakeTimers();
+    let resolveSpawn!: (result: { type: 'success'; pid: number }) => void;
+    const spawnResult = { type: 'success' as const, pid: 334 };
+    const spawnSession = vi.fn(() => new Promise<{ type: 'success'; pid: number }>((resolve) => {
+      resolveSpawn = resolve;
+    }));
+    const stopSpawnedSession = vi.fn(async () => false);
+    const onRespawnSuccess = vi.fn();
+    const onRespawnTerminal = vi.fn();
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 1,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession,
+      stopSpawnedSession,
+      onRespawnSuccess,
+      onRespawnTerminal,
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 222,
+      happySessionId: 'sess-inflight-stop-unconfirmed',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' } } as any,
+    };
+
+    expect(manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-missing', code: null, signal: null },
+    )).toBe(true);
+    await vi.advanceTimersByTimeAsync(50);
+    manager.markStopRequested('sess-inflight-stop-unconfirmed', {
+      reason: 'daemon_stop_session',
+      requestedAtMs: 1_000,
+    });
+    resolveSpawn(spawnResult);
+    await vi.waitFor(() => expect(stopSpawnedSession).toHaveBeenCalledTimes(1));
+
+    expect(onRespawnSuccess).not.toHaveBeenCalled();
+    expect(onRespawnTerminal).not.toHaveBeenCalled();
+  });
+
+  it('retains respawn ownership when stopping a replacement throws', async () => {
+    vi.useFakeTimers();
+    let resolveSpawn!: (result: { type: 'success'; pid: number }) => void;
+    const spawnSession = vi.fn(() => new Promise<{ type: 'success'; pid: number }>((resolve) => {
+      resolveSpawn = resolve;
+    }));
+    const stopSpawnedSession = vi.fn(async () => {
+      throw new Error('stop failed');
+    });
+    const onRespawnTerminal = vi.fn();
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 1,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession,
+      stopSpawnedSession,
+      onRespawnTerminal,
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 222,
+      happySessionId: 'sess-inflight-stop-throws',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' } } as any,
+    };
+
+    expect(manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-missing', code: null, signal: null },
+    )).toBe(true);
+    await vi.advanceTimersByTimeAsync(50);
+    manager.markStopRequested('sess-inflight-stop-throws', {
+      reason: 'daemon_stop_session',
+      requestedAtMs: 1_000,
+    });
+    resolveSpawn({ type: 'success', pid: 335 });
+    await vi.waitFor(() => expect(stopSpawnedSession).toHaveBeenCalledTimes(1));
+
+    expect(onRespawnTerminal).not.toHaveBeenCalled();
   });
 
   it('respawns after the stop request is cleared (e.g. on resume)', async () => {

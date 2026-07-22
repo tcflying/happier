@@ -133,6 +133,8 @@ const harness = vi.hoisted(() => {
 
   const apiMachine = {
     setRPCHandlers: vi.fn(),
+    claimDirectSessionRuntimeOwnership: vi.fn(async () => {}),
+    releaseDirectSessionRuntimeOwnership: vi.fn(async () => {}),
     onUpdate: vi.fn(),
     onConnectionStateChange: vi.fn(() => () => {}),
     connect: vi.fn(),
@@ -283,9 +285,17 @@ const sessionRespawnManagerCapture = vi.hoisted(() => {
       markStopRequested: ReturnType<typeof vi.fn>;
       clearStopRequested: ReturnType<typeof vi.fn>;
       handleUnexpectedExit: ReturnType<typeof vi.fn>;
-      __params: { enabled: boolean };
+      __params: {
+        enabled: boolean;
+        spawnSession: (options: any) => Promise<any>;
+        stopSpawnedSession?: (input: { sessionId: string; result: unknown }) => Promise<boolean>;
+      };
     }>,
-    createSessionRunnerRespawnManager: vi.fn((params: { enabled: boolean }) => {
+    createSessionRunnerRespawnManager: vi.fn((params: {
+      enabled: boolean;
+      spawnSession: (options: any) => Promise<any>;
+      stopSpawnedSession?: (input: { sessionId: string; result: unknown }) => Promise<boolean>;
+    }) => {
       const manager = {
         markStopRequested: vi.fn(),
         clearStopRequested: vi.fn(),
@@ -626,6 +636,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     harness.resetControlRefs();
+    harness.apiMachine.claimDirectSessionRuntimeOwnership.mockClear();
+    harness.apiMachine.releaseDirectSessionRuntimeOwnership.mockClear();
     spawnHappyCLI.mockClear();
     spawnHappyCliCapture.children.length = 0;
     spawnChildProcess.mockClear();
@@ -698,6 +710,56 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
       } else {
         process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('keeps stop ownership fenced across production respawn spawn and zero-pid stop confirmation', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let run: Promise<void> | null = null;
+    try {
+      const { startDaemon } = await import('./startDaemon');
+      run = startDaemon();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (sessionRespawnManagerCapture.instances.length > 0 && harness.getSpawnSession()) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      const manager = sessionRespawnManagerCapture.instances.at(-1);
+      if (!manager) throw new Error('Expected respawn manager to be registered');
+
+      const overlappingSpawnOptions = {
+        directory: '/tmp',
+        existingSessionId: 'sess-production-respawn',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        token: 't',
+        accountSettingsVersionHint: 7,
+        approvedNewDirectoryCreation: true,
+      };
+      const respawnPromise = manager.__params.spawnSession(overlappingSpawnOptions);
+      expect(manager.clearStopRequested).not.toHaveBeenCalledWith('sess-production-respawn');
+
+      const explicitSpawnSession = harness.getSpawnSession();
+      if (!explicitSpawnSession) throw new Error('Expected spawnSession to be registered');
+      const explicitResumePromise = explicitSpawnSession(overlappingSpawnOptions);
+      expect(manager.clearStopRequested).toHaveBeenCalledWith('sess-production-respawn');
+      const [respawnResult, explicitResumeResult] = await Promise.all([respawnPromise, explicitResumePromise]);
+      expect(respawnResult.type).toBe('success');
+      expect(explicitResumeResult.type).toBe('success');
+
+      await expect(manager.__params.stopSpawnedSession?.({
+        sessionId: 'sess-no-tracked-pid',
+        result: { type: 'success', pid: 99999 },
+      })).resolves.toBe(false);
+
+      harness.requestShutdown('happier-cli');
+      await run;
+      run = null;
+    } finally {
+      if (run) {
+        harness.requestShutdown('happier-cli');
+        await run.catch(() => {});
       }
       exitSpy.mockRestore();
     }
@@ -1937,6 +1999,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const waitForExitSpy = vi.spyOn(waitForExitModule, 'waitForExistingSessionExitIfStopRequested')
         .mockImplementation(async (params: any) => {
           params.onExitObserved?.(6480, { reason: 'process-missing', code: null, signal: null });
+          return true;
         });
 
       const stopSessionModule = await import('./sessions/stopSession');
@@ -3170,6 +3233,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     delete process.env.HAPPIER_DAEMON_WAIT_FOR_AUTH;
 
     harness.apiMachine.setRPCHandlers.mockClear();
+    harness.apiMachine.claimDirectSessionRuntimeOwnership.mockClear();
+    harness.apiMachine.releaseDirectSessionRuntimeOwnership.mockClear();
     harness.apiMachine.awaitPendingRpcRequests.mockClear();
 
     let resolvePendingRpc!: () => void;

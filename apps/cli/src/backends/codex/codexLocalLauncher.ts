@@ -4,6 +4,7 @@ import type { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import os from 'node:os';
 import { join } from 'node:path';
 
@@ -349,6 +350,25 @@ export async function codexLocalLauncher<TMode>(opts: {
     });
   };
 
+  const resumeRolloutBoundary = opts.resumeId
+    ? await (async (): Promise<{ filePath: string; offsetBytes: number } | null> => {
+        try {
+          const existing = await discoverCodexRolloutFileOnce({
+            sessionsRootDir,
+            startedAtMs,
+            cwd: opts.path,
+            resumeId: opts.resumeId ?? null,
+            scanLimit: 50,
+          });
+          if (!existing) return null;
+          const snapshot = await stat(existing.filePath);
+          return { filePath: existing.filePath, offsetBytes: snapshot.size };
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+
   try {
     // Local-control: incoming UI messages request a remote switch. If Codex is
     // in an active local turn, the deferred switch controller waits for the
@@ -573,6 +593,9 @@ export async function codexLocalLauncher<TMode>(opts: {
 
     mirror = new CodexRolloutMirror({
       filePath: candidateFile.filePath,
+      ...(resumeRolloutBoundary?.filePath === candidateFile.filePath
+        ? { startOffsetBytes: resumeRolloutBoundary.offsetBytes }
+        : {}),
       codexHome: process.env.CODEX_HOME ?? null,
       debug,
       session: opts.session,

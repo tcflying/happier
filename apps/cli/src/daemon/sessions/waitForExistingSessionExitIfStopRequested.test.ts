@@ -9,15 +9,41 @@ describe('waitForExistingSessionExitIfStopRequested', () => {
       [1, { happySessionId: 'sess-1' }],
     ]);
 
-    await waitForExistingSessionExitIfStopRequested({
+    const result = await waitForExistingSessionExitIfStopRequested({
       sessionId: 'sess-1',
       pidToTrackedSession,
       isSessionRunnerActive,
+      isPidAlive: async () => false,
       timeoutMs: 10,
       pollIntervalMs: 1,
     });
 
     expect(isSessionRunnerActive).not.toHaveBeenCalled();
+    expect(result).toBe(false);
+  });
+
+  it('returns false when a stop-requested runner remains active through the deadline', async () => {
+    vi.useFakeTimers();
+    const { waitForExistingSessionExitIfStopRequested } = await import('./waitForExistingSessionExitIfStopRequested');
+    const pidToTrackedSession = new Map<number, any>([
+      [44, {
+        pid: 44,
+        happySessionId: 'sess-still-active',
+        stopRequestedAtMs: 1,
+      }],
+    ]);
+
+    const pending = waitForExistingSessionExitIfStopRequested({
+      sessionId: 'sess-still-active',
+      pidToTrackedSession,
+      isSessionRunnerActive: async () => true,
+      isPidAlive: async () => true,
+      timeoutMs: 100,
+      pollIntervalMs: 25,
+    });
+    await vi.advanceTimersByTimeAsync(125);
+
+    await expect(pending).resolves.toBe(false);
   });
 
   it('waits for the runner to exit when the session has an in-flight stop marker', async () => {
@@ -34,6 +60,7 @@ describe('waitForExistingSessionExitIfStopRequested', () => {
       sessionId: 'sess-1',
       pidToTrackedSession,
       isSessionRunnerActive,
+      isPidAlive: async () => false,
       timeoutMs: 1_000,
       pollIntervalMs: 50,
     });
@@ -60,6 +87,7 @@ describe('waitForExistingSessionExitIfStopRequested', () => {
       sessionId: 'sess-1',
       pidToTrackedSession,
       isSessionRunnerActive,
+      isPidAlive: async () => false,
       timeoutMs: 1_000,
       pollIntervalMs: 50,
       onExitObserved,

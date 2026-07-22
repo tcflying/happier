@@ -5,6 +5,7 @@ import type { EphemeralUpdate } from '@happier-dev/protocol/updates';
 import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isSessionVisible } from '@/sync/domains/session/activeViewingSession';
+import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 import { computeNextSessionSeqFromUpdate } from '@/sync/domains/session/sequence/realtimeSessionSeq';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
 import { resolveSessionReadableSeq } from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
@@ -860,6 +861,9 @@ function hasLiveTranscriptConsumerForDeferredTranscriptStreamSegments(
 
 async function applyDeferredTranscriptStreamSegment(entry: DeferredTranscriptStreamSegmentEntry): Promise<void> {
     if (!entry.shouldContinue()) return;
+    if (readDirectSessionLink(entry.getSession(entry.update.sessionId)?.metadata)) {
+        return;
+    }
     const hasLiveTranscriptConsumer = isSessionFullContentConsumerActiveForRealtime(
         entry.update.sessionId,
         entry.sourceServerId,
@@ -876,7 +880,10 @@ async function applyDeferredTranscriptStreamSegment(entry: DeferredTranscriptStr
         getSessionEncryption: entry.getSessionEncryption,
         getSession: entry.getSession,
         applyMessages: (sessionId, messages) => socketMessageApplyCoalescer.enqueue(sessionId, messages, {
-            shouldContinue: entry.shouldContinue,
+            shouldContinue: () => (
+                entry.shouldContinue()
+                && !readDirectSessionLink(entry.getSession(sessionId)?.metadata)
+            ),
         }),
         isSessionActivelyViewed: () => true,
         skipWhenHidden: false,
@@ -1183,7 +1190,10 @@ export async function handleUpdateContainer(params: {
             },
             enqueueMessages: (sessionId, messages) => socketMessageApplyCoalescer.enqueue(sessionId, messages, {
                 deferLeadingBatch: !isSessionFullContentConsumerActiveForRealtime(sessionId, sourceServerId),
-                shouldContinue,
+                shouldContinue: () => (
+                    shouldContinue()
+                    && !readDirectSessionLink(getSocketSessionApplyBase(sessionId)?.metadata)
+                ),
             }),
             isMutableToolCall: (sessionId, toolUseId) => storage.getState().isMutableToolCall(sessionId, toolUseId),
             invalidateScmStatus: (sessionId) => scmStatusSync.invalidateFromMutation(sessionId),
@@ -2014,6 +2024,10 @@ export function handleEphemeralSocketUpdate(params: {
         if (!shouldContinue()) return Promise.resolve();
         return Promise.resolve(updateDirectSessionTranscript?.(updateData));
     } else if (updateData.type === 'transcript-stream-segment') {
+        if (readDirectSessionLink(getSession(updateData.sessionId)?.metadata)) {
+            dropDeferredTranscriptStreamSegments(updateData.sessionId);
+            return Promise.resolve();
+        }
         const needsLiveTranscript = isSessionFullContentConsumerActiveForRealtime(updateData.sessionId, sourceServerId);
         const entry: DeferredTranscriptStreamSegmentEntry = {
             update: updateData,

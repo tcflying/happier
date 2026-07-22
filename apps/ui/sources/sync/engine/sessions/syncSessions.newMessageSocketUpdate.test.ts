@@ -128,6 +128,95 @@ describe('handleNewMessageSocketUpdate', () => {
         expect(normalized?.seq).toBe(2);
     });
 
+    it('keeps direct-session socket updates out of the provider-owned transcript while advancing session state', async () => {
+        const directSession: Session = {
+            ...buildSession('s1'),
+            metadata: {
+                path: 'G:\\repo',
+                host: 'test-host',
+                directSessionV1: {
+                    v: 1,
+                    providerId: 'codex',
+                    machineId: 'machine-1',
+                    remoteSessionId: 'remote-1',
+                    source: { kind: 'codexHome', home: 'user' },
+                },
+            },
+        };
+        const enqueueMessages = vi.fn();
+        const onNormalizedMessagesApplied = vi.fn();
+        const { params, applyMessages, applySessions, markSessionMaterializedMaxSeq } = buildHarness({
+            getSession: () => directSession,
+            enqueueMessages,
+            onNormalizedMessagesApplied,
+        });
+
+        await handleNewMessageSocketUpdate(params);
+
+        expect(applySessions).toHaveBeenCalledWith([
+            expect.objectContaining({ id: 's1', seq: 2, updatedAt: 1_000 }),
+        ]);
+        expect(enqueueMessages).not.toHaveBeenCalled();
+        expect(applyMessages).not.toHaveBeenCalled();
+        expect(markSessionMaterializedMaxSeq).not.toHaveBeenCalled();
+        expect(onNormalizedMessagesApplied).toHaveBeenCalledWith('s1', [
+            expect.objectContaining({ id: 'm2', seq: 2 }),
+        ]);
+    });
+
+    it('still applies direct-session lifecycle updates when the durable seq was already materialized', async () => {
+        const directSession: Session = {
+            ...buildSession('s1'),
+            thinking: true,
+            latestTurnStatus: 'in_progress',
+            metadata: {
+                path: 'G:\\repo',
+                host: 'test-host',
+                directSessionV1: {
+                    v: 1,
+                    providerId: 'codex',
+                    machineId: 'machine-1',
+                    remoteSessionId: 'remote-1',
+                    source: { kind: 'codexHome', home: 'user' },
+                },
+            },
+        };
+        const decryptMessage = vi.fn(async () => ({
+            id: 'm2',
+            localId: null,
+            createdAt: 1_000,
+            content: {
+                role: 'agent',
+                content: {
+                    type: 'acp',
+                    provider: 'codex',
+                    data: { type: 'task_complete', id: 'task_1' },
+                },
+            },
+        }));
+        const onTaskLifecycleEvent = vi.fn();
+        const { params, applyMessages, applySessions } = buildHarness({
+            getSession: () => directSession,
+            getSessionEncryption: () => ({ decryptMessage }),
+            getSessionMaterializedMaxSeq: () => 2,
+            isSessionMessagesLoaded: () => true,
+            onTaskLifecycleEvent,
+        });
+
+        await handleNewMessageSocketUpdate(params);
+
+        expect(decryptMessage).toHaveBeenCalledTimes(1);
+        expect(onTaskLifecycleEvent).toHaveBeenCalledWith('s1', {
+            type: 'task_complete',
+            id: 'task_1',
+            createdAt: 1_000,
+        });
+        expect(applySessions).toHaveBeenCalledWith([
+            expect.objectContaining({ id: 's1', thinking: false, latestTurnStatus: 'completed' }),
+        ]);
+        expect(applyMessages).not.toHaveBeenCalled();
+    });
+
     it('does not trigger catch-up when message seq is contiguous', async () => {
         const { params, fetchSessions, applyMessages, onMessageGapDetected, markSessionMaterializedMaxSeq } = buildHarness({
             updateData: buildUpdate({ sid: 's1', messageId: 'm2', messageSeq: 2 }),

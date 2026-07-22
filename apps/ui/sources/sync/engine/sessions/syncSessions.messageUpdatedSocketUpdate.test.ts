@@ -122,6 +122,34 @@ describe('handleMessageUpdatedSocketUpdate', () => {
         expect(updatedSession?.seq).toBe(2);
     });
 
+    it('keeps direct-session socket edits out of the provider-owned transcript while advancing session state', async () => {
+        const directSession: Session = {
+            ...buildSession('s1'),
+            metadata: {
+                path: 'G:\\repo',
+                host: 'test-host',
+                directSessionV1: {
+                    v: 1,
+                    providerId: 'codex',
+                    machineId: 'machine-1',
+                    remoteSessionId: 'remote-1',
+                    source: { kind: 'codexHome', home: 'user' },
+                },
+            },
+        };
+        const { params, applyMessages, applySessions, markSessionMaterializedMaxSeq } = buildHarness({
+            getSession: () => directSession,
+        });
+
+        await handleMessageUpdatedSocketUpdate(params);
+
+        expect(applySessions).toHaveBeenCalledWith([
+            expect.objectContaining({ id: 's1', seq: 2, updatedAt: 1_000 }),
+        ]);
+        expect(applyMessages).not.toHaveBeenCalled();
+        expect(markSessionMaterializedMaxSeq).not.toHaveBeenCalled();
+    });
+
     it('applies plaintext message updates when the session is plain and session encryption is unavailable', async () => {
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
         try {

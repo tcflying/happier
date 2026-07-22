@@ -11,6 +11,7 @@ import {
     storedSessionMessageContentAttentionImpact,
     storedSessionMessageContentAttentionImpactOrNull,
 } from '@/sync/domains/messages/messageUserAttention';
+import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 import type {
     SessionRealtimeProjectionCandidate,
     SessionRealtimeProjectionMode,
@@ -342,8 +343,10 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
     const sessionMessagesLoaded = isSessionMessagesLoaded(sessionId);
     const session = getSession(sessionId);
     const sessionProjection = session ?? params.getSessionProjection?.(sessionId);
+    const hasProviderOwnedDirectTranscriptBeforeRead = readDirectSessionLink(session?.metadata) !== null;
     if (
         inferLifecycle
+        && !hasProviderOwnedDirectTranscriptBeforeRead
         &&
         normalizedMessageSeq !== null
         && prevMaterializedMaxSeq >= normalizedMessageSeq
@@ -465,6 +468,7 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
             return;
         }
         const sessionForApply = sessionAfterRead ?? session;
+        const hasProviderOwnedDirectTranscript = readDirectSessionLink(sessionForApply?.metadata) !== null;
         if (decrypted) {
             if (isLegacyMemoryArtifactTranscriptRow(decrypted)) {
                 return;
@@ -554,48 +558,56 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
 
             if (lastMessage) {
                 const normalizedMessage = lastMessage;
-                if (enqueueMessages) {
-                    enqueueMessages(sessionId, [normalizedMessage]);
-                    if (telemetryFields) {
-                        syncPerformanceTelemetry.count('sync.sessions.socket.message.apply', {
-                            ...telemetryFields,
-                            normalized: 1,
-                            queued: 1,
-                            direct: 0,
-                        });
-                    }
-                } else {
-                    const applyMessage = () => {
-                        applyMessages(sessionId, [normalizedMessage]);
-                    };
-                    if (telemetryFields) {
-                        syncPerformanceTelemetry.measure(
-                            'sync.sessions.socket.message.apply',
-                            {
+                if (!hasProviderOwnedDirectTranscript) {
+                    if (enqueueMessages) {
+                        enqueueMessages(sessionId, [normalizedMessage]);
+                        if (telemetryFields) {
+                            syncPerformanceTelemetry.count('sync.sessions.socket.message.apply', {
                                 ...telemetryFields,
                                 normalized: 1,
-                                queued: 0,
-                                direct: 1,
-                            },
-                            applyMessage,
-                        );
+                                queued: 1,
+                                direct: 0,
+                            });
+                        }
                     } else {
-                        applyMessage();
+                        const applyMessage = () => {
+                            applyMessages(sessionId, [normalizedMessage]);
+                        };
+                        if (telemetryFields) {
+                            syncPerformanceTelemetry.measure(
+                                'sync.sessions.socket.message.apply',
+                                {
+                                    ...telemetryFields,
+                                    normalized: 1,
+                                    queued: 0,
+                                    direct: 1,
+                                },
+                                applyMessage,
+                            );
+                        } else {
+                            applyMessage();
+                        }
+                        params.onNormalizedMessagesApplied?.(sessionId, [normalizedMessage]);
+                        if (typeof messageSeq === 'number') {
+                            markSessionMaterializedMaxSeq(sessionId, messageSeq);
+                        }
                     }
+
+                    if (!enqueueMessages) {
+                        markStreamingMessagesAppliedForSessionUiTelemetry({
+                            sessionId,
+                            messages: [normalizedMessage],
+                            source: 'socketMessage',
+                        });
+                    }
+                } else if (normalizedMessageSeq !== null) {
+                    params.markSessionKnownRemoteSeq?.(sessionId, normalizedMessageSeq);
+                }
+                if (hasProviderOwnedDirectTranscript) {
                     params.onNormalizedMessagesApplied?.(sessionId, [normalizedMessage]);
-                    if (typeof messageSeq === 'number') {
-                        markSessionMaterializedMaxSeq(sessionId, messageSeq);
-                    }
                 }
 
                 let hasMutableTool = false;
-                if (!enqueueMessages) {
-                    markStreamingMessagesAppliedForSessionUiTelemetry({
-                        sessionId,
-                        messages: [normalizedMessage],
-                        source: 'socketMessage',
-                    });
-                }
                 if (
                     lastMessage.role === 'agent' &&
                     Array.isArray(lastMessage.content) &&
@@ -612,6 +624,7 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
 
             if (
                 typeof messageSeq === 'number' &&
+                !hasProviderOwnedDirectTranscript &&
                 prevMaterializedMaxSeq > 0 &&
                 messageSeq > prevMaterializedMaxSeq + 1 &&
                 isSessionMessagesLoaded(sessionId)

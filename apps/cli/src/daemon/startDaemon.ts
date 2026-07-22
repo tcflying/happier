@@ -119,6 +119,7 @@ import { resolveRespawnSessionRuntimeSnapshot } from './sessions/runtimeSnapshot
 import { buildInactiveUsageLimitResumeSpawnOptions } from './sessions/runtimeSnapshot/buildInactiveUsageLimitResumeSpawnOptions';
 import { buildHandoffSessionMetadataFromTrackedSession } from './sessions/buildHandoffSessionMetadataFromTrackedSession';
 import { createOnChildExited } from './sessions/onChildExited';
+import { settleDirectSessionRespawnOwnership } from './sessions/settleDirectSessionRespawnOwnership';
 import { publishOrphanedStartupSessionEnds } from './sessions/publishOrphanedStartupSessionEnds';
 import {
   resolveDisconnectedTerminalHostResumeGate,
@@ -2764,14 +2765,23 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         };
 
             // Spawn a new session (sessionId reserved for future Happy session resume; vendor resume uses options.resume).
-                const spawnSession = async (
-                  options: SpawnSessionOptions,
-                  acceptanceHooks?: SpawnSessionRunnerAcceptanceHooks,
-                ): Promise<SpawnSessionResult> => {
+        const spawnSessionWithOrigin = async (
+          options: SpawnSessionOptions,
+          origin: 'explicit' | 'respawn',
+          acceptanceHooks?: SpawnSessionRunnerAcceptanceHooks,
+        ): Promise<SpawnSessionResult> => {
           let normalizedOptions: SpawnSessionOptions = {
             ...options,
             directory: normalizeSpawnSessionDirectory(options.directory, process.env),
           };
+          const normalizedExistingSessionId = typeof normalizedOptions.existingSessionId === 'string'
+            ? normalizedOptions.existingSessionId.trim()
+            : '';
+          if (normalizedExistingSessionId && origin === 'explicit') {
+            // An explicit resume supersedes an older completed stop. This must run before the
+            // coalescer or any await so a new stop arriving during spawn remains authoritative.
+            sessionRunnerRespawnManager.clearStopRequested(normalizedExistingSessionId);
+          }
           const requestedSpawnNonce = normalizeSpawnNonceForAck(normalizedOptions.spawnNonce);
           if (requestedSpawnNonce) {
             normalizedOptions = {
@@ -2795,7 +2805,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 logger.warn('[DAEMON RUN] Account settings freshness refresh failed before spawn; continuing with last available settings', serializeAxiosErrorForLog(error));
               }
             }
-            const normalizedExistingSessionId = typeof normalizedOptions.existingSessionId === 'string' ? normalizedOptions.existingSessionId.trim() : '';
             if (!normalizedExistingSessionId && !normalizeSpawnNonceForAck(normalizedOptions.spawnNonce)) {
               normalizedOptions = {
                 ...normalizedOptions,
@@ -4090,14 +4099,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             directory: resolvedDirectory,
             existingSessionId: normalizedExistingSessionId,
           });
-          // Clear any stale stop request on an explicit (re)spawn/resume of this session, so a later
-          // GENUINE crash of a resumed-after-stop session can respawn. The per-session stop flag is
-          // otherwise never cleared (clearStopRequested had no caller), which silently vetoed the
-          // respawn forever — see the exit-143 crash RCA. A user-stopped session never reaches this
-          // path via the respawn manager (its respawn is suppressed), so clearing here is safe.
-          if (normalizedExistingSessionId) {
-            sessionRunnerRespawnManager.clearStopRequested(normalizedExistingSessionId);
-          }
           if (connectedServiceAuth && effectiveConnectedServicesBindings) {
             registerConnectedServiceRuntimeTargetForDaemon({
               runtimeRegistry: connectedServiceRuntimeRegistry,
@@ -4243,6 +4244,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               });
           });
                 };
+        const spawnSession = async (
+          options: SpawnSessionOptions,
+          acceptanceHooks?: SpawnSessionRunnerAcceptanceHooks,
+        ): Promise<SpawnSessionResult> =>
+          await spawnSessionWithOrigin(options, 'explicit', acceptanceHooks);
 
         const temporaryThrottleResumeSnapshotsBySessionId = new Map<string, TrackedSession>();
         const findTemporaryThrottleTrackedSession = (sessionId: string): TrackedSession | null => {
@@ -4495,14 +4501,17 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           maxDelayMs: sessionRespawnMaxDelayMs,
           jitterMs: sessionRespawnJitterMs,
           isSessionAlreadyRunning,
-          spawnSession,
-          resolveRespawnOptions: async (input) => {
-            return await resolveRespawnSessionRuntimeSnapshot({
-              ...input,
-              credentials,
-              readCredentials,
-            });
+          spawnSession: async (options) => await spawnSessionWithOrigin(options, 'respawn'),
+          stopSpawnedSession: async ({ sessionId }) => {
+            const stopResult = await stopSessionCore(sessionId);
+            return stopResult.status === 'stopped'
+              || !(await isSessionAlreadyRunning(sessionId));
           },
+          resolveRespawnOptions: async (input) => await resolveRespawnSessionRuntimeSnapshot({
+            ...input,
+            credentials,
+            readCredentials,
+          }),
           onRespawnSuccess: ({ sessionId, previousPid }) => {
             connectedServicesRestartRequestedPids.delete(previousPid);
             connectedServiceRestartAmplificationGuard.completePid(previousPid, { status: 'success' });
@@ -4514,6 +4523,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             settleSessionRunnerRestartCompletion(sessionId, previousPid, {
               ok: true,
               ...(next ? { next: summarizeSessionRunnerEndpoint(next) } : {}),
+            });
+            void apiMachineForSessions?.claimDirectSessionRuntimeOwnership(sessionId).catch((error) => {
+              logger.debug('[DAEMON RUN] Failed to retain direct-session runtime ownership after respawn', error);
             });
           },
           onRespawnTerminal: ({ sessionId, previousPid, reason, detail }) => {
@@ -4533,6 +4545,13 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               previousPid,
               buildSessionRunnerRestartTerminalCompletion(reason, detail),
             );
+            void settleDirectSessionRespawnOwnership({
+              apiMachine: apiMachineForSessions,
+              sessionId,
+              reason,
+            }).catch((error) => {
+              logger.debug('[DAEMON RUN] Failed to settle direct-session ownership after terminal respawn decision', error);
+            });
           },
           random: () => Math.random(),
           logDebug: (message, payload) => logger.debug(message, payload),
@@ -5147,8 +5166,15 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               spawnResourceCleanupByPid,
               sessionAttachCleanupByPid,
               getApiMachineForSessions: () => apiMachineForSessions,
+          onSessionRuntimeEnded: (sessionId, trackedSession, _exit, lifecycle) => {
+            if (connectedServicesRestartRequestedPids.has(trackedSession.pid)) return;
+            if (lifecycle.respawnPending) return;
+            void apiMachineForSessions?.releaseDirectSessionRuntimeOwnership(sessionId).catch((error) => {
+              logger.debug('[DAEMON RUN] Failed to release direct-session runtime ownership after runner exit', error);
+            });
+          },
           onUnexpectedExit: (tracked, exit) => {
-            sessionRunnerRespawnManager.handleUnexpectedExit(tracked, exit, {
+            return sessionRunnerRespawnManager.handleUnexpectedExit(tracked, exit, {
               forceRestart: connectedServicesRestartRequestedPids.has(tracked.pid),
             });
           },
@@ -7878,6 +7904,15 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 retryTemporaryThrottleNow: async ({ sessionId }) =>
                   await temporaryThrottleRecoveryScheduler.retryNow({ sessionId }),
               });
+
+              const activeRuntimeSessionIds = new Set(
+                getCurrentChildren()
+                  .map((tracked) => typeof tracked.happySessionId === 'string' ? tracked.happySessionId.trim() : '')
+                  .filter((sessionId) => sessionId.length > 0),
+              );
+              await Promise.all(Array.from(activeRuntimeSessionIds, async (sessionId) => {
+                await connectedApiMachine.claimDirectSessionRuntimeOwnership(sessionId);
+              }));
 
               connectedApiMachine.onUpdate((update) => {
                 if (!automationWorker) return false;

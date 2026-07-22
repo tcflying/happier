@@ -410,6 +410,81 @@ describe('CodexRolloutMirror', () => {
     }
   });
 
+  it('starts at an explicit resume boundary without replaying the existing transcript', async () => {
+    const root = rememberTempDir(await mkdtemp(join(tmpdir(), 'codex-rollout-mirror-resume-')));
+    const filePath = join(root, 'rollout.jsonl');
+    const historical = [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'sid' } }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'old-user' }] },
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'old-assistant' }] },
+      }),
+    ].join('\n') + '\n';
+    await writeFile(filePath, historical, 'utf8');
+
+    const userTexts: string[] = [];
+    const committedMessages: CommittedAgentMessage[] = [];
+    const mirror = new CodexRolloutMirror({
+      filePath,
+      startOffsetBytes: Buffer.byteLength(historical, 'utf8'),
+      debug: false,
+      onCodexSessionId: () => {},
+      session: {
+        sendUserTextMessage: (text: string) => userTexts.push(text),
+        sendUserTextMessageCommitted: async (text: string) => {
+          userTexts.push(text);
+        },
+        sendCodexMessage: () => {},
+        sendAgentMessageCommitted: async (
+          provider: string,
+          body: unknown,
+          opts: { localId: string; meta?: Record<string, unknown> },
+        ) => {
+          committedMessages.push({
+            provider,
+            body: body as { type?: string; message?: string; text?: string },
+            localId: opts.localId,
+            meta: opts.meta,
+          });
+        },
+        sendSessionEvent: () => {},
+      } as any,
+    });
+
+    await mirror.start();
+    try {
+      expect(userTexts).toEqual([]);
+      expect(committedMessages).toEqual([]);
+
+      await appendFile(
+        filePath,
+        [
+          JSON.stringify({
+            type: 'response_item',
+            payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'new-user' }] },
+          }),
+          JSON.stringify({
+            type: 'response_item',
+            payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'new-assistant' }] },
+          }),
+        ].join('\n') + '\n',
+        'utf8',
+      );
+
+      await waitFor(() => {
+        expect(userTexts).toEqual(['new-user']);
+        expect(committedMessages.some((message) => message.body.message === 'new-assistant')).toBe(true);
+      });
+      expect(committedMessages.some((message) => message.body.message === 'old-assistant')).toBe(false);
+    } finally {
+      await mirror.stop();
+    }
+  });
+
   it('mirrors child rollout activity into a synthetic SubAgent sidechain', async () => {
     const root = rememberTempDir(await mkdtemp(join(tmpdir(), 'codex-rollout-subagent-')));
     const parentDir = join(root, 'sessions', '2026', '03', '20');

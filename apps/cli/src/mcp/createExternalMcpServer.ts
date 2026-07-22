@@ -7,6 +7,9 @@ import { registerHappierMcpResources } from '@/mcp/resources/registerHappierMcpR
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createChangeTitleToolHandler } from '@/agent/tools/happierTools/createChangeTitleToolHandler';
 import { createStartExecutionRunToolHandler } from '@/agent/tools/happierTools/createStartExecutionRunToolHandler';
+import { registerFusionProviderTelemetryTool } from '@/mcp/fusionProviderTelemetry';
+import { registerFusionReconciliationHistoryTool } from '@/mcp/fusionReconciliationHistory';
+import { registerFusionLocalRuntimeSnapshotTool } from '@/mcp/fusionRuntimeSnapshot';
 import { isActionEnabledByEnv, readActionsSettingsFromEnv } from '@/settings/actionsSettings';
 import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
@@ -95,5 +98,25 @@ export function createExternalMcpServer(params: Readonly<{
     },
   });
 
-  return { mcp, toolNames };
+  const localRuntimeSnapshotToolNames = registerFusionLocalRuntimeSnapshotTool({
+    server: mcp as any,
+    credentials: params.credentials,
+    resolveSessionId: (toolArgs) => readSessionIdFromToolArgs(toolArgs) ?? defaultSessionId,
+  });
+
+  const reconciliationHistoryToolNames = registerFusionReconciliationHistoryTool({
+    server: mcp as any,
+    credentials: params.credentials,
+    resolveSessionId: (toolArgs) => readSessionIdFromToolArgs(toolArgs) ?? defaultSessionId,
+  });
+
+  const providerTelemetryToolNames = registerFusionProviderTelemetryTool({
+    server: mcp as any,
+    credentials: params.credentials,
+  });
+
+  return {
+    mcp,
+    toolNames: [...toolNames, ...localRuntimeSnapshotToolNames, ...reconciliationHistoryToolNames, ...providerTelemetryToolNames],
+  };
 }

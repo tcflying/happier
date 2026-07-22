@@ -45,6 +45,7 @@ import {
     type DaemonTerminalSessionMutationOutbox,
 } from './session/mutations/daemonTerminalSessionMutationOutbox';
 import { recoverDaemonTerminalSessionMutationJournals } from './session/mutations/daemonTerminalSessionMutationDiscovery';
+import type { DirectSessionFollowLeaseManager } from './directSessions/leases/createDirectSessionFollowLeaseManager';
 
 import type { DaemonToServerEvents, ServerToDaemonEvents } from './machine/socketTypes';
 import { authorizeMachineRpcRequest } from './machine/machineRpcAuthorization';
@@ -178,6 +179,7 @@ export class ApiMachineClient {
     private connectionSupervisor: ManagedConnectionSupervisor | null = null;
     private daemonTerminalSessionMutationOutboxes = new Map<string, DaemonTerminalSessionMutationOutbox>();
     private readonly rpcLifecycleRegistrations: RpcLifecycleRegistration[] = [];
+    private directSessionFollowLeaseManager: DirectSessionFollowLeaseManager | null = null;
     private readonly machineRpcWorkingDirectory: string;
     private readonly filesystemAccessPolicy: FilesystemAccessPolicy;
     private readonly ownershipMetadata: Readonly<{
@@ -334,9 +336,21 @@ export class ApiMachineClient {
                 emitDirectSessionTranscriptUpdate:
                     deps?.emitDirectSessionTranscriptUpdate
                     ?? ((payload) => this.emitDirectSessionTranscriptUpdate(payload)),
+                onDirectSessionFollowLeaseManagerReady: (manager) => {
+                    this.directSessionFollowLeaseManager = manager;
+                    deps?.onDirectSessionFollowLeaseManagerReady?.(manager);
+                },
             },
         });
         this.rpcLifecycleRegistrations.push(machineRpcLifecycleRegistration);
+    }
+
+    async releaseDirectSessionRuntimeOwnership(sessionId: string): Promise<void> {
+        await this.directSessionFollowLeaseManager?.setRuntimeOwned(sessionId, false);
+    }
+
+    async claimDirectSessionRuntimeOwnership(sessionId: string): Promise<void> {
+        await this.directSessionFollowLeaseManager?.setRuntimeOwned(sessionId, true);
     }
 
     onUpdate(listener: (update: Update) => boolean | void): () => void {

@@ -7,6 +7,7 @@ export type DirectSessionFollowLease = Readonly<{
 type ManagedFollowLeaseRecord = {
   sessionId: string;
   release: (() => void | Promise<void>) | null;
+  acquireFollowLease: FollowLeaseAcquirer | null;
   expiryTimer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -18,6 +19,8 @@ type DirectSessionFollowLeaseManagerParams = Readonly<{
 }>;
 
 type FollowLeaseAcquirer = () => Promise<DirectSessionFollowLease | null>;
+
+const RUNTIME_OWNERSHIP_STARTUP_GRACE_MS = 10_000;
 
 function clearManagedTimer(
   timer: ReturnType<typeof setTimeout> | null,
@@ -40,6 +43,12 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
   const backgroundFollowEnabledBySessionId = new Map<string, boolean>();
   const backgroundFollowAcquireBySessionId = new Map<string, FollowLeaseAcquirer>();
   const backgroundFollowLeasesBySessionId = new Map<string, ManagedFollowLeaseRecord>();
+  const runtimeOwnedSinceBySessionId = new Map<string, number>();
+  const retiredDirectFollowSessionIds = new Set<string>();
+
+  const isRuntimeOwned = (sessionId: string): boolean => runtimeOwnedSinceBySessionId.has(sessionId);
+  const isFollowFenced = (sessionId: string): boolean =>
+    isRuntimeOwned(sessionId) || retiredDirectFollowSessionIds.has(sessionId);
 
   const releaseFollowLease = async (leaseId: string, sessionId: string): Promise<boolean> => {
     const record = followLeasesById.get(leaseId) ?? null;
@@ -47,6 +56,15 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
     followLeasesById.delete(leaseId);
     clearManagedTimer(record.expiryTimer, clearTimer);
     await record.release?.();
+    return true;
+  };
+
+  const suspendFollowLeaseForTakeover = async (leaseId: string, sessionId: string): Promise<boolean> => {
+    const record = followLeasesById.get(leaseId) ?? null;
+    if (!record || record.sessionId !== sessionId) return false;
+    const release = record.release;
+    record.release = null;
+    await release?.();
     return true;
   };
 
@@ -63,6 +81,9 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
     sessionId: string,
     acquireFollowLease: FollowLeaseAcquirer | null | undefined,
   ): Promise<boolean> => {
+    if (isFollowFenced(sessionId)) {
+      return false;
+    }
     if (backgroundFollowLeasesBySessionId.has(sessionId)) {
       return false;
     }
@@ -73,9 +94,14 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
     if (!followLease) {
       return false;
     }
+    if (isFollowFenced(sessionId)) {
+      await Promise.resolve(followLease.release()).catch(() => {});
+      return false;
+    }
     backgroundFollowLeasesBySessionId.set(sessionId, {
       sessionId,
       release: followLease.release,
+      acquireFollowLease,
       expiryTimer: null,
     });
     return true;
@@ -86,6 +112,9 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
       return;
     }
     if (backgroundFollowEnabledBySessionId.get(sessionId) === true) {
+      if (isFollowFenced(sessionId)) {
+        return;
+      }
       const acquireFollowLease = backgroundFollowAcquireBySessionId.get(sessionId) ?? null;
       if (acquireFollowLease) {
         await acquireDetachedBackgroundFollowLease(sessionId, acquireFollowLease).catch(() => false);
@@ -109,6 +138,74 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
     }, delayMs);
   };
 
+  const reacquireReleasedViewerFollowLeases = async (sessionId: string): Promise<void> => {
+    const records = Array.from(followLeasesById.values()).filter(
+      (record) => record.sessionId === sessionId && !record.release && record.acquireFollowLease,
+    );
+    await Promise.all(records.map(async (record) => {
+      const acquireFollowLease = record.acquireFollowLease;
+      if (!acquireFollowLease || isFollowFenced(sessionId)) return;
+      const followLease = await acquireFollowLease();
+      if (!followLease) return;
+      if (isFollowFenced(sessionId) || !Array.from(followLeasesById.values()).includes(record)) {
+        await Promise.resolve(followLease.release()).catch(() => {});
+        return;
+      }
+      record.release = followLease.release;
+    }));
+  };
+
+  const clearRuntimeOwnership = async (sessionId: string): Promise<void> => {
+    if (!runtimeOwnedSinceBySessionId.delete(sessionId)) return;
+    await reacquireReleasedViewerFollowLeases(sessionId);
+    await handleNoActiveViewerLeases(sessionId);
+    // Persisted takeover permanently removes this session's Direct descriptor. Keep the
+    // process-local tombstone so an attach that was authorized before conversion cannot
+    // finish acquiring after the runtime exits and resurrect a stale follow stream.
+  };
+
+  const releaseForTakeover = async (sessionId: string) => {
+    runtimeOwnedSinceBySessionId.set(sessionId, now());
+
+    const viewerLeaseIds = Array.from(followLeasesById.entries())
+      .filter(([, record]) => record.sessionId === sessionId)
+      .map(([leaseId]) => leaseId);
+    const hadBackgroundFollowLease = backgroundFollowLeasesBySessionId.has(sessionId);
+
+    await Promise.all(viewerLeaseIds.map(async (leaseId) => {
+      await suspendFollowLeaseForTakeover(leaseId, sessionId).catch(() => false);
+    }));
+    await releaseBackgroundFollowLease(sessionId).catch(() => false);
+
+    return {
+      releasedViewerFollowLeases: viewerLeaseIds.length,
+      releasedBackgroundFollowLease: hadBackgroundFollowLease,
+    } as const;
+  };
+
+  const retireForPersistedTakeover = async (sessionId: string) => {
+    retiredDirectFollowSessionIds.add(sessionId);
+    runtimeOwnedSinceBySessionId.set(sessionId, now());
+
+    const viewerLeaseIds = Array.from(followLeasesById.entries())
+      .filter(([, record]) => record.sessionId === sessionId)
+      .map(([leaseId]) => leaseId);
+    const hadBackgroundFollowLease = backgroundFollowLeasesBySessionId.has(sessionId);
+
+    await Promise.all(viewerLeaseIds.map(async (leaseId) => {
+      viewerLeaseRegistry.detach({ sessionId, leaseId });
+      await releaseFollowLease(leaseId, sessionId).catch(() => false);
+    }));
+    backgroundFollowEnabledBySessionId.delete(sessionId);
+    backgroundFollowAcquireBySessionId.delete(sessionId);
+    await releaseBackgroundFollowLease(sessionId).catch(() => false);
+
+    return {
+      releasedViewerFollowLeases: viewerLeaseIds.length,
+      releasedBackgroundFollowLease: hadBackgroundFollowLease,
+    } as const;
+  };
+
   return {
     async attach(input: Readonly<{
       sessionId: string;
@@ -125,12 +222,21 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
       const existing = followLeasesById.get(attached.leaseId) ?? null;
       if (!attached.renewed) {
         try {
-          const followLease = backgroundFollowLeasesBySessionId.has(input.sessionId)
+          const followLease = isFollowFenced(input.sessionId) || backgroundFollowLeasesBySessionId.has(input.sessionId)
             ? null
             : (await input.acquireFollowLease?.()) ?? null;
+          const release = followLease && isFollowFenced(input.sessionId)
+            ? null
+            : followLease?.release ?? null;
+          if (followLease && !release) {
+            await Promise.resolve(followLease.release()).catch(() => {});
+          }
           followLeasesById.set(attached.leaseId, {
             sessionId: input.sessionId,
-            release: followLease?.release ?? null,
+            release,
+            acquireFollowLease: retiredDirectFollowSessionIds.has(input.sessionId)
+              ? null
+              : input.acquireFollowLease ?? null,
             expiryTimer: null,
           });
         } catch (error) {
@@ -144,8 +250,13 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
         followLeasesById.set(attached.leaseId, {
           sessionId: input.sessionId,
           release: null,
+          acquireFollowLease: retiredDirectFollowSessionIds.has(input.sessionId)
+            ? null
+            : input.acquireFollowLease ?? null,
           expiryTimer: null,
         });
+      } else if (input.acquireFollowLease && !retiredDirectFollowSessionIds.has(input.sessionId)) {
+        existing.acquireFollowLease = input.acquireFollowLease;
       }
 
       scheduleExpiry(attached.leaseId, input.sessionId, attached.expiresAtMs);
@@ -161,11 +272,42 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
       return detached;
     },
 
+    releaseForTakeover,
+
+    retireForPersistedTakeover,
+
+    async setRuntimeOwned(sessionId: string, owned: boolean) {
+      if (owned) {
+        await releaseForTakeover(sessionId);
+        return;
+      }
+      await clearRuntimeOwnership(sessionId);
+    },
+
+    async reconcileRuntimeOwnership(sessionId: string, runnerActive: boolean) {
+      if (runnerActive) {
+        if (!isRuntimeOwned(sessionId)) {
+          await releaseForTakeover(sessionId);
+        }
+        return;
+      }
+      const ownedSince = runtimeOwnedSinceBySessionId.get(sessionId);
+      if (ownedSince !== undefined && now() - ownedSince >= RUNTIME_OWNERSHIP_STARTUP_GRACE_MS) {
+        await clearRuntimeOwnership(sessionId);
+      }
+    },
+
     async setBackgroundFollowEnabled(input: Readonly<{
       sessionId: string;
       enabled: boolean;
       acquireFollowLease?: FollowLeaseAcquirer;
     }>) {
+      if (retiredDirectFollowSessionIds.has(input.sessionId)) {
+        backgroundFollowEnabledBySessionId.delete(input.sessionId);
+        backgroundFollowAcquireBySessionId.delete(input.sessionId);
+        await releaseBackgroundFollowLease(input.sessionId).catch(() => false);
+        return { enabled: false, leaseAcquired: false } as const;
+      }
       backgroundFollowEnabledBySessionId.set(input.sessionId, input.enabled);
 
       if (!input.enabled) {
@@ -193,18 +335,8 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
       if (!acquireFollowLease) {
         return { enabled: true, leaseAcquired: false } as const;
       }
-
-      const followLease = await acquireFollowLease();
-      if (!followLease) {
-        return { enabled: true, leaseAcquired: false } as const;
-      }
-      backgroundFollowLeasesBySessionId.set(input.sessionId, {
-        sessionId: input.sessionId,
-        release: followLease.release,
-        expiryTimer: null,
-      });
-
-      return { enabled: true, leaseAcquired: true, followLease } as const;
+      const leaseAcquired = await acquireDetachedBackgroundFollowLease(input.sessionId, acquireFollowLease);
+      return { enabled: true, leaseAcquired } as const;
     },
 
     countActiveLeases(sessionId: string): number {
@@ -220,3 +352,5 @@ export function createDirectSessionFollowLeaseManager(params?: DirectSessionFoll
     },
   };
 }
+
+export type DirectSessionFollowLeaseManager = ReturnType<typeof createDirectSessionFollowLeaseManager>;

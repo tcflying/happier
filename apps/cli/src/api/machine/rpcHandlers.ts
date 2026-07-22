@@ -57,6 +57,7 @@ import { registerMachineMemoryRpcHandlers } from './rpcHandlers.memory';
 import { registerMachineTerminalRpcHandlers } from './rpcHandlers.terminal';
 import { registerMachineMcpServersRpcHandlers } from './rpcHandlers.mcpServers';
 import { registerMachineDirectSessionsRpcHandlers } from './rpcHandlers.directSessions';
+import type { DirectSessionFollowLeaseManager } from '@/api/directSessions/leases/createDirectSessionFollowLeaseManager';
 import { registerMachineConnectedServiceQuotaRpcHandlers } from './rpcHandlers.connectedServiceQuotas';
 import {
   registerMachineSessionHandoffRpcHandlers,
@@ -189,6 +190,7 @@ export type MachineRpcHandlerDeps = Readonly<{
   machineRpcWorkingDirectory?: string;
   filesystemAccessPolicy?: FilesystemAccessPolicy;
   emitDirectSessionTranscriptUpdate?: (payload: DirectSessionTranscriptDeltaEphemeral) => void;
+  onDirectSessionFollowLeaseManagerReady?: (manager: DirectSessionFollowLeaseManager) => void;
   createAccountPet?: (request: AccountPetCreateRequestV1) => Promise<AccountPetCreateResponseV1>;
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
@@ -683,12 +685,13 @@ export function registerMachineRpcHandlers(params: Readonly<{
     rpcHandlerManager,
     registry: promptRegistryAdapterRegistry,
   });
-  registerMachineDirectSessionsRpcHandlers({
+  const directSessionFollowLeaseManager = registerMachineDirectSessionsRpcHandlers({
     rpcHandlerManager,
     spawnSession,
     stopSession: stopSessionConfirmed,
     emitDirectSessionTranscriptUpdate: params.deps?.emitDirectSessionTranscriptUpdate,
   });
+  params.deps?.onDirectSessionFollowLeaseManagerReady?.(directSessionFollowLeaseManager);
   registerMachineConnectedServiceQuotaRpcHandlers({
     rpcHandlerManager,
   });

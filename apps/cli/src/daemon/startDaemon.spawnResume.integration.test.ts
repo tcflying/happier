@@ -238,6 +238,8 @@ const harness = vi.hoisted(() => {
     recoverDaemonTerminalSessionMutationJournals: vi.fn(async () => {}),
     enqueueDaemonTerminalExactTurnEnd: vi.fn(async () => {}),
     setRPCHandlers: vi.fn(),
+    claimDirectSessionRuntimeOwnership: vi.fn(async () => {}),
+    releaseDirectSessionRuntimeOwnership: vi.fn(async () => {}),
     onUpdate: vi.fn(),
     onAccountSettingsVersionHint: vi.fn(() => () => {}),
     onPendingSessionActivationHint: vi.fn((listener) => {
@@ -430,6 +432,7 @@ const sessionRespawnManagerCapture = vi.hoisted(() => {
       __params: {
         enabled: boolean;
         spawnSession: (options: import('@/rpc/handlers/registerSessionHandlers').SpawnSessionOptions) => Promise<unknown>;
+        stopSpawnedSession?: (input: { sessionId: string; result: unknown }) => Promise<boolean>;
         resolveRespawnOptions?: import('./processSupervision/sessionRunnerRespawn').SessionRunnerRespawnOptionsResolver;
         onRespawnSuccess?: (input: { sessionId: string; previousPid: number; result: unknown }) => void;
         onRespawnTerminal?: (input: {
@@ -443,14 +446,15 @@ const sessionRespawnManagerCapture = vi.hoisted(() => {
     createSessionRunnerRespawnManager: vi.fn((params: {
       enabled: boolean;
       spawnSession: (options: import('@/rpc/handlers/registerSessionHandlers').SpawnSessionOptions) => Promise<unknown>;
+      stopSpawnedSession?: (input: { sessionId: string; result: unknown }) => Promise<boolean>;
       resolveRespawnOptions?: import('./processSupervision/sessionRunnerRespawn').SessionRunnerRespawnOptionsResolver;
       onRespawnSuccess?: (input: { sessionId: string; previousPid: number; result: unknown }) => void;
       onRespawnTerminal?: (input: {
         sessionId: string;
         previousPid: number;
-        reason: string;
-        detail?: string;
-      }) => void;
+          reason: string;
+          detail?: string;
+        }) => void;
     }) => {
       const manager = {
         markStopRequested: vi.fn(),
@@ -870,6 +874,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     vi.restoreAllMocks();
     harness.resetControlRefs();
     harness.apiMachine.recoverDaemonTerminalSessionMutationJournals.mockClear();
+    harness.apiMachine.claimDirectSessionRuntimeOwnership.mockClear();
+    harness.apiMachine.releaseDirectSessionRuntimeOwnership.mockClear();
     spawnHappyCLI.mockClear();
     resolveHappyCliSubprocessRuntimeDecision.mockReset();
     resolveHappyCliSubprocessRuntimeDecision.mockReturnValue(null);
@@ -1176,6 +1182,57 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       }
       exitSpy.mockRestore();
       featureDecisionSpy.mockRestore();
+    }
+  });
+
+  it('keeps stop ownership fenced across respawn spawn and explicit resume', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let run: Promise<void> | null = null;
+    try {
+      const { startDaemon } = await import('./startDaemon');
+      run = startDaemon();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (sessionRespawnManagerCapture.instances.length > 0 && harness.getSpawnSession()) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      const manager = sessionRespawnManagerCapture.instances.at(-1);
+      if (!manager) throw new Error('Expected respawn manager to be registered');
+
+      const overlappingSpawnOptions = {
+        directory: '/tmp',
+        existingSessionId: 'sess-production-respawn',
+        backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' as const },
+        token: 't',
+        accountSettingsVersionHint: 7,
+        approvedNewDirectoryCreation: true,
+      };
+      const respawnPromise = manager.__params.spawnSession(overlappingSpawnOptions);
+      expect(manager.clearStopRequested).not.toHaveBeenCalledWith('sess-production-respawn');
+
+      const explicitSpawnSession = harness.getSpawnSession();
+      if (!explicitSpawnSession) throw new Error('Expected spawnSession to be registered');
+      const explicitResumePromise = explicitSpawnSession(overlappingSpawnOptions);
+      expect(manager.clearStopRequested).toHaveBeenCalledWith('sess-production-respawn');
+      const [respawnResult, explicitResumeResult] = await Promise.all([respawnPromise, explicitResumePromise]);
+      expect(respawnResult).toEqual(expect.objectContaining({ type: 'success' }));
+      expect(explicitResumeResult).toEqual(expect.objectContaining({ type: 'success' }));
+
+      stopSessionMocks.stopSession.mockResolvedValueOnce({ status: 'not_found' });
+      await expect(manager.__params.stopSpawnedSession?.({
+        sessionId: 'sess-no-tracked-pid',
+        result: { type: 'success', pid: 99999 },
+      })).resolves.toBe(true);
+
+      harness.requestShutdown('happier-cli');
+      await run;
+      run = null;
+    } finally {
+      if (run) {
+        harness.requestShutdown('happier-cli');
+        await run.catch(() => {});
+      }
+      exitSpy.mockRestore();
     }
   });
 
@@ -2685,8 +2742,9 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const waitForExitModule = await import('./sessions/waitForExistingSessionExitIfStopRequested');
       const waitForExitSpy = vi.spyOn(waitForExitModule, 'waitForExistingSessionExitIfStopRequested')
         .mockImplementation(async (params: any) => {
-          params.onExitObserved?.(6480, { reason: 'process-missing', code: null, signal: null });
+          await params.onExitObserved?.(6480, { reason: 'process-missing', code: null, signal: null });
           params.pidToTrackedSession.delete(6480);
+          return true;
         });
 
       const stopSessionModule = await import('./sessions/stopSession');
@@ -4997,6 +5055,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     delete process.env.HAPPIER_DAEMON_WAIT_FOR_AUTH;
 
     harness.apiMachine.setRPCHandlers.mockClear();
+    harness.apiMachine.claimDirectSessionRuntimeOwnership.mockClear();
+    harness.apiMachine.releaseDirectSessionRuntimeOwnership.mockClear();
     harness.apiMachine.awaitPendingRpcRequests.mockClear();
 
     let resolvePendingRpc!: () => void;

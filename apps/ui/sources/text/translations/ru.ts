@@ -6074,6 +6074,8 @@ export const ru: TranslationStructure = {
       model: {
         title: "МОДЕЛЬ",
         useCliSettings: "Использовать настройки CLI",
+        requestedNextResume: ({ model }: { model: string }) => `Запрошено для следующего возобновления: ${model}`,
+        lastConfirmed: ({ model }: { model: string }) => `Последняя подтверждённая модель: ${model}`,
         configureInCli: "Настройте модели в настройках CLI",
         extendedContextToggleLabel: 'Контекст 1M',
         extendedContextToggleDescription: 'Использовать расширенное контекстное окно в 1 млн токенов для этой модели.',

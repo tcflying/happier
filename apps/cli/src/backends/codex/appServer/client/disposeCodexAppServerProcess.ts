@@ -59,7 +59,7 @@ export async function disposeCodexAppServerProcess(
   return { outcome: 'forced', processTreeResidue: false };
 }
 
-function isPidAlive(pid: number): boolean {
+function isPidAliveDefault(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -68,8 +68,13 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-async function snapshotProcessTreePids(rootPid: number): Promise<readonly number[]> {
-  const processes = await psList();
+type ProcessTreeEntry = Readonly<{ pid: number; ppid: number }>;
+
+function collectProcessTreePids(
+  rootPid: number,
+  alreadyTracked: ReadonlySet<number>,
+  processes: readonly ProcessTreeEntry[],
+): readonly number[] {
   const childrenByParent = new Map<number, number[]>();
   for (const entry of processes) {
     if (!Number.isInteger(entry.pid) || !Number.isInteger(entry.ppid)) continue;
@@ -78,7 +83,7 @@ async function snapshotProcessTreePids(rootPid: number): Promise<readonly number
     childrenByParent.set(entry.ppid, children);
   }
 
-  const pids = new Set<number>([rootPid]);
+  const pids = new Set<number>([rootPid, ...alreadyTracked]);
   const visit = (pid: number) => {
     for (const childPid of childrenByParent.get(pid) ?? []) {
       if (pids.has(childPid)) continue;
@@ -93,11 +98,42 @@ async function snapshotProcessTreePids(rootPid: number): Promise<readonly number
 export function createCodexAppServerProcessDisposalBoundary(params: Readonly<{
   child: ChildProcess;
   closedPromise: Promise<void>;
+  deps?: Readonly<{
+    listProcesses?: () => Promise<readonly ProcessTreeEntry[]>;
+    isPidAlive?: (pid: number) => boolean;
+    platform?: NodeJS.Platform;
+    terminateWindowsTree?: (rootPid: number) => void;
+  }>;
 }>): CodexAppServerProcessDisposalBoundary {
   const rootPid = params.child.pid ?? null;
-  const trackedPidsPromise = rootPid
-    ? snapshotProcessTreePids(rootPid).catch(() => [rootPid] as const)
-    : Promise.resolve([] as const);
+  const listProcesses = params.deps?.listProcesses ?? psList;
+  const isPidAlive = params.deps?.isPidAlive ?? isPidAliveDefault;
+  const platform = params.deps?.platform ?? process.platform;
+  const terminateWindowsTree = params.deps?.terminateWindowsTree ?? ((pid: number) => {
+    spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+  });
+  const trackedPids = new Set<number>(rootPid ? [rootPid] : []);
+  let lastEnumeratedPids = new Set<number>();
+  let enumerationHealthy = rootPid === null;
+  const refreshTrackedPids = async (): Promise<boolean> => {
+    if (!rootPid) return true;
+    try {
+      const processes = await listProcesses();
+      lastEnumeratedPids = new Set(processes.map((entry) => entry.pid));
+      for (const pid of collectProcessTreePids(rootPid, trackedPids, processes)) {
+        trackedPids.add(pid);
+      }
+      enumerationHealthy = true;
+      return true;
+    } catch {
+      enumerationHealthy = false;
+      return false;
+    }
+  };
+  const initialSnapshot = refreshTrackedPids();
 
   return {
     requestGracefulStop: () => {
@@ -115,18 +151,19 @@ export function createCodexAppServerProcessDisposalBoundary(params: Readonly<{
     waitForExit: async () => await params.closedPromise,
     terminateProcessTree: async () => {
       if (!rootPid) return;
-      if (process.platform === 'win32') {
-        spawnSync('taskkill', ['/F', '/T', '/PID', String(rootPid)], {
-          stdio: 'ignore',
-          windowsHide: true,
-        });
+      await initialSnapshot;
+      await refreshTrackedPids();
+      if (platform === 'win32') {
+        terminateWindowsTree(rootPid);
         return;
       }
       await killProcessTree(params.child, { graceMs: 250 });
     },
     hasProcessTreeResidue: async () => {
-      const trackedPids = await trackedPidsPromise;
-      return trackedPids.some(isPidAlive);
+      await initialSnapshot;
+      const refreshed = await refreshTrackedPids();
+      if (!refreshed || !enumerationHealthy) return true;
+      return [...trackedPids].some((pid) => lastEnumeratedPids.has(pid) && isPidAlive(pid));
     },
   };
 }

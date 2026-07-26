@@ -5671,6 +5671,8 @@ export const en = {
           model: {
               title: 'MODEL',
               useCliSettings: 'Use CLI settings',
+              requestedNextResume: ({ model }: { model: string }) => `Requested for next resume: ${model}`,
+              lastConfirmed: ({ model }: { model: string }) => `Last confirmed model: ${model}`,
               configureInCli: 'Configure models in CLI settings',
               extendedContextToggleLabel: '1M context',
               extendedContextToggleDescription: 'Use the extended 1M-token context window for this model.',

@@ -29,6 +29,7 @@ import {
   type AcquireSessionRunnerLockResult,
   type SessionRunnerCleanupOutcome,
 } from '@/daemon/sessionRunnerLock';
+import { registerSessionRunnerCleanupLifecycle } from '@/daemon/sessionRunnerLifecycleRuntime';
 import { isInteractiveTerminal } from '@/terminal/prompts/promptInput';
 import { promptSecret } from '@/terminal/prompts/promptSecret';
 import { maybePassthroughProviderCliInfoRequest, passthroughProviderCliArgs } from '@/cli/providerCliPassthrough';
@@ -119,6 +120,19 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
 }): Promise<void> {
   let sessionRunnerLock: Extract<AcquireSessionRunnerLockResult, { ok: true }> | null = null;
   let sessionRunnerHeartbeatTimer: NodeJS.Timeout | null = null;
+  let sessionRunnerCleanupStarted = false;
+  let unregisterSessionRunnerCleanupLifecycle: (() => void) | null = null;
+  const beginSessionRunnerCleanup = async (budgetMs: number): Promise<void> => {
+    const lock = sessionRunnerLock;
+    if (!lock || sessionRunnerCleanupStarted) return;
+    sessionRunnerCleanupStarted = true;
+    if (sessionRunnerHeartbeatTimer) {
+      clearInterval(sessionRunnerHeartbeatTimer);
+      sessionRunnerHeartbeatTimer = null;
+    }
+    const nowMs = Date.now();
+    await lock.markCleanup({ nowMs, deadlineAtMs: nowMs + Math.max(1, budgetMs) });
+  };
   const finishSessionRunnerLifecycle = async (outcome: SessionRunnerCleanupOutcome): Promise<void> => {
     const lock = sessionRunnerLock;
     if (!lock) return;
@@ -127,8 +141,12 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
       clearInterval(sessionRunnerHeartbeatTimer);
       sessionRunnerHeartbeatTimer = null;
     }
-    await lock.markCleanup().catch(() => false);
+    if (!sessionRunnerCleanupStarted) {
+      await lock.markCleanup().catch(() => false);
+    }
     await lock.release(outcome).catch(() => {});
+    unregisterSessionRunnerCleanupLifecycle?.();
+    unregisterSessionRunnerCleanupLifecycle = null;
   };
 
   try {
@@ -196,6 +214,10 @@ ${chalk.bold.cyan(`${agentId} CLI Options (from \`${providerHelpCommand}\`):`)}
         void lock.heartbeat().catch(() => false);
       }, 5_000);
       sessionRunnerHeartbeatTimer.unref?.();
+      unregisterSessionRunnerCleanupLifecycle = registerSessionRunnerCleanupLifecycle({
+        begin: beginSessionRunnerCleanup,
+        finish: finishSessionRunnerLifecycle,
+      });
     }
 
     const runPromise = params.loadRun();

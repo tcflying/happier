@@ -183,9 +183,16 @@ vi.mock('@/sync/domains/models/modelOptions', () => ({
 }));
 
 vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: (params: { selectedModelId?: string | null }) => ({
+    describeEffectiveModelMode: (params: {
+        selectedModelId?: string | null;
+        runtimeState?: 'active' | 'inactive' | 'unknown';
+        metadata?: any;
+    }) => ({
         effectiveModelId: params.selectedModelId?.trim() || 'default',
-        applyScope: 'spawn_only',
+        requestedModelId: params.selectedModelId?.trim() || 'default',
+        lastConfirmedModelId: params.metadata?.sessionModelsV1?.currentModelId ?? null,
+        runtimeState: params.runtimeState ?? 'unknown',
+        applyScope: params.runtimeState === 'inactive' ? 'next_resume' : 'spawn_only',
         notes: [],
     }),
 }));
@@ -340,6 +347,48 @@ describe('AgentInput (modelOptionsOverride)', () => {
         mockWindowWidth = 800;
         lastModelPickerOverlayProps = null;
         lastPopoverProps = null;
+    });
+
+    it('renders requested-next-resume and last-confirmed models together for an inactive session', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        lastModelPickerOverlayProps = null;
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: 'hello',
+            placeholder: 'placeholder',
+            onChangeText: () => {},
+            onSend: () => {},
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            agentType: 'codex',
+            permissionMode: 'default',
+            onPermissionModeChange: () => {},
+            modelMode: 'requested-model',
+            onModelModeChange: () => {},
+            sessionRuntimeState: 'inactive',
+            metadata: {
+                path: '/workspace',
+                host: 'test-host',
+                sessionModelsV1: {
+                    v: 1,
+                    provider: 'codex',
+                    updatedAt: 1,
+                    currentModelId: 'last-confirmed-model',
+                    availableModels: [],
+                },
+            },
+            modelOptionsOverride: [
+                { value: 'requested-model', label: 'Requested Model', description: '' },
+                { value: 'last-confirmed-model', label: 'Last Confirmed Model', description: '' },
+            ],
+        }));
+
+        await screen.pressByTestIdAsync('agent-input-agent-chip');
+
+        expect(lastModelPickerOverlayProps?.notes).toEqual([
+            'agentInput.model.requestedNextResume',
+            'agentInput.model.lastConfirmed',
+        ]);
+        expect(lastModelPickerOverlayProps?.notes.join(' ')).not.toMatch(/running/i);
     });
 
     it('prefers modelOptionsOverride over getModelOptionsForSession()', async () => {

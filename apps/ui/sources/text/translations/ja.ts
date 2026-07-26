@@ -6337,6 +6337,8 @@ localTailscale: {
     model: {
       title: "モデル",
       useCliSettings: "CLI設定を使用",
+      requestedNextResume: ({ model }: { model: string }) => `次回再開時に要求: ${model}`,
+      lastConfirmed: ({ model }: { model: string }) => `最後に確認されたモデル: ${model}`,
       configureInCli: "CLIの設定でモデルを構成",
       extendedContextToggleLabel: '1Mコンテキスト',
       extendedContextToggleDescription: 'このモデルで拡張された100万トークンのコンテキストウィンドウを使用します。',

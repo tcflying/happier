@@ -6088,6 +6088,8 @@ export const pl: TranslationStructure = {
       model: {
         title: "MODEL",
         useCliSettings: "Użyj ustawień CLI",
+        requestedNextResume: ({ model }: { model: string }) => `Żądany przy następnym wznowieniu: ${model}`,
+        lastConfirmed: ({ model }: { model: string }) => `Ostatnio potwierdzony model: ${model}`,
         configureInCli: "Skonfiguruj modele w ustawieniach CLI",
         extendedContextToggleLabel: 'Kontekst 1M',
         extendedContextToggleDescription: 'Użyj rozszerzonego okna kontekstu 1M tokenów dla tego modelu.',

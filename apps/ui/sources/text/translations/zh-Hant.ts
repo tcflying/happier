@@ -5015,6 +5015,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
           model: {
               title: '模型',
               useCliSettings: '使用 CLI 設定',
+              requestedNextResume: ({ model }: { model: string }) => `下次恢復時要求：${model}`,
+              lastConfirmed: ({ model }: { model: string }) => `上次確認的模型：${model}`,
               configureInCli: '在 CLI 設定中配置模型',
               extendedContextToggleLabel: '1M 上下文',
               extendedContextToggleDescription: '為此模型使用擴充的 100 萬 token 上下文視窗。',

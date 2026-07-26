@@ -1836,6 +1836,28 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             : effectiveModelPolicy.effectiveModelId;
     }, [effectiveModelPolicy.effectiveModelId, modelOptions]);
 
+    const effectiveModelNotes = React.useMemo(() => {
+        if (effectiveModelPolicy.runtimeState !== 'inactive') {
+            return effectiveModelPolicy.notes;
+        }
+        const lastConfirmedOption = effectiveModelPolicy.lastConfirmedModelId
+            ? findModelOptionForEffectiveModelId(modelOptions, effectiveModelPolicy.lastConfirmedModelId)
+            : null;
+        const lastConfirmedLabel = lastConfirmedOption?.label ?? effectiveModelPolicy.lastConfirmedModelId;
+        return [
+            t('agentInput.model.requestedNextResume', { model: effectiveModelLabel }),
+            ...(lastConfirmedLabel
+                ? [t('agentInput.model.lastConfirmed', { model: lastConfirmedLabel })]
+                : []),
+        ];
+    }, [
+        effectiveModelLabel,
+        effectiveModelPolicy.lastConfirmedModelId,
+        effectiveModelPolicy.notes,
+        effectiveModelPolicy.runtimeState,
+        modelOptions,
+    ]);
+
     const canEnterCustomModel = React.useMemo(() => {
         return supportsFreeformModelSelectionForSession(agentId, props.metadata ?? null);
     }, [agentId, props.metadata]);
@@ -2067,7 +2089,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             }))}
             selectedModelId={effectiveModelPolicy.effectiveModelId}
             effectiveModelLabel={effectiveModelLabel}
-            modelNotes={effectiveModelPolicy.notes}
+            modelNotes={effectiveModelNotes}
             modelEmptyText={t('agentInput.model.configureInCli')}
             canEnterCustomModel={canEnterCustomModel}
             // Keep a single refresh affordance in the model section, but wire it to refresh all
@@ -2097,7 +2119,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         canEnterCustomModel,
         effectiveModelLabel,
         effectiveModelPolicy.effectiveModelId,
-        effectiveModelPolicy.notes,
+        effectiveModelNotes,
         modelOptions,
         unifiedEnginePickerProbe,
         shouldShowModelOptionDescriptions,

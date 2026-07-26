@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createCodexAppServerProcessDisposalBoundary,
   disposeCodexAppServerProcess,
   type CodexAppServerProcessDisposalBoundary,
 } from './disposeCodexAppServerProcess';
@@ -74,5 +75,49 @@ describe('disposeCodexAppServerProcess', () => {
     const rejection = expect(disposal).rejects.toThrow(/process tree residue/i);
     await vi.advanceTimersByTimeAsync(1_250);
     await rejection;
+  });
+
+  it('fails closed when process-tree enumeration is unavailable', async () => {
+    const boundary = createCodexAppServerProcessDisposalBoundary({
+      child: {
+        pid: 100,
+        stdin: { end: vi.fn() },
+        kill: vi.fn(),
+      } as any,
+      closedPromise: Promise.resolve(),
+      deps: {
+        listProcesses: vi.fn(async () => {
+          throw new Error('ps unavailable');
+        }),
+        isPidAlive: vi.fn(() => false),
+        platform: 'win32',
+        terminateWindowsTree: vi.fn(),
+      },
+    });
+
+    await expect(boundary.hasProcessTreeResidue()).resolves.toBe(true);
+  });
+
+  it('merges a descendant discovered after the graceful snapshot and verifies it', async () => {
+    const listProcesses = vi.fn()
+      .mockResolvedValueOnce([{ pid: 100, ppid: 1 }])
+      .mockResolvedValueOnce([{ pid: 100, ppid: 1 }, { pid: 101, ppid: 100 }]);
+    const boundary = createCodexAppServerProcessDisposalBoundary({
+      child: {
+        pid: 100,
+        stdin: { end: vi.fn() },
+        kill: vi.fn(),
+      } as any,
+      closedPromise: Promise.resolve(),
+      deps: {
+        listProcesses,
+        isPidAlive: vi.fn((pid: number) => pid === 101),
+        platform: 'win32',
+        terminateWindowsTree: vi.fn(),
+      },
+    });
+
+    await expect(boundary.hasProcessTreeResidue()).resolves.toBe(true);
+    expect(listProcesses).toHaveBeenCalledTimes(2);
   });
 });

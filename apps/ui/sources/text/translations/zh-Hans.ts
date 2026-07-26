@@ -5865,6 +5865,8 @@ export const zhHans: TranslationStructure = {
     model: {
       title: "模型",
       useCliSettings: "使用 CLI 设置",
+      requestedNextResume: ({ model }: { model: string }) => `下次恢复时请求：${model}`,
+      lastConfirmed: ({ model }: { model: string }) => `上次确认的模型：${model}`,
       configureInCli: "在 CLI 设置中配置模型",
       extendedContextToggleLabel: '1M 上下文',
       extendedContextToggleDescription: '为此模型使用扩展的 100 万 token 上下文窗口。',

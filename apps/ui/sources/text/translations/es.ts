@@ -6074,6 +6074,8 @@ export const es: TranslationStructure = {
       model: {
         title: "MODELO",
         useCliSettings: "Usar la configuración del CLI",
+        requestedNextResume: ({ model }: { model: string }) => `Solicitado para la próxima reanudación: ${model}`,
+        lastConfirmed: ({ model }: { model: string }) => `Último modelo confirmado: ${model}`,
         configureInCli: "Configurar modelos en la configuración del CLI",
         extendedContextToggleLabel: 'Contexto de 1M',
         extendedContextToggleDescription: 'Usa la ventana de contexto ampliada de 1M de tokens para este modelo.',

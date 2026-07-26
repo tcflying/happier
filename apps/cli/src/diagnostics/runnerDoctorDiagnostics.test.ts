@@ -137,4 +137,29 @@ describe('buildRunnerDoctorDiagnostics', () => {
       }),
     ]));
   });
+
+  it('does not infer port drift from a pure server/webapp role swap', () => {
+    const findings = buildRunnerDoctorDiagnostics({
+      nowMs: 100_000,
+      heartbeatTimeoutMs: 30_000,
+      currentCliVersion: '1.2.3',
+      currentRunnerBuildId: null,
+      runners: [],
+      mutationDeadLetters: [],
+      serverRoles: {
+        serverId: 'local',
+        resolvedServerUrl: 'http://127.0.0.1:5173',
+        resolvedWebappUrl: 'http://127.0.0.1:3005',
+        profileServerUrl: 'http://127.0.0.1:3005',
+        profileWebappUrl: 'http://127.0.0.1:5173',
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        code: 'server_webapp_role_port_drift',
+        data: expect.objectContaining({ driftKinds: ['role'] }),
+      }),
+    ]);
+  });
 });

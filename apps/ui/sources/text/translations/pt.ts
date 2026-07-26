@@ -6204,6 +6204,8 @@ export const pt: TranslationStructure = {
       model: {
         title: "MODELO",
         useCliSettings: "Usar configurações do CLI",
+        requestedNextResume: ({ model }: { model: string }) => `Solicitado para a próxima retomada: ${model}`,
+        lastConfirmed: ({ model }: { model: string }) => `Último modelo confirmado: ${model}`,
         configureInCli: "Configurar modelos nas configurações do CLI",
         extendedContextToggleLabel: 'Contexto de 1M',
         extendedContextToggleDescription: 'Use a janela de contexto estendida de 1M de tokens para este modelo.',

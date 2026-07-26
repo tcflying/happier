@@ -5690,6 +5690,8 @@ deps: {
           model: {
               title: 'MODEL',
               useCliSettings: 'Fes servir la configuració del CLI',
+              requestedNextResume: ({ model }: { model: string }) => `Sol·licitat per a la propera represa: ${model}`,
+              lastConfirmed: ({ model }: { model: string }) => `Últim model confirmat: ${model}`,
               configureInCli: 'Configura els models a la configuració del CLI',
               extendedContextToggleLabel: 'Context d\'1M',
               extendedContextToggleDescription: 'Utilitza la finestra de context ampliada d\'1M de tokens per a aquest model.',

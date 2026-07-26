@@ -5926,6 +5926,8 @@ deps: {
           model: {
               title: 'MODEL',
               useCliSettings: 'Fes servir la configuració del CLI',
+              requestedNextResume: ({ model }: { model: string }) => `Sol·licitat per a la propera represa: ${model}`,
+              lastConfirmed: ({ model }: { model: string }) => `Últim model confirmat: ${model}`,
               configureInCli: 'Configura els models a la configuració del CLI',
               running: ({ model }: { model: string }) => `En execució: ${model}`,
               lastUsed: ({ model }: { model: string }) => `Últim ús: ${model}`,

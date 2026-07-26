@@ -6102,6 +6102,8 @@ export const zhHans: TranslationStructure = {
     model: {
       title: "模型",
       useCliSettings: "使用 CLI 设置",
+      requestedNextResume: ({ model }: { model: string }) => `下次恢复时请求：${model}`,
+      lastConfirmed: ({ model }: { model: string }) => `上次确认的模型：${model}`,
       configureInCli: "在 CLI 设置中配置模型",
       running: ({ model }: { model: string }) => `正在运行：${model}`,
       lastUsed: ({ model }: { model: string }) => `上次使用：${model}`,

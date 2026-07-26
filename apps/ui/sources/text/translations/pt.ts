@@ -6441,6 +6441,8 @@ export const pt: TranslationStructure = {
       model: {
         title: "MODELO",
         useCliSettings: "Usar configurações do CLI",
+        requestedNextResume: ({ model }: { model: string }) => `Solicitado para a próxima retomada: ${model}`,
+        lastConfirmed: ({ model }: { model: string }) => `Último modelo confirmado: ${model}`,
         configureInCli: "Configurar modelos nas configurações do CLI",
         running: ({ model }: { model: string }) => `Em execução: ${model}`,
         lastUsed: ({ model }: { model: string }) => `Usado por último: ${model}`,

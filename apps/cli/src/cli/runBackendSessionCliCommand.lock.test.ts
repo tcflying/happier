@@ -102,6 +102,20 @@ describe('runBackendSessionCliCommand (session runner lock)', () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(heartbeat).toHaveBeenCalled();
+    const heartbeatCallsBeforeCleanup = heartbeat.mock.calls.length;
+    const cleanupStartedAtMs = Date.now();
+    const {
+      beginRegisteredSessionRunnerCleanup,
+      finishRegisteredSessionRunnerCleanup,
+    } = await import('@/daemon/sessionRunnerLifecycleRuntime');
+    await beginRegisteredSessionRunnerCleanup(100);
+    expect(markCleanup).toHaveBeenCalledWith({
+      nowMs: cleanupStartedAtMs,
+      deadlineAtMs: cleanupStartedAtMs + 100,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(heartbeat).toHaveBeenCalledTimes(heartbeatCallsBeforeCleanup);
+    await finishRegisteredSessionRunnerCleanup('completed');
     finishRun();
     await command;
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { configuration } from '@/configuration';
@@ -12,6 +12,18 @@ import {
   type SessionRunnerProcessCommandHashReader,
 } from './sessionRunnerProcessIdentity';
 import { resolveSessionRunnerBuildId } from './sessionRunnerBuildId';
+import {
+  isSessionRunnerLifecycleAuthoritativelyStale,
+  type SessionRunnerCleanupOutcome,
+  type SessionRunnerLifecycleState,
+} from './sessionRunnerLifecycleState';
+
+export {
+  isSessionRunnerLifecycleAuthoritativelyStale,
+  type SessionRunnerCleanupOutcome,
+  type SessionRunnerLifecyclePhase,
+  type SessionRunnerLifecycleState,
+} from './sessionRunnerLifecycleState';
 
 export const SESSION_RUNNER_HEARTBEAT_TIMEOUT_MS = 30_000;
 export const SESSION_RUNNER_CLEANUP_BUDGET_MS = 15_000;
@@ -22,22 +34,6 @@ export type SessionRunnerLockPayload = Readonly<{
   acquiredAtMs: number;
   generationId?: string;
   processCommandHash?: string;
-}>;
-
-export type SessionRunnerLifecyclePhase = 'running' | 'cleanup' | 'finished';
-export type SessionRunnerCleanupOutcome = 'completed' | 'failed' | 'timed_out' | 'superseded';
-
-export type SessionRunnerLifecycleState = Readonly<{
-  sessionId: string;
-  pid: number;
-  generationId: string;
-  phase: SessionRunnerLifecyclePhase;
-  phaseStartedAtMs: number;
-  heartbeatAtMs: number;
-  cleanupDeadlineAtMs?: number;
-  cleanupOutcome?: SessionRunnerCleanupOutcome;
-  cliVersion: string;
-  runnerBuildId?: string;
 }>;
 
 function normalizeSessionId(raw: unknown): string {
@@ -106,6 +102,56 @@ function safeParseLockPayload(raw: string): SessionRunnerLockPayload | null {
   }
 }
 
+function lockPayloadMatches(left: SessionRunnerLockPayload, right: SessionRunnerLockPayload): boolean {
+  return left.sessionId === right.sessionId
+    && left.pid === right.pid
+    && left.acquiredAtMs === right.acquiredAtMs
+    && left.generationId === right.generationId
+    && left.processCommandHash === right.processCommandHash;
+}
+
+type ClaimedSessionRunnerLock = Readonly<{
+  ownedPath: string;
+  releaseClaim: () => Promise<void>;
+}>;
+
+async function claimSessionRunnerLockGeneration(params: Readonly<{
+  lockPath: string;
+  expected: SessionRunnerLockPayload;
+}>): Promise<ClaimedSessionRunnerLock | null> {
+  const generationKey = params.expected.generationId
+    ?? `legacy-${params.expected.pid}-${params.expected.acquiredAtMs}`;
+  const claimPath = `${params.lockPath}.${generationKey}.claim`;
+  const ownedPath = `${claimPath}.${randomUUID()}.owned`;
+  try {
+    await writeFile(claimPath, `${process.pid}\n`, { encoding: 'utf8', flag: 'wx' });
+  } catch {
+    return null;
+  }
+
+  const releaseClaim = async () => {
+    await unlink(claimPath).catch(() => undefined);
+  };
+  try {
+    const current = safeParseLockPayload(await readFile(params.lockPath, 'utf8'));
+    if (!current || !lockPayloadMatches(current, params.expected)) {
+      await releaseClaim();
+      return null;
+    }
+    await rename(params.lockPath, ownedPath);
+    const claimed = safeParseLockPayload(await readFile(ownedPath, 'utf8'));
+    if (!claimed || !lockPayloadMatches(claimed, params.expected)) {
+      await rename(ownedPath, params.lockPath).catch(() => undefined);
+      await releaseClaim();
+      return null;
+    }
+    return { ownedPath, releaseClaim };
+  } catch {
+    await releaseClaim();
+    return null;
+  }
+}
+
 function safeParseLifecycleState(raw: string): SessionRunnerLifecycleState | null {
   try {
     const parsed = JSON.parse(raw);
@@ -166,24 +212,6 @@ export function sessionRunnerLifecyclePathForGeneration(params: Readonly<{
   return `${lockPath.slice(0, -'.json'.length)}.${generationId}.lifecycle.json`;
 }
 
-export function isSessionRunnerLifecycleAuthoritativelyStale(params: Readonly<{
-  lifecycle: SessionRunnerLifecycleState | null;
-  nowMs: number;
-  heartbeatTimeoutMs: number;
-}>): boolean {
-  const lifecycle = params.lifecycle;
-  if (!lifecycle) return false;
-  if (lifecycle.phase === 'finished') return true;
-  if (
-    lifecycle.phase === 'cleanup'
-    && typeof lifecycle.cleanupDeadlineAtMs === 'number'
-    && params.nowMs > lifecycle.cleanupDeadlineAtMs
-  ) {
-    return true;
-  }
-  return params.nowMs - lifecycle.heartbeatAtMs > params.heartbeatTimeoutMs;
-}
-
 export type AcquireSessionRunnerLockResult =
   | Readonly<{
       ok: true;
@@ -211,7 +239,10 @@ export async function acquireSessionRunnerLock(params: Readonly<{
   happyHomeDir?: string;
   readProcessRunState?: (pid: number) => Promise<ProcessRunState>;
   getCurrentProcessCommandHash?: SessionRunnerProcessCommandHashReader;
-  killWedgedPid?: (pid: number) => void;
+  killWedgedPid?: (pid: number) => void | Promise<void>;
+  terminationConfirmTimeoutMs?: number;
+  terminationConfirmPollMs?: number;
+  sleep?: (ms: number) => Promise<void>;
 }>): Promise<AcquireSessionRunnerLockResult> {
   const sessionId = normalizeSessionId(params.sessionId);
   if (!sessionId) return { ok: false, reason: 'invalid_session_id' };
@@ -360,7 +391,11 @@ export async function acquireSessionRunnerLock(params: Readonly<{
       });
       return null;
     } catch (e) {
-      await unlink(lockPath).catch(() => undefined);
+      const failedClaim = await claimSessionRunnerLockGeneration({ lockPath, expected: payload });
+      if (failedClaim) {
+        await unlink(failedClaim.ownedPath).catch(() => undefined);
+        await failedClaim.releaseClaim();
+      }
       return {
         ok: false,
         reason: 'io_error',
@@ -390,15 +425,42 @@ export async function acquireSessionRunnerLock(params: Readonly<{
 
   const readProcessRunState = params.readProcessRunState ?? readProcessRunStateDefault;
   const killWedgedPid = params.killWedgedPid ?? killWedgedPidDefault;
+  const sleep = params.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
+  const terminationConfirmTimeoutMs = Math.max(1, Math.floor(params.terminationConfirmTimeoutMs ?? 5_000));
+  const terminationConfirmPollMs = Math.max(1, Math.floor(params.terminationConfirmPollMs ?? 25));
   const readHolderRunState = async (pid: number): Promise<ProcessRunState> =>
     await readProcessRunState(pid).catch<ProcessRunState>(() => 'servable');
+  const terminateAndConfirmOriginalHolder = async (
+    holder: SessionRunnerLockPayload,
+  ): Promise<boolean> => {
+    try {
+      await killWedgedPid(holder.pid);
+    } catch {
+      return false;
+    }
+    const deadlineAtMs = Date.now() + terminationConfirmTimeoutMs;
+    while (true) {
+      const state = await readHolderRunState(holder.pid);
+      if (state === 'dead' || state === 'zombie') return true;
+      const identity = await readProcessIdentity(holder.pid);
+      if (!storedProcessHashMatchesCurrentIdentity({
+        storedProcessCommandHash: holder.processCommandHash,
+        currentIdentity: identity,
+      })) {
+        return false;
+      }
+      if (Date.now() >= deadlineAtMs) return false;
+      await sleep(Math.min(terminationConfirmPollMs, Math.max(1, deadlineAtMs - Date.now())));
+    }
+  };
 
   if (existing && existing.sessionId !== sessionId) {
     if (existing.pid && (await readHolderRunState(existing.pid)) !== 'dead') {
       return { ok: false, reason: 'already_running', heldByPid: existing.pid };
     }
-    // payload mismatch but process isn't alive: treat as stale/invalid and overwrite.
-    existing = null;
+    // Do not reclaim an ownership record for a different session without a
+    // generation-matched claim. A malformed/mismatched record stays fail-closed.
+    return { ok: false, reason: 'already_running', heldByPid: existing.pid };
   }
 
   if (existing?.pid) {
@@ -431,12 +493,11 @@ export async function acquireSessionRunnerLock(params: Readonly<{
           currentIdentity,
         })
       ) {
-        if (existingLifecycle?.phase !== 'finished') {
-          try {
-            killWedgedPid(existing.pid);
-          } catch {
-            return { ok: false, reason: 'already_running', heldByPid: existing.pid };
-          }
+        if (
+          existingLifecycle?.phase !== 'finished'
+          && !(await terminateAndConfirmOriginalHolder(existing))
+        ) {
+          return { ok: false, reason: 'already_running', heldByPid: existing.pid };
         }
       } else if (holderState === 'stopped' && storedProcessHashMatchesCurrentIdentity({
         storedProcessCommandHash: existing.processCommandHash,
@@ -445,11 +506,7 @@ export async function acquireSessionRunnerLock(params: Readonly<{
         // Proven same runner image but SIGSTOPped: it holds the lock and serves nothing
         // (incident 2026-06-12 "already running" refusal while wedged). Kill it so a
         // later SIGCONT cannot revive a duplicate, then break the lock.
-        try {
-          killWedgedPid(existing.pid);
-        } catch {
-          // Best-effort: if the kill fails we still cannot trust the holder to serve;
-          // fail closed and keep the lock.
+        if (!(await terminateAndConfirmOriginalHolder(existing))) {
           return { ok: false, reason: 'already_running', heldByPid: existing.pid };
         }
       } else {
@@ -462,10 +519,16 @@ export async function acquireSessionRunnerLock(params: Readonly<{
     }
   }
 
-  try {
-    await unlink(lockPath);
-  } catch (e) {
-    return { ok: false, reason: 'io_error', errorMessage: e instanceof Error ? e.message : String(e) };
+  if (!existing) {
+    return { ok: false, reason: 'io_error', errorMessage: 'Existing lock payload is invalid and cannot be claimed safely' };
+  }
+  const claimed = await claimSessionRunnerLockGeneration({ lockPath, expected: existing });
+  if (!claimed) {
+    const current = await readSessionRunnerLockStatus({ happyHomeDir, sessionId }).catch(() => null);
+    if (current?.ok) {
+      return { ok: false, reason: 'already_running', heldByPid: current.lock.pid };
+    }
+    return { ok: false, reason: 'io_error', errorMessage: 'Existing lock generation changed before recovery claim' };
   }
 
   try {
@@ -480,9 +543,14 @@ export async function acquireSessionRunnerLock(params: Readonly<{
     }
     const lifecycleError = await initializeAcquiredLifecycle();
     if (lifecycleError) return lifecycleError;
+    await unlink(claimed.ownedPath).catch(() => undefined);
+    await claimed.releaseClaim();
     return buildAcquiredResult();
   } catch (e) {
     return { ok: false, reason: 'io_error', errorMessage: e instanceof Error ? e.message : String(e) };
+  } finally {
+    await unlink(claimed.ownedPath).catch(() => undefined);
+    await claimed.releaseClaim();
   }
 }
 
@@ -524,38 +592,42 @@ export async function releaseSessionRunnerLock(params: Readonly<{
     return { ok: false, reason: 'not_owner' };
   }
 
-  if (existing.generationId) {
-    const lifecyclePath = sessionRunnerLifecyclePathForGeneration({
-      happyHomeDir,
-      sessionId,
-      generationId: existing.generationId,
-    });
-    if (lifecyclePath) {
-      const nowMs = Math.max(1, Math.floor(params.nowMs ?? Date.now()));
-      const current = await readSessionRunnerLifecycleState({
+  const claimed = await claimSessionRunnerLockGeneration({ lockPath, expected: existing });
+  if (!claimed) return { ok: false, reason: 'not_owner' };
+
+  try {
+    if (existing.generationId) {
+      const lifecyclePath = sessionRunnerLifecyclePathForGeneration({
         happyHomeDir,
         sessionId,
         generationId: existing.generationId,
       });
-      if (current) {
-        const finished: SessionRunnerLifecycleState = {
-          ...current,
-          phase: 'finished',
-          phaseStartedAtMs: nowMs,
-          heartbeatAtMs: nowMs,
-          cleanupOutcome: params.cleanupOutcome ?? 'completed',
-        };
-        await writeFile(lifecyclePath, JSON.stringify(finished, null, 2) + '\n', 'utf8').catch(() => undefined);
+      if (lifecyclePath) {
+        const nowMs = Math.max(1, Math.floor(params.nowMs ?? Date.now()));
+        const current = await readSessionRunnerLifecycleState({
+          happyHomeDir,
+          sessionId,
+          generationId: existing.generationId,
+        });
+        if (current) {
+          const finished: SessionRunnerLifecycleState = {
+            ...current,
+            phase: 'finished',
+            phaseStartedAtMs: nowMs,
+            heartbeatAtMs: nowMs,
+            cleanupOutcome: params.cleanupOutcome ?? 'completed',
+          };
+          await writeFile(lifecyclePath, JSON.stringify(finished, null, 2) + '\n', 'utf8').catch(() => undefined);
+        }
       }
     }
-  }
-
-  try {
-    await unlink(lockPath);
+    await unlink(claimed.ownedPath);
     return { ok: true };
   } catch (e: any) {
     if (e?.code === 'ENOENT') return { ok: false, reason: 'not_found' };
     return { ok: false, reason: 'io_error', errorMessage: e instanceof Error ? e.message : String(e) };
+  } finally {
+    await claimed.releaseClaim();
   }
 }
 

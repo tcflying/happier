@@ -137,7 +137,6 @@ vi.mock('@/agents/catalog/catalog', () => ({
         ui: { agentPickerIconName: 'code-slash' },
         flavorAliases: [],
         availability: { experimental: false },
-        ui: { agentPickerIconName: 'terminal-outline' },
         model: {
             supportsSelection: true,
             supportsFreeform: false,
@@ -186,6 +185,7 @@ vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
     describeEffectiveModelMode: (params: {
         selectedModelId?: string | null;
         agentType?: string | null;
+        runtimeState?: 'active' | 'inactive' | 'unknown';
         metadata?: any;
     }) => {
         const selectedModelId = params.selectedModelId?.trim() || 'default';
@@ -197,7 +197,10 @@ vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
             selectedModelId,
             appliedModelId,
             effectiveModelId: selectedModelId,
-            applyScope: 'spawn_only',
+            requestedModelId: selectedModelId,
+            lastConfirmedModelId: params.metadata?.sessionModelsV1?.currentModelId ?? null,
+            runtimeState: params.runtimeState ?? 'unknown',
+            applyScope: params.runtimeState === 'inactive' ? 'next_resume' : 'spawn_only',
             notes: [],
         };
     },
@@ -353,6 +356,47 @@ describe('AgentInput (modelOptionsOverride)', () => {
         mockWindowWidth = 800;
         lastModelPickerOverlayProps = null;
         lastPopoverProps = null;
+    });
+
+    it('gives canonical inactive state precedence over the compatibility runtime diagnostic', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        lastModelPickerOverlayProps = null;
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: 'hello',
+            placeholder: 'placeholder',
+            onChangeText: () => {},
+            onSend: () => {},
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            agentType: 'codex',
+            permissionMode: 'default',
+            onPermissionModeChange: () => {},
+            modelMode: 'requested-model',
+            onModelModeChange: () => {},
+            sessionActive: false,
+            sessionRuntimeState: 'active',
+            metadata: {
+                path: '/workspace',
+                host: 'test-host',
+                sessionModelsV1: {
+                    v: 1,
+                    provider: 'codex',
+                    updatedAt: 1,
+                    currentModelId: 'last-confirmed-model',
+                    availableModels: [],
+                },
+            },
+            modelOptionsOverride: [
+                { value: 'requested-model', label: 'Requested Model', description: '' },
+                { value: 'last-confirmed-model', label: 'Last Confirmed Model', description: '' },
+            ],
+        }));
+
+        await screen.pressByTestIdAsync('agent-input-agent-chip');
+
+        expect(lastModelPickerOverlayProps?.selectedValue).toBe('requested-model');
+        expect(lastModelPickerOverlayProps?.summary).toBeUndefined();
+        expect(lastModelPickerOverlayProps?.notes).toEqual(['agentInput.model.selectedForResume']);
     });
 
     it('prefers modelOptionsOverride over getModelOptionsForSession()', async () => {

@@ -5227,6 +5227,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
           model: {
               title: '模型',
               useCliSettings: '使用 CLI 設定',
+              requestedNextResume: ({ model }: { model: string }) => `下次恢復時要求：${model}`,
+              lastConfirmed: ({ model }: { model: string }) => `上次確認的模型：${model}`,
               configureInCli: '在 CLI 設定中配置模型',
               running: ({ model }: { model: string }) => `執行中：${model}`,
               lastUsed: ({ model }: { model: string }) => `上次使用：${model}`,

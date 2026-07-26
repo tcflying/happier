@@ -5907,6 +5907,8 @@ export const en = {
           model: {
               title: 'MODEL',
               useCliSettings: 'Use CLI settings',
+              requestedNextResume: ({ model }: { model: string }) => `Requested for next resume: ${model}`,
+              lastConfirmed: ({ model }: { model: string }) => `Last confirmed model: ${model}`,
               configureInCli: 'Configure models in CLI settings',
               running: ({ model }: { model: string }) => `Running: ${model}`,
               lastUsed: ({ model }: { model: string }) => `Last used: ${model}`,

@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   happyHomeDir: '',
   activeServerDir: '',
   readLockStatus: vi.fn(),
+  listDaemonSessions: vi.fn(),
 }));
 
 vi.mock('@/configuration', () => ({
@@ -26,7 +27,7 @@ vi.mock('@/configuration', () => ({
 }));
 
 vi.mock('@/daemon/controlClient', () => ({
-  listDaemonSessions: vi.fn(async () => []),
+  listDaemonSessions: () => state.listDaemonSessions(),
 }));
 
 vi.mock('@/daemon/processRunState', () => ({
@@ -41,22 +42,6 @@ vi.mock('@/daemon/sessionRunnerLock', () => {
   return {
     SESSION_RUNNER_HEARTBEAT_TIMEOUT_MS: 30_000,
     readSessionRunnerLockStatus: (params: unknown) => state.readLockStatus(params),
-    isSessionRunnerLifecycleAuthoritativelyStale: (params: {
-      lifecycle: { phase: string; heartbeatAtMs: number; cleanupDeadlineAtMs?: number } | null;
-      nowMs: number;
-      heartbeatTimeoutMs: number;
-    }) => Boolean(
-      params.lifecycle
-      && (
-        params.lifecycle.phase === 'finished'
-        || (
-          params.lifecycle.phase === 'cleanup'
-          && typeof params.lifecycle.cleanupDeadlineAtMs === 'number'
-          && params.nowMs > params.lifecycle.cleanupDeadlineAtMs
-        )
-        || params.nowMs - params.lifecycle.heartbeatAtMs > params.heartbeatTimeoutMs
-      )
-    ),
   };
 });
 
@@ -70,6 +55,8 @@ describe('collectRunnerDoctorDiagnostics', () => {
     await mkdir(join(state.happyHomeDir, 'tmp', 'session-runner-locks'), { recursive: true });
     await mkdir(join(state.activeServerDir, 'session-mutations'), { recursive: true });
     state.readLockStatus.mockReset();
+    state.listDaemonSessions.mockReset();
+    state.listDaemonSessions.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -145,5 +132,45 @@ describe('collectRunnerDoctorDiagnostics', () => {
         entryCount: 2,
       }),
     }));
+  });
+
+  it('does not mislabel runner locks inactive when daemon session inventory is unavailable', async () => {
+    await writeFile(
+      join(state.happyHomeDir, 'tmp', 'session-runner-locks', 'session-unknown.json'),
+      JSON.stringify({ sessionId: 'session-unknown' }),
+      'utf8',
+    );
+    state.listDaemonSessions.mockRejectedValue(new Error('daemon unavailable'));
+    state.readLockStatus.mockResolvedValue({
+      ok: true,
+      lock: {
+        sessionId: 'session-unknown',
+        pid: 100,
+        acquiredAtMs: 1,
+        generationId: 'generation-unknown',
+      },
+      lifecycle: {
+        sessionId: 'session-unknown',
+        pid: 100,
+        generationId: 'generation-unknown',
+        phase: 'running',
+        phaseStartedAtMs: 59_999,
+        heartbeatAtMs: 59_999,
+        cliVersion: '2.0.0',
+        runnerBuildId: 'current-build',
+      },
+    });
+
+    const diagnostics = await collectRunnerDoctorDiagnostics({
+      nowMs: 60_000,
+      settings: {
+        schemaVersion: 6,
+        onboardingCompleted: true,
+        activeServerId: 'local',
+        servers: {},
+      },
+    });
+
+    expect(diagnostics.map((entry) => entry.code)).not.toContain('inactive_session_runner_lock');
   });
 });

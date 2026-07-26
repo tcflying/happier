@@ -89,26 +89,26 @@ describe('sessionRunnerLock', () => {
 
   it('recovers a live matching runner after its authoritative cleanup deadline', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const killedPids: number[] = [];
     const first = await acquireSessionRunnerLock({
       happyHomeDir,
       sessionId: 'sess_stale_cleanup',
       pid: 999,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async () => 'a'.repeat(64),
-      readProcessRunState: async () => 'servable',
+      readProcessRunState: async (pid) => (pid === 999 && killedPids.includes(pid) ? 'dead' : 'servable'),
     });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     await first.markCleanup({ nowMs: 11_000, deadlineAtMs: 12_000 });
 
-    const killedPids: number[] = [];
     const recovered = await acquireSessionRunnerLock({
       happyHomeDir,
       sessionId: 'sess_stale_cleanup',
       pid: 123,
       nowMs: 12_001,
       getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
-      readProcessRunState: async () => 'servable',
+      readProcessRunState: async (pid) => (pid === 999 && killedPids.includes(pid) ? 'dead' : 'servable'),
       killWedgedPid: (pid) => {
         killedPids.push(pid);
       },
@@ -119,6 +119,178 @@ describe('sessionRunnerLock', () => {
     if (!recovered.ok) return;
     expect(recovered.generationId).not.toBe(first.generationId);
     await expect(first.heartbeat(12_002)).resolves.toBe(false);
+  });
+
+  it('waits for stale-holder termination and confirms the original identity is no longer servable', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_confirm_termination',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await first.markCleanup({ nowMs: 11_000, deadlineAtMs: 12_000 });
+
+    let terminateResolved = false;
+    let resolveTermination!: () => void;
+    const terminationGate = new Promise<void>((resolve) => {
+      resolveTermination = () => {
+        terminateResolved = true;
+        resolve();
+      };
+    });
+    let acquisitionSettled = false;
+    const pending = acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_confirm_termination',
+      pid: 123,
+      nowMs: 12_001,
+      getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      readProcessRunState: async (pid) => (pid === 999 && !terminateResolved ? 'servable' : 'dead'),
+      killWedgedPid: async () => await terminationGate,
+    }).finally(() => {
+      acquisitionSettled = true;
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(acquisitionSettled).toBe(false);
+    resolveTermination();
+    await expect(pending).resolves.toEqual(expect.objectContaining({ ok: true }));
+  });
+
+  it('fails closed when termination returns but the same stale holder remains live', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_termination_unconfirmed',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await first.markCleanup({ nowMs: 11_000, deadlineAtMs: 12_000 });
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_termination_unconfirmed',
+      pid: 123,
+      nowMs: 12_001,
+      getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      readProcessRunState: async () => 'servable',
+      killWedgedPid: async () => undefined,
+      terminationConfirmTimeoutMs: 2,
+      terminationConfirmPollMs: 1,
+    });
+
+    expect(recovered).toEqual({ ok: false, reason: 'already_running', heldByPid: 999 });
+    const status = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: 'sess_termination_unconfirmed',
+    });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({ generationId: first.generationId, pid: 999 }),
+    }));
+  });
+
+  it('does not let release delete a replacement during stale recovery', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_release_recovery_race',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await first.markCleanup({ nowMs: 11_000, deadlineAtMs: 12_000 });
+
+    let terminated = false;
+    let resolveTermination!: () => void;
+    const terminationGate = new Promise<void>((resolve) => {
+      resolveTermination = () => {
+        terminated = true;
+        resolve();
+      };
+    });
+    const recovery = acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_release_recovery_race',
+      pid: 123,
+      nowMs: 12_001,
+      getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      readProcessRunState: async (pid) => (pid === 999 && terminated ? 'dead' : 'servable'),
+      killWedgedPid: async () => await terminationGate,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await first.release('completed');
+    resolveTermination();
+    const recoveryResult = await recovery;
+    expect(recoveryResult.ok).toBe(false);
+    const status = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: 'sess_release_recovery_race',
+    });
+    expect(status).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('allows only one stale acquirer to claim an original generation', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_double_recovery',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await first.markCleanup({ nowMs: 11_000, deadlineAtMs: 12_000 });
+
+    let terminated = false;
+    let waiting = 0;
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = () => {
+        terminated = true;
+        resolve();
+      };
+    });
+    const acquireReplacement = (pid: number) => acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_double_recovery',
+      pid,
+      nowMs: 12_001 + pid,
+      getCurrentProcessCommandHash: async (candidatePid) => (
+        candidatePid === 999 ? 'a'.repeat(64) : String(candidatePid).padStart(64, 'b').slice(-64)
+      ),
+      readProcessRunState: async (candidatePid) => (
+        candidatePid === 999 && terminated ? 'dead' : 'servable'
+      ),
+      killWedgedPid: async () => {
+        waiting += 1;
+        if (waiting === 2) releaseBarrier();
+        await barrier;
+      },
+    });
+
+    const results = await Promise.all([acquireReplacement(123), acquireReplacement(124)]);
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    const status = await readSessionRunnerLockStatus({ happyHomeDir, sessionId: 'sess_double_recovery' });
+    expect(status.ok).toBe(true);
+    if (!status.ok) return;
+    expect([123, 124]).toContain(status.lock.pid);
+    expect(status.lock.generationId).not.toBe(first.generationId);
   });
 
   it('keeps unknown live process identity fail-closed without authoritative stale lifecycle evidence', async () => {
@@ -398,7 +570,9 @@ describe('sessionRunnerLock', () => {
       pid: 123,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
-      readProcessRunState: async (pid) => (pid === 999 ? 'stopped' : 'servable'),
+      readProcessRunState: async (pid) => (
+        pid === 999 ? (killedPids.includes(pid) ? 'dead' : 'stopped') : 'servable'
+      ),
       killWedgedPid: (pid) => {
         killedPids.push(pid);
       },

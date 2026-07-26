@@ -60,8 +60,9 @@ async function collectMutationDeadLetters(activeServerDir: string): Promise<Read
 async function collectRunnerLocks(params: Readonly<{
   happyHomeDir: string;
   activeSessionIds: ReadonlySet<string>;
+  sessionInventoryKnown: boolean;
 }>): Promise<ReadonlyArray<{
-  sessionActive: boolean;
+  sessionActive: boolean | null;
   processState: ProcessRunState;
   lock: SessionRunnerLockPayload;
   lifecycle: SessionRunnerLifecycleState | null;
@@ -80,7 +81,7 @@ async function collectRunnerLocks(params: Readonly<{
       });
       if (!status.ok) return null;
       return {
-        sessionActive: params.activeSessionIds.has(sessionId),
+        sessionActive: params.sessionInventoryKnown ? params.activeSessionIds.has(sessionId) : null,
         processState: await readProcessRunState(status.lock.pid),
         lock: status.lock,
         lifecycle: status.lifecycle ?? null,
@@ -96,7 +97,11 @@ export async function collectRunnerDoctorDiagnostics(params: Readonly<{
   settings: Settings;
   nowMs?: number;
 }>): Promise<readonly RunnerDoctorDiagnostic[]> {
-  const sessions = await listDaemonSessions().catch(() => []);
+  let sessionInventoryKnown = true;
+  const sessions = await listDaemonSessions().catch(() => {
+    sessionInventoryKnown = false;
+    return [];
+  });
   const activeSessionIds = new Set(sessions
     .map((session) => typeof session?.happySessionId === 'string' ? session.happySessionId.trim() : '')
     .filter(Boolean));
@@ -104,6 +109,7 @@ export async function collectRunnerDoctorDiagnostics(params: Readonly<{
     collectRunnerLocks({
       happyHomeDir: configuration.happyHomeDir,
       activeSessionIds,
+      sessionInventoryKnown,
     }),
     collectMutationDeadLetters(configuration.activeServerDir),
     resolveSessionRunnerBuildId(),

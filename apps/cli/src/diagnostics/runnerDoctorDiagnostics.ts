@@ -3,8 +3,8 @@ import type { DoctorRuntimeDiagnostic } from '@happier-dev/protocol';
 import {
   isSessionRunnerLifecycleAuthoritativelyStale,
   type SessionRunnerLifecycleState,
-  type SessionRunnerLockPayload,
-} from '@/daemon/sessionRunnerLock';
+} from '@/daemon/sessionRunnerLifecycleState';
+import type { SessionRunnerLockPayload } from '@/daemon/sessionRunnerLock';
 
 export type RunnerDoctorDiagnostic = DoctorRuntimeDiagnostic;
 
@@ -14,7 +14,7 @@ export type RunnerDoctorDiagnosticInput = Readonly<{
   currentCliVersion: string;
   currentRunnerBuildId: string | null;
   runners: readonly Readonly<{
-    sessionActive: boolean;
+    sessionActive: boolean | null;
     processState: ProcessRunState;
     lock: SessionRunnerLockPayload;
     lifecycle: SessionRunnerLifecycleState | null;
@@ -71,7 +71,7 @@ export function buildRunnerDoctorDiagnostics(
       heartbeatTimeoutMs: input.heartbeatTimeoutMs,
     });
 
-    if (!runner.sessionActive) {
+    if (runner.sessionActive === false) {
       const lockState = lifecycleStale
         || runner.processState === 'dead'
         || runner.processState === 'stopped'
@@ -185,7 +185,7 @@ export function buildRunnerDoctorDiagnostics(
       && urlPort(roles.resolvedServerUrl) !== urlPort(roles.profileServerUrl);
     const webappPortDrift = urlHost(roles.resolvedWebappUrl) === urlHost(roles.profileWebappUrl)
       && urlPort(roles.resolvedWebappUrl) !== urlPort(roles.profileWebappUrl);
-    if (serverPortDrift || webappPortDrift || rolesSwapped) driftKinds.push('port');
+    if (!rolesSwapped && (serverPortDrift || webappPortDrift)) driftKinds.push('port');
 
     if (driftKinds.length > 0) {
       findings.push({

@@ -137,6 +137,7 @@ vi.mock('@/agents/catalog/catalog', () => ({
         ui: { agentPickerIconName: 'code-slash' },
         flavorAliases: [],
         availability: { experimental: false },
+        ui: { agentPickerIconName: 'terminal-outline' },
         model: {
             supportsSelection: true,
             supportsFreeform: false,

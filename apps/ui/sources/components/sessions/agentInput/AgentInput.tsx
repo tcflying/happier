@@ -324,6 +324,11 @@ interface AgentInputProps {
     metadata?: Metadata | null;
     /** Whether the existing session runtime is active. Omit for pre-session composers. */
     sessionActive?: boolean;
+    /**
+     * Compatibility diagnostics for callers that cannot expose `sessionActive` yet.
+     * `sessionActive` remains the canonical session-state input when both are provided.
+     */
+    sessionRuntimeState?: 'active' | 'inactive' | 'unknown';
     onAbort?: () => void | Promise<void>;
     showAbortButton?: boolean;
     connectionStatus?: {
@@ -1950,12 +1955,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [agentId, props.metadata, props.permissionMode, sessionPermissionModeApplyTiming]);
 
     const effectiveModelPolicy = React.useMemo(() => {
+        const runtimeState = props.sessionActive === true
+            ? 'active'
+            : props.sessionActive === false
+                ? 'inactive'
+                : props.sessionRuntimeState ?? 'unknown';
         return describeEffectiveModelMode({
             agentType: agentId,
             selectedModelId: props.modelMode ?? 'default',
             metadata: props.metadata ?? null,
+            runtimeState,
+            inactiveNextResumeNote: t('connectedServices.authSwitch.status.appliesOnNextResume'),
         });
-    }, [agentId, props.metadata, props.modelMode]);
+    }, [agentId, props.metadata, props.modelMode, props.sessionActive, props.sessionRuntimeState]);
 
     const selectedModelLabel = React.useMemo(() => {
         const found = findModelOptionForEffectiveModelId(modelOptions, effectiveModelPolicy.selectedModelId);
@@ -1978,28 +1990,28 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 ? found.label
                 : t('agentInput.model.extendedContextLabel', { model: found.label }))
             : appliedModelId;
-        const status = props.sessionActive === true
+        const status = effectiveModelPolicy.runtimeState === 'active'
             ? 'running'
-            : props.sessionActive === false
+            : effectiveModelPolicy.runtimeState === 'inactive'
                 ? 'lastUsed'
                 : 'lastReported';
         return {
             optionValue: found?.value ?? appliedModelId,
-            iconName: props.sessionActive === true
+            iconName: effectiveModelPolicy.runtimeState === 'active'
                 ? 'play-circle' as const
-                : props.sessionActive === false
+                : effectiveModelPolicy.runtimeState === 'inactive'
                     ? 'clock' as const
                     : 'info' as const,
             summary: t(`agentInput.model.${status}`, { model: label }),
         };
-    }, [effectiveModelPolicy.appliedModelId, modelOptions, props.sessionActive]);
+    }, [effectiveModelPolicy.appliedModelId, effectiveModelPolicy.runtimeState, modelOptions]);
 
     const modelNotes = React.useMemo(() => {
-        if (props.sessionActive === false) {
+        if (effectiveModelPolicy.runtimeState === 'inactive') {
             return [t('agentInput.model.selectedForResume')];
         }
         return effectiveModelPolicy.notes;
-    }, [effectiveModelPolicy.notes, props.sessionActive]);
+    }, [effectiveModelPolicy.notes, effectiveModelPolicy.runtimeState]);
 
     const canEnterCustomModel = React.useMemo(() => {
         return supportsFreeformModelSelectionForSession(agentId, props.metadata ?? null);

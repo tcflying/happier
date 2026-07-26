@@ -21,6 +21,10 @@ import {
     HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
+import {
+    createCodexAppServerProcessDisposalBoundary,
+    disposeCodexAppServerProcess,
+} from './disposeCodexAppServerProcess';
 
 type JsonRpcMessage = Readonly<{
     id?: number | string | null;
@@ -638,17 +642,13 @@ export async function createCodexAppServerClient(params: Readonly<{
         failWaiters(state, disposedError);
         failPendingRequests(disposedError);
         disposePromise = (async () => {
-            try {
-                child.stdin?.end();
-            } catch {
-                // ignore
-            }
-            try {
-                child.kill();
-            } catch {
-                // ignore
-            }
-            await closedPromise;
+            await disposeCodexAppServerProcess(
+                createCodexAppServerProcessDisposalBoundary({ child, closedPromise }),
+                {
+                    gracefulTimeoutMs: 2_000,
+                    forceTimeoutMs: 1_000,
+                },
+            );
             await rpcLogger.flush().catch(() => undefined);
         })();
         return await disposePromise;

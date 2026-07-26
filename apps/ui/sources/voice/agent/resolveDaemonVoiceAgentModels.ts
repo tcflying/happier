@@ -13,6 +13,7 @@ export function resolveDaemonVoiceAgentModelIds(params: {
 }): { chatModelId: string; commitModelId: string } {
     const agentId = resolveAgentIdFromFlavor(params.session.metadata?.flavor) ?? DEFAULT_AGENT_ID;
     const metadata = params.session.metadata ?? null;
+    const runtimeState = params.session.active === true ? 'active' : 'inactive';
 
     const sessionSelected = (params.session.modelMode ?? 'default') as any;
 
@@ -24,6 +25,7 @@ export function resolveDaemonVoiceAgentModelIds(params: {
         agentType: agentId,
         selectedModelId: chatSelected,
         metadata,
+        runtimeState,
     }).effectiveModelId;
 
     const commitSelected = (() => {
@@ -42,6 +44,7 @@ export function resolveDaemonVoiceAgentModelIds(params: {
         agentType: agentId,
         selectedModelId: commitSelected,
         metadata,
+        runtimeState,
     }).effectiveModelId;
 
     return { chatModelId, commitModelId };

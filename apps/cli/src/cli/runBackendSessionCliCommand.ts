@@ -25,7 +25,11 @@ import {
 } from '@/cli/sessionStartArgs';
 import { partitionProviderSessionArgs, type ProviderSessionArgPartitionResult } from '@/cli/providerSessionArgPartition';
 import { buildRootHelpText } from '@/cli/buildRootHelpText';
-import { acquireSessionRunnerLock } from '@/daemon/sessionRunnerLock';
+import {
+  acquireSessionRunnerLock,
+  type AcquireSessionRunnerLockResult,
+  type SessionRunnerCleanupOutcome,
+} from '@/daemon/sessionRunnerLock';
 import { isInteractiveTerminal } from '@/terminal/prompts/promptInput';
 import { promptSecret } from '@/terminal/prompts/promptSecret';
 import { maybePassthroughProviderCliInfoRequest, passthroughProviderCliArgs } from '@/cli/providerCliPassthrough';
@@ -121,7 +125,19 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
   resolveExtraOptions?: (args: string[], parsed: ProviderSessionArgPartitionResult) => Extra;
   resolveDirectConnectedServiceEnvironmentFn?: typeof resolveDirectConnectedServiceEnvironment;
 }): Promise<void> {
-  let releaseSessionRunnerLock: (() => Promise<void>) | null = null;
+  let sessionRunnerLock: Extract<AcquireSessionRunnerLockResult, { ok: true }> | null = null;
+  let sessionRunnerHeartbeatTimer: NodeJS.Timeout | null = null;
+  const finishSessionRunnerLifecycle = async (outcome: SessionRunnerCleanupOutcome): Promise<void> => {
+    const lock = sessionRunnerLock;
+    if (!lock) return;
+    sessionRunnerLock = null;
+    if (sessionRunnerHeartbeatTimer) {
+      clearInterval(sessionRunnerHeartbeatTimer);
+      sessionRunnerHeartbeatTimer = null;
+    }
+    await lock.markCleanup().catch(() => false);
+    await lock.release(outcome).catch(() => {});
+  };
 
   try {
     const agentId = params.agentIdForAccountSettings ?? params.agentIdForDeprecatedAliases;
@@ -183,7 +199,11 @@ ${chalk.bold.cyan(`${agentId} CLI Options (from \`${providerHelpCommand}\`):`)}
         }
         throw new Error(`Failed to acquire session runner lock for ${normalizedExistingSessionId} (${lock.reason}).`);
       }
-      releaseSessionRunnerLock = lock.release;
+      sessionRunnerLock = lock;
+      sessionRunnerHeartbeatTimer = setInterval(() => {
+        void lock.heartbeat().catch(() => false);
+      }, 5_000);
+      sessionRunnerHeartbeatTimer.unref?.();
     }
 
     const runPromise = params.loadRun();
@@ -338,10 +358,9 @@ ${chalk.bold.cyan(`${agentId} CLI Options (from \`${providerHelpCommand}\`):`)}
     if (process.env.DEBUG) {
       console.error(error);
     }
-    await releaseSessionRunnerLock?.().catch(() => {});
-    releaseSessionRunnerLock = null;
+    await finishSessionRunnerLifecycle('failed');
     process.exit(1);
   } finally {
-    await releaseSessionRunnerLock?.().catch(() => {});
+    await finishSessionRunnerLifecycle('completed');
   }
 }

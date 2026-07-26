@@ -154,6 +154,74 @@ export const HappierDoctorWarningSchema = z.object({
   repairCommands: z.array(NonEmptyString),
 });
 
+export const DoctorRuntimeDiagnosticSchema = z.discriminatedUnion('code', [
+  z.object({
+    code: z.literal('inactive_session_runner_lock'),
+    severity: z.literal('warning'),
+    data: z.object({
+      sessionId: NonEmptyString,
+      pid: z.number().int().positive(),
+      generationId: NonEmptyString.nullable(),
+      lockState: z.enum(['live', 'stale', 'unknown']),
+    }),
+  }),
+  z.object({
+    code: z.literal('runner_cleanup_overdue'),
+    severity: z.literal('warning'),
+    data: z.object({
+      sessionId: NonEmptyString,
+      pid: z.number().int().positive(),
+      deadlineAtMs: z.number().nonnegative(),
+      overdueByMs: z.number().nonnegative(),
+    }),
+  }),
+  z.object({
+    code: z.literal('runner_heartbeat_stale'),
+    severity: z.literal('warning'),
+    data: z.object({
+      sessionId: NonEmptyString,
+      pid: z.number().int().positive(),
+      heartbeatState: z.enum(['stale', 'missing']),
+      heartbeatAgeMs: z.number().nonnegative().nullable(),
+    }),
+  }),
+  z.object({
+    code: z.literal('session_mutation_dead_letter'),
+    severity: z.literal('warning'),
+    data: z.object({
+      fileName: NonEmptyString,
+      sessionIds: z.array(NonEmptyString),
+      entryCount: z.number().int().positive(),
+    }),
+  }),
+  z.object({
+    code: z.literal('runner_cli_build_drift'),
+    severity: z.literal('warning'),
+    data: z.object({
+      sessionId: NonEmptyString,
+      pid: z.number().int().positive(),
+      runnerCliVersion: NonEmptyString,
+      currentCliVersion: NonEmptyString,
+      runnerBuildId: NonEmptyString.nullable(),
+      currentRunnerBuildId: NonEmptyString.nullable(),
+    }),
+  }),
+  z.object({
+    code: z.literal('server_webapp_role_port_drift'),
+    severity: z.literal('warning'),
+    data: z.object({
+      serverId: NonEmptyString,
+      resolvedServerUrl: NonEmptyString,
+      resolvedWebappUrl: NonEmptyString,
+      profileServerUrl: NonEmptyString,
+      profileWebappUrl: NonEmptyString,
+      driftKinds: z.array(z.enum(['role', 'port'])).min(1),
+    }),
+  }),
+]);
+
+export type DoctorRuntimeDiagnostic = z.infer<typeof DoctorRuntimeDiagnosticSchema>;
+
 export const DoctorSnapshotSchema = z.object({
   capturedAt: NonEmptyString,
   server: z.object({
@@ -179,6 +247,7 @@ export const DoctorSnapshotSchema = z.object({
     happier: HappierDoctorRelayInventorySchema.optional(),
   }).optional(),
   warnings: z.array(HappierDoctorWarningSchema).optional(),
+  runtimeDiagnostics: z.array(DoctorRuntimeDiagnosticSchema).optional(),
 });
 
 export type DoctorSnapshot = z.infer<typeof DoctorSnapshotSchema>;
@@ -269,6 +338,20 @@ export function sanitizeDoctorSnapshotUrls(snapshot: DoctorSnapshot): DoctorSnap
             : undefined,
         }
       : undefined,
+    runtimeDiagnostics: snapshot.runtimeDiagnostics?.map((finding) => (
+      finding.code === 'server_webapp_role_port_drift'
+        ? {
+            ...finding,
+            data: {
+              ...finding.data,
+              resolvedServerUrl: sanitizeUrl(finding.data.resolvedServerUrl),
+              resolvedWebappUrl: sanitizeUrl(finding.data.resolvedWebappUrl),
+              profileServerUrl: sanitizeUrl(finding.data.profileServerUrl),
+              profileWebappUrl: sanitizeUrl(finding.data.profileWebappUrl),
+            },
+          }
+        : finding
+    )),
   };
 }
 

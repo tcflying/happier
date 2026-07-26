@@ -124,6 +124,7 @@ describe('describeEffectiveModelMode', () => {
         const out = describeEffectiveModelMode({
             agentType: 'grok',
             selectedModelId: 'model-b',
+            runtimeState: 'active',
             metadata: buildMetadata({
                 sessionModelsV1: {
                     v: 1,
@@ -135,6 +136,51 @@ describe('describeEffectiveModelMode', () => {
             }),
         });
         expect(out.effectiveModelId).toBe('model-a');
+        expect(out.requestedModelId).toBe('model-b');
+        expect(out.lastConfirmedModelId).toBe('model-a');
+        expect(out.applyScope).toBe('live');
+    });
+
+    it('keeps last-confirmed and requested-next-resume models distinct for an inactive session', () => {
+        const out = describeEffectiveModelMode({
+            agentType: 'grok',
+            selectedModelId: 'model-b',
+            runtimeState: 'inactive',
+            inactiveNextResumeNote: 'Applies on next resume',
+            metadata: buildMetadata({
+                sessionModelsV1: {
+                    v: 1,
+                    provider: 'grok',
+                    updatedAt: 5,
+                    currentModelId: 'model-a',
+                    availableModels: [{ id: 'model-a', name: 'A' }, { id: 'model-b', name: 'B' }],
+                },
+            }),
+        });
+
+        expect(out).toEqual(expect.objectContaining({
+            effectiveModelId: 'model-b',
+            requestedModelId: 'model-b',
+            lastConfirmedModelId: 'model-a',
+            runtimeState: 'inactive',
+            applyScope: 'next_resume',
+        }));
+        expect(out.notes).toContain('Applies on next resume');
+        expect(out.notes.join(' ')).not.toMatch(/running session/i);
+    });
+
+    it('uses the requested model for an inactive session when provider metadata is missing', () => {
+        const out = describeEffectiveModelMode({
+            agentType: 'codex',
+            selectedModelId: 'gpt-5.6',
+            runtimeState: 'inactive',
+            metadata: null,
+        });
+
+        expect(out.effectiveModelId).toBe('gpt-5.6');
+        expect(out.requestedModelId).toBe('gpt-5.6');
+        expect(out.lastConfirmedModelId).toBeNull();
+        expect(out.applyScope).toBe('next_resume');
     });
 
     it('uses a newer valid legacy provider model state over an older canonical alias', () => {

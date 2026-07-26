@@ -4,7 +4,12 @@ import { basename, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { acquireSessionRunnerLock, releaseSessionRunnerLock, sessionRunnerLockPathForSessionId } from './sessionRunnerLock';
+import {
+  acquireSessionRunnerLock,
+  readSessionRunnerLockStatus,
+  releaseSessionRunnerLock,
+  sessionRunnerLockPathForSessionId,
+} from './sessionRunnerLock';
 
 describe('sessionRunnerLock', () => {
   it('acquires and releases a new lock', async () => {
@@ -33,12 +38,120 @@ describe('sessionRunnerLock', () => {
         sessionId: 'sess_1',
         pid: 123,
         acquiredAtMs: 10_000,
+        generationId: expect.any(String),
         processCommandHash: 'a'.repeat(64),
       }),
     );
 
     await res.release();
     await expect(readFile(lockPath, 'utf8')).rejects.toThrow();
+    const lifecycle = await res.readLifecycle();
+    expect(lifecycle).toEqual(expect.objectContaining({
+      generationId: res.generationId,
+      phase: 'finished',
+      cleanupOutcome: 'completed',
+    }));
+  });
+
+  it('records heartbeat and cleanup lifecycle state under the acquired generation', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const res = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_lifecycle',
+      pid: 123,
+      nowMs: 10_000,
+      cliVersion: '1.2.3',
+      runnerBuildId: 'build-a',
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    await expect(res.heartbeat(11_000)).resolves.toBe(true);
+    await expect(res.markCleanup({ nowMs: 12_000, deadlineAtMs: 13_000 })).resolves.toBe(true);
+
+    const status = await readSessionRunnerLockStatus({ happyHomeDir, sessionId: 'sess_lifecycle' });
+    expect(status).toEqual({
+      ok: true,
+      lock: expect.objectContaining({ generationId: res.generationId }),
+      lifecycle: expect.objectContaining({
+        generationId: res.generationId,
+        heartbeatAtMs: 12_000,
+        phase: 'cleanup',
+        phaseStartedAtMs: 12_000,
+        cleanupDeadlineAtMs: 13_000,
+        cliVersion: '1.2.3',
+        runnerBuildId: 'build-a',
+      }),
+    });
+  });
+
+  it('recovers a live matching runner after its authoritative cleanup deadline', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_stale_cleanup',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await first.markCleanup({ nowMs: 11_000, deadlineAtMs: 12_000 });
+
+    const killedPids: number[] = [];
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_stale_cleanup',
+      pid: 123,
+      nowMs: 12_001,
+      getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      readProcessRunState: async () => 'servable',
+      killWedgedPid: (pid) => {
+        killedPids.push(pid);
+      },
+    });
+
+    expect(recovered.ok).toBe(true);
+    expect(killedPids).toEqual([999]);
+    if (!recovered.ok) return;
+    expect(recovered.generationId).not.toBe(first.generationId);
+    await expect(first.heartbeat(12_002)).resolves.toBe(false);
+  });
+
+  it('keeps unknown live process identity fail-closed without authoritative stale lifecycle evidence', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const lockPath = sessionRunnerLockPathForSessionId({ happyHomeDir, sessionId: 'sess_unknown_identity' });
+    expect(lockPath).not.toBeNull();
+    if (!lockPath) return;
+
+    await mkdir(dirname(lockPath), { recursive: true });
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        sessionId: 'sess_unknown_identity',
+        pid: 999,
+        acquiredAtMs: 1,
+        processCommandHash: 'a'.repeat(64),
+      }, null, 2),
+      'utf8',
+    );
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_unknown_identity',
+      pid: 123,
+      nowMs: 100_000,
+      getCurrentProcessCommandHash: async (pid) => {
+        if (pid === 999) throw new Error('optional identity probe unavailable');
+        return 'b'.repeat(64);
+      },
+      readProcessRunState: async () => 'servable',
+    });
+
+    expect(recovered).toEqual({ ok: false, reason: 'already_running', heldByPid: 999 });
   });
 
   it('uses a hashed lock filename when sessionId is too long', async () => {

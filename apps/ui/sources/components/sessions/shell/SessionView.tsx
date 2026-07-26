@@ -4705,6 +4705,7 @@ function SessionViewLoaded({
                 modelMode={modelMode}
                 onModelModeChange={updateModelMode}
                 metadata={session.metadata}
+                sessionRuntimeState={session.active === true ? 'active' : 'inactive'}
                 profileId={liveComposerState.profileId ?? undefined}
                 onProfileClick={liveComposerState.profileId !== null ? () => {
                     const profileId = liveComposerState.profileId;

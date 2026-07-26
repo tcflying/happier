@@ -26,6 +26,18 @@ const { readCredentialsMock, readSettingsMock } = vi.hoisted(() => ({
   })),
 }));
 
+const { collectRunnerDoctorDiagnosticsMock } = vi.hoisted(() => ({
+  collectRunnerDoctorDiagnosticsMock: vi.fn(async (_params?: unknown) => ([{
+    code: 'session_mutation_dead_letter' as const,
+    severity: 'warning' as const,
+    data: {
+      fileName: 'session-s1.dead-letter.json',
+      sessionIds: ['s1'],
+      entryCount: 1,
+    },
+  }])),
+}));
+
 const { readDaemonStatusSnapshotMock } = vi.hoisted(() => ({
   readDaemonStatusSnapshotMock: vi.fn(async () => ({
     server: {
@@ -208,6 +220,10 @@ vi.mock('@/daemon/statusSnapshot', () => ({
   readDaemonStatusSnapshot: () => readDaemonStatusSnapshotMock(),
 }));
 
+vi.mock('@/diagnostics/collectRunnerDoctorDiagnostics', () => ({
+  collectRunnerDoctorDiagnostics: (params: unknown) => collectRunnerDoctorDiagnosticsMock(params),
+}));
+
 vi.mock('@happier-dev/cli-common/firstPartyRuntime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@happier-dev/cli-common/firstPartyRuntime')>();
   return {
@@ -288,6 +304,12 @@ describe('buildDoctorSnapshot', () => {
     ]);
     expect(snapshot.warnings?.map((warning) => warning.code)).toContain('backgroundServiceRepairRecommended');
     expect(snapshot.warnings?.map((warning) => warning.code)).toContain('backgroundServiceRepairManual');
+    expect(snapshot.runtimeDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'session_mutation_dead_letter',
+        data: expect.objectContaining({ sessionIds: ['s1'], entryCount: 1 }),
+      }),
+    ]);
     expect(JSON.stringify(snapshot)).not.toContain('?token=');
     expect(readRelayStatusMock).toHaveBeenCalledTimes(6);
   });

@@ -6,6 +6,7 @@ import { readDoctorInstallations } from '@/doctor/inv/installs';
 import { readDoctorRelays } from '@/doctor/inv/relays';
 import { readDoctorServices } from '@/doctor/inv/services';
 import { readDoctorWarnings } from '@/doctor/inv/warnings';
+import { collectRunnerDoctorDiagnostics } from '@/diagnostics/collectRunnerDoctorDiagnostics';
 
 import {
   DoctorSnapshotSchema,
@@ -29,6 +30,7 @@ export async function buildDoctorSnapshot(): Promise<DoctorSnapshot> {
     readDoctorRelays().catch(() => ({ relays: [] })),
   ]);
   const warnings = await readDoctorWarnings({ daemonStatus }).catch(() => [] as const);
+  const runtimeDiagnostics = await collectRunnerDoctorDiagnostics({ settings }).catch(() => []);
 
   const token = credentials?.token ?? '';
   const payload = token ? decodeJwtPayload(token) : null;
@@ -84,6 +86,7 @@ export async function buildDoctorSnapshot(): Promise<DoctorSnapshot> {
       happier: relays,
     },
     warnings: [...warnings],
+    runtimeDiagnostics: [...runtimeDiagnostics],
     ...(daemonStatus ? { daemonStatus } : {}),
   };
 
@@ -103,6 +106,7 @@ export async function buildDoctorSnapshot(): Promise<DoctorSnapshot> {
       services: candidate.services,
       relays: candidate.relays,
       warnings: candidate.warnings,
+      runtimeDiagnostics: candidate.runtimeDiagnostics,
       ...(candidate.daemonStatus ? { daemonStatus: candidate.daemonStatus } : {}),
     });
   }

@@ -137,6 +137,7 @@ vi.mock('@/agents/catalog/catalog', () => ({
         uiConnectedService: { serviceId: 'openai-codex', label: 'Codex', connectRoute: null },
         flavorAliases: [],
         availability: { experimental: false },
+        ui: { agentPickerIconName: 'terminal-outline' },
         model: {
             supportsSelection: true,
             supportsFreeform: false,

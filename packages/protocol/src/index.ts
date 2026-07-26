@@ -2724,10 +2724,12 @@ export {
 export {
   DoctorSnapshotSchema,
   DoctorSnapshotServerProfileSchema,
+  DoctorRuntimeDiagnosticSchema,
   parseDoctorSnapshotSafe,
   sanitizeDoctorSnapshotUrls,
   type DoctorSnapshot,
   type DoctorSnapshotServerProfile,
+  type DoctorRuntimeDiagnostic,
 } from './diagnostics/doctorSnapshot.js';
 
 export {

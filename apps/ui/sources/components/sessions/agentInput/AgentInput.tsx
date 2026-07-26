@@ -297,6 +297,7 @@ interface AgentInputProps {
      */
     modelOptionsOverrideProbe?: ModelPickerProbeState;
     metadata?: Metadata | null;
+    sessionRuntimeState?: 'active' | 'inactive' | 'unknown';
     onAbort?: () => void | Promise<void>;
     showAbortButton?: boolean;
     connectionStatus?: {
@@ -1818,8 +1819,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             agentType: agentId,
             selectedModelId: props.modelMode ?? 'default',
             metadata: props.metadata ?? null,
+            runtimeState: props.sessionRuntimeState ?? 'unknown',
+            inactiveNextResumeNote: t('connectedServices.authSwitch.status.appliesOnNextResume'),
         });
-    }, [agentId, props.metadata, props.modelMode]);
+    }, [agentId, props.metadata, props.modelMode, props.sessionRuntimeState]);
 
     const effectiveModelLabel = React.useMemo(() => {
         const found = findModelOptionForEffectiveModelId(modelOptions, effectiveModelPolicy.effectiveModelId);

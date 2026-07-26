@@ -84,4 +84,56 @@ describe('resolveDaemonVoiceAgentModelIds', () => {
             commitModelId: getAgentCore('codex').model.defaultMode,
         });
     });
+
+    it('uses the requested model for an inactive session instead of its last provider-confirmed model', () => {
+        const result = resolveDaemonVoiceAgentModelIds({
+            session: {
+                id: 's1',
+                active: false,
+                modelMode: 'model-next',
+                metadata: {
+                    flavor: 'grok',
+                    sessionModelsV1: {
+                        v: 1,
+                        provider: 'grok',
+                        updatedAt: 5,
+                        currentModelId: 'model-last',
+                        availableModels: [],
+                    },
+                },
+            } as any,
+            agent: {
+                chatModelSource: 'session',
+                commitModelSource: 'session',
+            },
+        });
+
+        expect(result).toEqual({ chatModelId: 'model-next', commitModelId: 'model-next' });
+    });
+
+    it('keeps the provider-confirmed current model authoritative for an active session', () => {
+        const result = resolveDaemonVoiceAgentModelIds({
+            session: {
+                id: 's1',
+                active: true,
+                modelMode: 'model-next',
+                metadata: {
+                    flavor: 'grok',
+                    sessionModelsV1: {
+                        v: 1,
+                        provider: 'grok',
+                        updatedAt: 5,
+                        currentModelId: 'model-current',
+                        availableModels: [],
+                    },
+                },
+            } as any,
+            agent: {
+                chatModelSource: 'session',
+                commitModelSource: 'session',
+            },
+        });
+
+        expect(result).toEqual({ chatModelId: 'model-current', commitModelId: 'model-current' });
+    });
 });

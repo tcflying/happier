@@ -20,6 +20,101 @@ describe('isSessionRunnerActive', () => {
     expect(res).toBe(true);
   });
 
+  it('treats a healthy authoritative runner heartbeat as active', async () => {
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_healthy',
+      trackedSessions: [],
+      nowMs: 10_000,
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: {
+          sessionId: 'sess_healthy',
+          pid: 123,
+          acquiredAtMs: 1,
+          generationId: 'generation-healthy',
+          processCommandHash: 'a'.repeat(64),
+        },
+        lifecycle: {
+          sessionId: 'sess_healthy',
+          pid: 123,
+          generationId: 'generation-healthy',
+          phase: 'running',
+          phaseStartedAtMs: 9_000,
+          heartbeatAtMs: 9_999,
+          cliVersion: '1.2.3',
+        },
+      }),
+      getProcessCommandHash: async () => 'a'.repeat(64),
+    });
+
+    expect(res).toBe(true);
+  });
+
+  it('treats cleanup past its authoritative deadline as inactive even while the PID is live', async () => {
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_cleanup_stale',
+      trackedSessions: [],
+      nowMs: 10_000,
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: {
+          sessionId: 'sess_cleanup_stale',
+          pid: 123,
+          acquiredAtMs: 1,
+          generationId: 'generation-cleanup',
+          processCommandHash: 'a'.repeat(64),
+        },
+        lifecycle: {
+          sessionId: 'sess_cleanup_stale',
+          pid: 123,
+          generationId: 'generation-cleanup',
+          phase: 'cleanup',
+          phaseStartedAtMs: 8_000,
+          heartbeatAtMs: 9_900,
+          cleanupDeadlineAtMs: 9_999,
+          cliVersion: '1.2.3',
+        },
+      }),
+      getProcessCommandHash: async () => 'a'.repeat(64),
+    });
+
+    expect(res).toBe(false);
+  });
+
+  it('treats an expired authoritative heartbeat as inactive even while the PID is live', async () => {
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_heartbeat_stale',
+      trackedSessions: [],
+      nowMs: 40_001,
+      heartbeatTimeoutMs: 30_000,
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: {
+          sessionId: 'sess_heartbeat_stale',
+          pid: 123,
+          acquiredAtMs: 1,
+          generationId: 'generation-heartbeat',
+          processCommandHash: 'a'.repeat(64),
+        },
+        lifecycle: {
+          sessionId: 'sess_heartbeat_stale',
+          pid: 123,
+          generationId: 'generation-heartbeat',
+          phase: 'running',
+          phaseStartedAtMs: 1,
+          heartbeatAtMs: 10_000,
+          cliVersion: '1.2.3',
+        },
+      }),
+      getProcessCommandHash: async () => 'a'.repeat(64),
+    });
+
+    expect(res).toBe(false);
+  });
+
   it('treats a live lock PID as inactive when command hash mismatch proves PID reuse', async () => {
     const res = await isSessionRunnerActive({
       sessionId: 'sess_1',
@@ -112,6 +207,44 @@ describe('isSessionRunnerActive', () => {
       getProcessCommandHash: async () => null,
     });
     expect(res).toBe(true);
+  });
+
+  it('does not let a tracked PID override an expired authoritative runner heartbeat', async () => {
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 456,
+      happySessionId: 'sess_1',
+      processCommandHash: 'a'.repeat(64),
+    };
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_1',
+      trackedSessions: [tracked],
+      nowMs: 40_001,
+      heartbeatTimeoutMs: 30_000,
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: {
+          sessionId: 'sess_1',
+          pid: 456,
+          acquiredAtMs: 1,
+          generationId: 'generation-stale',
+          processCommandHash: 'a'.repeat(64),
+        },
+        lifecycle: {
+          sessionId: 'sess_1',
+          pid: 456,
+          generationId: 'generation-stale',
+          phase: 'running',
+          phaseStartedAtMs: 1,
+          heartbeatAtMs: 10_000,
+          cliVersion: '1.2.3',
+        },
+      }),
+      getProcessCommandHash: async () => 'a'.repeat(64),
+    });
+
+    expect(res).toBe(false);
   });
 
   it('treats a tracked session PID as inactive when command hash mismatch proves PID reuse', async () => {

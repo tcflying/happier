@@ -1,6 +1,11 @@
 import type { TrackedSession } from '../types';
 import { readProcessRunState as readProcessRunStateDefault, type ProcessRunState } from '../processRunState';
-import { readSessionRunnerLockStatus, type SessionRunnerLockStatus } from '../sessionRunnerLock';
+import {
+  isSessionRunnerLifecycleAuthoritativelyStale,
+  readSessionRunnerLockStatus,
+  SESSION_RUNNER_HEARTBEAT_TIMEOUT_MS,
+  type SessionRunnerLockStatus,
+} from '../sessionRunnerLock';
 import {
   isValidProcessCommandHash,
   readSessionRunnerProcessIdentity,
@@ -52,12 +57,23 @@ async function storedProcessHashProvesCurrentPidReuse(params: {
 
 async function isLockActive(params: {
   sessionId: string;
+  nowMs: number;
+  heartbeatTimeoutMs: number;
   readProcessRunState: ReadProcessRunState;
   getProcessCommandHash?: SessionRunnerProcessCommandHashReader;
   readSessionRunnerLockStatus: (args: { sessionId: string }) => Promise<SessionRunnerLockStatus>;
 }): Promise<boolean> {
   const status = await params.readSessionRunnerLockStatus({ sessionId: params.sessionId }).catch(() => null);
   if (!status || !status.ok) return false;
+  if (
+    isSessionRunnerLifecycleAuthoritativelyStale({
+      lifecycle: status.lifecycle ?? null,
+      nowMs: params.nowMs,
+      heartbeatTimeoutMs: params.heartbeatTimeoutMs,
+    })
+  ) {
+    return false;
+  }
 
   const pid = status.lock.pid;
   if (!(await isPidActivelyServing(pid, params.readProcessRunState))) return false;
@@ -115,12 +131,33 @@ export async function isSessionRunnerActive(params: Readonly<{
   readProcessRunState?: ReadProcessRunState;
   getProcessCommandHash?: SessionRunnerProcessCommandHashReader;
   readSessionRunnerLockStatus?: (args: { sessionId: string }) => Promise<SessionRunnerLockStatus>;
+  nowMs?: number;
+  heartbeatTimeoutMs?: number;
 }>): Promise<boolean> {
   const sessionId = normalizeSessionId(params.sessionId);
   if (!sessionId) return false;
 
   const readProcessRunState = params.readProcessRunState ?? readProcessRunStateDefault;
   const readLockStatus = params.readSessionRunnerLockStatus ?? readSessionRunnerLockStatus;
+  const nowMs = Math.max(1, Math.floor(params.nowMs ?? Date.now()));
+  const heartbeatTimeoutMs = Math.max(
+    1,
+    Math.floor(params.heartbeatTimeoutMs ?? SESSION_RUNNER_HEARTBEAT_TIMEOUT_MS),
+  );
+  const authoritativeLockStatus = await readLockStatus({ sessionId }).catch(() => null);
+  if (
+    authoritativeLockStatus?.ok
+    && isSessionRunnerLifecycleAuthoritativelyStale({
+      lifecycle: authoritativeLockStatus.lifecycle ?? null,
+      nowMs,
+      heartbeatTimeoutMs,
+    })
+  ) {
+    // A daemon-tracked child handle is only an observation of a process. The
+    // generation-fenced lifecycle is authoritative about whether that runner
+    // can still serve, so an expired heartbeat/deadline must win.
+    return false;
+  }
 
   for (const tracked of params.trackedSessions) {
     if (await isTrackedSessionActive({
@@ -135,6 +172,8 @@ export async function isSessionRunnerActive(params: Readonly<{
 
   return await isLockActive({
     sessionId,
+    nowMs,
+    heartbeatTimeoutMs,
     readProcessRunState,
     getProcessCommandHash: params.getProcessCommandHash,
     readSessionRunnerLockStatus: readLockStatus,

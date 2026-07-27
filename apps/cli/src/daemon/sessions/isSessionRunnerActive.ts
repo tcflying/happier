@@ -2,10 +2,14 @@ import type { TrackedSession } from '../types';
 import { readProcessRunState as readProcessRunStateDefault, type ProcessRunState } from '../processRunState';
 import {
   isSessionRunnerLifecycleAuthoritativelyStale,
+  quarantineSessionRunnerGeneration as quarantineSessionRunnerGenerationDefault,
   readSessionRunnerLockStatus,
   SESSION_RUNNER_HEARTBEAT_TIMEOUT_MS,
+  type QuarantineSessionRunnerGenerationReason,
+  type QuarantineSessionRunnerGenerationResult,
   type SessionRunnerLockStatus,
 } from '../sessionRunnerLock';
+import { challengeSessionRunnerControl as challengeSessionRunnerControlDefault } from '../sessionRunnerControlChallenge';
 import {
   isValidProcessCommandHash,
   readSessionRunnerProcessIdentity,
@@ -28,6 +32,17 @@ function trackedSessionMatchesSessionId(tracked: TrackedSession, sessionId: stri
 }
 
 type ReadProcessRunState = (pid: number) => Promise<ProcessRunState>;
+type ChallengeSessionRunnerControl = (params: Readonly<{
+  sessionId: string;
+  generationId: string;
+  controlPort: number;
+}>) => Promise<boolean>;
+type QuarantineSessionRunnerGeneration = (params: Readonly<{
+  sessionId: string;
+  expectedGenerationId: string;
+  reason: QuarantineSessionRunnerGenerationReason;
+}>) => Promise<QuarantineSessionRunnerGenerationResult>;
+const DEFAULT_CONTROL_CHALLENGE_STARTUP_GRACE_MS = 5_000;
 
 /**
  * This is process-presence evidence for duplicate-spawn fencing, not proof that the runner can
@@ -35,6 +50,11 @@ type ReadProcessRunState = (pid: number) => Promise<ProcessRunState>;
  * `probeSessionRunnerServiceability`.
  */
 async function isPidPresentForDuplicateFence(pid: number, readProcessRunState: ReadProcessRunState): Promise<boolean> {
+  const state = await readProcessRunState(pid).catch<ProcessRunState>(() => 'servable');
+  return state === 'servable';
+}
+
+async function isPidActivelyServing(pid: number, readProcessRunState: ReadProcessRunState): Promise<boolean> {
   const state = await readProcessRunState(pid).catch<ProcessRunState>(() => 'servable');
   return state === 'servable';
 }
@@ -54,16 +74,41 @@ async function storedProcessHashProvesCurrentPidReuse(params: {
   });
 }
 
+async function quarantineOrKeepGenerationOccupied(params: {
+  sessionId: string;
+  status: Extract<SessionRunnerLockStatus, { ok: true }>;
+  reason: QuarantineSessionRunnerGenerationReason;
+  quarantineSessionRunnerGeneration: QuarantineSessionRunnerGeneration;
+}): Promise<boolean> {
+  const generationId = params.status.lock.generationId;
+  if (!generationId) return false;
+  let result: QuarantineSessionRunnerGenerationResult | null = null;
+  try {
+    result = await params.quarantineSessionRunnerGeneration({
+      sessionId: params.sessionId,
+      expectedGenerationId: generationId,
+      reason: params.reason,
+    });
+  } catch {
+    result = null;
+  }
+  // A failed quarantine leaves ownership unresolved. Keep the slot occupied so
+  // callers cannot create a duplicate runner behind a generation we failed to fence.
+  return result?.ok !== true;
+}
+
 async function isLockActive(params: {
   sessionId: string;
+  status: Extract<SessionRunnerLockStatus, { ok: true }>;
   nowMs: number;
   heartbeatTimeoutMs: number;
   readProcessRunState: ReadProcessRunState;
   getProcessCommandHash?: SessionRunnerProcessCommandHashReader;
-  readSessionRunnerLockStatus: (args: { sessionId: string }) => Promise<SessionRunnerLockStatus>;
+  challengeSessionRunnerControl: ChallengeSessionRunnerControl;
+  quarantineSessionRunnerGeneration: QuarantineSessionRunnerGeneration;
+  controlChallengeStartupGraceMs: number;
 }): Promise<boolean> {
-  const status = await params.readSessionRunnerLockStatus({ sessionId: params.sessionId }).catch(() => null);
-  if (!status || !status.ok) return false;
+  const status = params.status;
   if (
     isSessionRunnerLifecycleAuthoritativelyStale({
       lifecycle: status.lifecycle ?? null,
@@ -71,11 +116,23 @@ async function isLockActive(params: {
       heartbeatTimeoutMs: params.heartbeatTimeoutMs,
     })
   ) {
-    return false;
+    return await quarantineOrKeepGenerationOccupied({
+      sessionId: params.sessionId,
+      status,
+      reason: 'heartbeat_stale',
+      quarantineSessionRunnerGeneration: params.quarantineSessionRunnerGeneration,
+    });
   }
 
   const pid = status.lock.pid;
-  if (!(await isPidPresentForDuplicateFence(pid, params.readProcessRunState))) return false;
+  if (!(await isPidActivelyServing(pid, params.readProcessRunState))) {
+    return await quarantineOrKeepGenerationOccupied({
+      sessionId: params.sessionId,
+      status,
+      reason: 'runner_not_serving',
+      quarantineSessionRunnerGeneration: params.quarantineSessionRunnerGeneration,
+    });
+  }
 
   // If the lock PID is alive but its command hash is provably different, the OS reused
   // the PID for another process. Treat it as inactive so acquisition can break the stale lock.
@@ -86,10 +143,45 @@ async function isLockActive(params: {
       getProcessCommandHash: params.getProcessCommandHash,
     })
   ) {
-    return false;
+    return await quarantineOrKeepGenerationOccupied({
+      sessionId: params.sessionId,
+      status,
+      reason: 'pid_identity_reused',
+      quarantineSessionRunnerGeneration: params.quarantineSessionRunnerGeneration,
+    });
   }
 
-  // Fail-closed: a lock with a present PID is treated as active unless we can prove PID reuse.
+  const generationId = status.lock.generationId;
+  if (generationId) {
+    const lifecycle = status.lifecycle;
+    const controlPort = lifecycle?.controlPort;
+    const controlIdentityReady = lifecycle?.generationId === generationId
+      && lifecycle.pid === status.lock.pid
+      && typeof controlPort === 'number'
+    if (
+      !controlIdentityReady
+      && params.nowMs - status.lock.acquiredAtMs <= params.controlChallengeStartupGraceMs
+    ) {
+      return true;
+    }
+    const challengePassed = controlIdentityReady
+      && await params.challengeSessionRunnerControl({
+        sessionId: params.sessionId,
+        generationId,
+        controlPort,
+      }).catch(() => false);
+    if (!challengePassed) {
+      return await quarantineOrKeepGenerationOccupied({
+        sessionId: params.sessionId,
+        status,
+        reason: 'control_challenge_failed',
+        quarantineSessionRunnerGeneration: params.quarantineSessionRunnerGeneration,
+      });
+    }
+  }
+
+  // Legacy locks have no generation endpoint to challenge. Keep a live exact PID
+  // fail-closed; the explicit old-runner migration path upgrades these runners.
   return true;
 }
 
@@ -129,32 +221,45 @@ export async function isSessionRunnerActive(params: Readonly<{
   readProcessRunState?: ReadProcessRunState;
   getProcessCommandHash?: SessionRunnerProcessCommandHashReader;
   readSessionRunnerLockStatus?: (args: { sessionId: string }) => Promise<SessionRunnerLockStatus>;
+  challengeSessionRunnerControl?: ChallengeSessionRunnerControl;
+  quarantineSessionRunnerGeneration?: QuarantineSessionRunnerGeneration;
   nowMs?: number;
   heartbeatTimeoutMs?: number;
+  controlChallengeStartupGraceMs?: number;
 }>): Promise<boolean> {
   const sessionId = normalizeSessionId(params.sessionId);
   if (!sessionId) return false;
 
   const readProcessRunState = params.readProcessRunState ?? readProcessRunStateDefault;
   const readLockStatus = params.readSessionRunnerLockStatus ?? readSessionRunnerLockStatus;
+  const challengeSessionRunnerControl = params.challengeSessionRunnerControl
+    ?? challengeSessionRunnerControlDefault;
+  const quarantineSessionRunnerGeneration = params.quarantineSessionRunnerGeneration
+    ?? quarantineSessionRunnerGenerationDefault;
   const nowMs = Math.max(1, Math.floor(params.nowMs ?? Date.now()));
   const heartbeatTimeoutMs = Math.max(
     1,
     Math.floor(params.heartbeatTimeoutMs ?? SESSION_RUNNER_HEARTBEAT_TIMEOUT_MS),
   );
+  const controlChallengeStartupGraceMs = Math.max(
+    0,
+    Math.floor(params.controlChallengeStartupGraceMs ?? DEFAULT_CONTROL_CHALLENGE_STARTUP_GRACE_MS),
+  );
   const authoritativeLockStatus = await readLockStatus({ sessionId }).catch(() => null);
-  if (
-    authoritativeLockStatus?.ok
-    && isSessionRunnerLifecycleAuthoritativelyStale({
-      lifecycle: authoritativeLockStatus.lifecycle ?? null,
+  if (authoritativeLockStatus?.ok) {
+    // The generation-fenced lock is authoritative. A daemon ChildProcess handle
+    // must never override a failed heartbeat/control challenge for that generation.
+    return await isLockActive({
+      sessionId,
+      status: authoritativeLockStatus,
       nowMs,
       heartbeatTimeoutMs,
-    })
-  ) {
-    // A daemon-tracked child handle is only an observation of a process. The
-    // generation-fenced lifecycle is authoritative about whether that runner
-    // can still serve, so an expired heartbeat/deadline must win.
-    return false;
+      readProcessRunState,
+      getProcessCommandHash: params.getProcessCommandHash,
+      challengeSessionRunnerControl,
+      quarantineSessionRunnerGeneration,
+      controlChallengeStartupGraceMs,
+    });
   }
 
   for (const tracked of params.trackedSessions) {
@@ -167,15 +272,7 @@ export async function isSessionRunnerActive(params: Readonly<{
       return true;
     }
   }
-
-  return await isLockActive({
-    sessionId,
-    nowMs,
-    heartbeatTimeoutMs,
-    readProcessRunState,
-    getProcessCommandHash: params.getProcessCommandHash,
-    readSessionRunnerLockStatus: readLockStatus,
-  });
+  return false;
 }
 
 export type SessionRunnerServiceabilityProbe =

@@ -64,7 +64,10 @@ async function main(argv) {
         NODE_OPTIONS: nextNodeOptions,
       },
       stdio: 'inherit',
-      shell: process.platform === 'win32',
+      // Callers pass an executable plus separate argv.  Keep that boundary on
+      // Windows too: shell mode resolves a global `tsc` before the workspace
+      // binary and triggers DEP0190 even for static commands.
+      shell: false,
     },
     cleanupPollMs: 25,
     signalCleanupGraceMs: 0,

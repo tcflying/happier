@@ -864,6 +864,7 @@ export class ApiMachineClient {
         await this.connectedServicesProjectionRetry.waitForIdle();
         await this.rpcHandlerManager.waitForIdle();
         await this.disposeRpcLifecycleRegistrations();
+        this.directSessionFollowLeaseManager = null;
         const outboxes = Array.from(this.daemonTerminalSessionMutationOutboxes.values());
         this.daemonTerminalSessionMutationOutboxes.clear();
         await Promise.all(outboxes.map(async (outbox) => {

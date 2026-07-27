@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import dotenv from 'dotenv';
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating';
+import { vitestMjsShebangPlugin } from '../../scripts/testing/vitestMjsShebangPlugin';
 import {
   workspacePackageAliases,
   workspacePackageOptimizationExcludes,
@@ -45,5 +46,5 @@ export default defineConfig({
   resolve: {
     alias: [...workspacePackageAliases, { find: '@', replacement: resolve('./src') }],
   },
-  plugins: [workspacePackageSourcesPlugin],
+  plugins: [vitestMjsShebangPlugin, workspacePackageSourcesPlugin],
 });

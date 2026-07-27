@@ -38,6 +38,11 @@ The root `devDependencies` own both versions. Package manifests that run TypeScr
 
 Treat `test` and `test:unit` as fast lanes. Put Dockerized dependencies, multiprocess setups, external services, real network calls, or other heavy orchestration into integration/e2e/provider lanes.
 
+## CLI focused tests while a development service is live
+
+Run an explicit CLI test file from the repository root with `node apps/cli/scripts/runFocusedTests.mjs src/example.test.ts`.
+This lane uses existing bundled workspace artifacts, gives Vitest a unique cache/report/temp directory, and never rebuilds the live CLI or shared `dist` directories. If the required bundled artifacts are missing, build them before starting the service; the focused lane fails with the missing paths instead of attempting a build.
+
 When introducing or moving a lane/pattern, update all relevant places in the same change:
 
 1. package-level scripts/config,

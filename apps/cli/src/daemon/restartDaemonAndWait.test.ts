@@ -17,6 +17,14 @@ const restartAllDaemonSessionRunnersMock = vi.fn(async () => ({
     },
   ],
 }));
+const requestDaemonSessionRunnerMigrationMock = vi.fn(async () => ({
+  inspected: 1,
+  migrationRequested: 1,
+  migrationFailed: 0,
+  current: 0,
+  skipped: 0,
+  sessions: [],
+}));
 const inspectDaemonRunningStateMock = vi.fn<() => Promise<DaemonRunningInspection>>(async () => ({
   status: 'running' as const,
   state: {
@@ -36,6 +44,7 @@ const spawnDetachedDaemonStartSyncMock = vi.fn<() => Promise<{ pid?: number; unr
 describe('restartDaemonAndWait', () => {
   afterEach(() => {
     stopDaemonMock.mockReset();
+    requestDaemonSessionRunnerMigrationMock.mockReset();
     restartAllDaemonSessionRunnersMock.mockReset();
     inspectDaemonRunningStateMock.mockReset();
     spawnDetachedDaemonStartSyncMock.mockReset();
@@ -53,6 +62,7 @@ describe('restartDaemonAndWait', () => {
         ...actual,
         stopDaemon: stopDaemonMock,
         inspectDaemonRunningStateAndCleanupStaleState: inspectDaemonRunningStateMock,
+        requestDaemonSessionRunnerMigration: requestDaemonSessionRunnerMigrationMock,
         restartAllDaemonSessionRunners: restartAllDaemonSessionRunnersMock,
       };
     });
@@ -61,6 +71,14 @@ describe('restartDaemonAndWait', () => {
     }));
 
     stopDaemonMock.mockImplementation(async () => undefined);
+    requestDaemonSessionRunnerMigrationMock.mockImplementation(async () => ({
+      inspected: 1,
+      migrationRequested: 1,
+      migrationFailed: 0,
+      current: 0,
+      skipped: 0,
+      sessions: [],
+    }));
     restartAllDaemonSessionRunnersMock.mockImplementation(async () => ({
       ok: true,
       mode: 'force_current_cli',
@@ -137,6 +155,29 @@ describe('restartDaemonAndWait', () => {
     expect(spawnDetachedDaemonStartSyncMock).toHaveBeenCalledWith(expect.not.objectContaining({
       env: expect.anything(),
     }));
+  });
+
+  it('migrates old runners only when explicitly requested', async () => {
+    const { restartDaemonAndWait } = await importSubject();
+
+    await expect(restartDaemonAndWait({ migrateSessions: true })).resolves.toEqual({ ok: true });
+
+    expect(requestDaemonSessionRunnerMigrationMock).toHaveBeenCalledOnce();
+    expect(restartAllDaemonSessionRunnersMock).not.toHaveBeenCalled();
+  });
+
+  it('fails the restart result when old-runner migration reports a failure', async () => {
+    const { restartDaemonAndWait } = await importSubject();
+    requestDaemonSessionRunnerMigrationMock.mockResolvedValueOnce({
+      inspected: 1,
+      migrationRequested: 1,
+      migrationFailed: 1,
+      current: 0,
+      skipped: 0,
+      sessions: [],
+    });
+
+    await expect(restartDaemonAndWait({ migrateSessions: true })).resolves.toEqual({ ok: false });
   });
 
   it('reports success when final status proves a new daemon after the stop request errors', async () => {

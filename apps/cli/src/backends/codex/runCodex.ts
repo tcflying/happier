@@ -133,6 +133,7 @@ import { createCodexRequestUserInputBridge } from './runtime/codexRequestUserInp
 import { runCodexLocalModePass } from './runtime/localModePass';
 import { resolveCodexQueuedPromptWithReplaySeed } from './runtime/resolveCodexQueuedPromptWithReplaySeed';
 import { cleanupCodexRunResources } from './runtime/cleanupRunResources';
+import type { SessionRunnerCleanupLifecycle } from '@/daemon/sessionRunnerLifecycleRuntime';
 import { resolveTerminationArchiveDecision } from '@/agent/runtime/terminationArchivePolicy';
 import {
     emitReadyIfIdle,
@@ -260,6 +261,7 @@ export async function runCodex(opts: {
     experimentalCodexAcp?: boolean;
     codexBackendMode?: CodexBackendMode;
     accountSettingsContext?: import('@/settings/accountSettings/bootstrapAccountSettingsContext').AccountSettingsContext | null;
+    sessionRunnerCleanupLifecycle?: SessionRunnerCleanupLifecycle;
 }): Promise<void> {
 	    // Use shared PermissionMode type for cross-agent compatibility
 	    type PermissionMode = import('@/api/types').PermissionMode;
@@ -1404,6 +1406,10 @@ export async function runCodex(opts: {
                     messageBuffer,
                     logDebug: (message, error) => logger.debug(message, error),
                     logActiveHandles,
+                    ...(opts.sessionRunnerCleanupLifecycle ? {
+                        onCleanupStart: opts.sessionRunnerCleanupLifecycle.begin,
+                        onCleanupOutcome: opts.sessionRunnerCleanupLifecycle.finish,
+                    } : {}),
                 });
             } catch (e) {
                 logger.debug('[Codex] Cleanup failure during termination (non-fatal)', e);
@@ -2845,6 +2851,10 @@ export async function runCodex(opts: {
             messageBuffer,
             logDebug: (message, error) => logger.debug(message, error),
             logActiveHandles,
+            ...(opts.sessionRunnerCleanupLifecycle ? {
+                onCleanupStart: opts.sessionRunnerCleanupLifecycle.begin,
+                onCleanupOutcome: opts.sessionRunnerCleanupLifecycle.finish,
+            } : {}),
         });
     }
 }

@@ -70,6 +70,57 @@ describe('waitForIdleViaSocket', () => {
     await expect(promise).resolves.toEqual(expect.objectContaining({ idle: true, observedAt: expect.any(Number) }));
   });
 
+  it('reuses a projected recheck snapshot instead of fetching the same session again', async () => {
+    vi.useFakeTimers();
+
+    const socket = createSocketStub();
+    const fetchSessionById = vi.fn();
+    vi.doMock('@/api/session/sockets', () => ({
+      createSessionScopedSocket: () => socket,
+    }));
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionById,
+    }));
+
+    const { waitForIdleViaSocket } = await import('./sessionSocketAgentState');
+    const promise = waitForIdleViaSocket({
+      token: 'token',
+      sessionId: 'sess-1',
+      ctx: { encryptionKey: new Uint8Array(32).fill(1), encryptionVariant: 'dataKey' },
+      sessionEncryptionMode: 'plain',
+      timeoutMs: 1_000,
+      initialTurnActivity: { pendingUserTurns: 1, activeTaskInFlight: false, turnInFlight: true },
+      recheckTurnActivity: async () => ({
+        activity: { pendingUserTurns: 0, activeTaskInFlight: false, turnInFlight: false },
+        sessionProjection: {
+          latestTurnStatus: 'completed',
+          pendingPermissionRequestCount: 0,
+          pendingUserActionRequestCount: 0,
+        },
+      }),
+      initialAgentStateCiphertextBase64: null,
+    });
+
+    await vi.advanceTimersByTimeAsync(300);
+
+    await expect(promise).resolves.toEqual(expect.objectContaining({ idle: true }));
+    expect(fetchSessionById).not.toHaveBeenCalled();
+  });
+
+  it('keeps a one-hour stable-busy HTTP validation budget bounded by exponential backoff', async () => {
+    const module = await import('./sessionSocketAgentState');
+    const calculateDelay = module.calculateSessionBusyRecheckDelayMs;
+    let elapsedMs = 0;
+    let requestCount = 0;
+
+    while (elapsedMs < 60 * 60_000) {
+      elapsedMs += calculateDelay(requestCount, 250, 30_000);
+      requestCount += 1;
+    }
+
+    expect(requestCount).toBeLessThanOrEqual(130);
+  });
+
   it('does not resolve initially idle when the confirmation recheck fails', async () => {
     vi.useFakeTimers();
 

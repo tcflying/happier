@@ -75,5 +75,14 @@ export function createDirectSessionViewerLeaseRegistry(params?: DirectSessionVie
       pruneExpiredLeases(sessionId);
       return leasesBySessionId.get(sessionId)?.size ?? 0;
     },
+
+    clear(): number {
+      let cleared = 0;
+      for (const leases of leasesBySessionId.values()) {
+        cleared += leases.size;
+      }
+      leasesBySessionId.clear();
+      return cleared;
+    },
   };
 }

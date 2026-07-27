@@ -123,6 +123,7 @@ import {
 } from './connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoveryProjection';
 import { buildRuntimeAuthRecoveryKey } from './connectedServices/runtimeAuth/recoveryKey/runtimeAuthRecoveryKey';
 import { buildRuntimeAuthRecoveryAttemptTransitionLocalId } from './connectedServices/runtimeAuth/commitConnectedServiceRuntimeAuthRecoverySessionEvent';
+import type { OldSessionRunnerMigrationResult } from './processSupervision/migrateOldSessionRunners';
 
 const DEFAULT_DAEMON_CONTROL_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const DAEMON_CONTROL_BODY_LIMIT_BYTES_ENV_KEY = 'HAPPIER_DAEMON_CONTROL_BODY_LIMIT_BYTES';
@@ -408,6 +409,7 @@ export function createDaemonControlApp({
   handleExecutionRunConnectedServiceRelease,
   persistOpenCodeBrokerLoadHandshakeObservation = persistOpenCodeBrokerLoadHandshakeObservationDefault,
   resolveOpenCodeBrokerLoadHandshakeStatus = resolveOpenCodeBrokerLoadHandshakeStatusDefault,
+  handleMigrateOldSessionRunners,
   runtimeAuthRecoveryScheduler,
   isShuttingDown,
   requestSelfRestart,
@@ -509,6 +511,7 @@ export function createDaemonControlApp({
     failingAccessTokenFingerprint?: string | null;
   }>) => Promise<ClaudeSubscriptionAuthTokensRefreshResponse>;
   requestSelfRestart?: (request?: DaemonSelfRestartRequest) => Promise<unknown>;
+  handleMigrateOldSessionRunners?: () => Promise<OldSessionRunnerMigrationResult>;
 }): FastifyInstance {
   void machineId;
   const normalizedRuntimeId = runtimeId.trim();
@@ -1845,6 +1848,41 @@ export function createDaemonControlApp({
     }
   });
 
+  typed.post('/migrate-sessions', {
+    schema: {
+      response: {
+        200: z.object({
+          inspected: z.number(),
+          migrationRequested: z.number(),
+          migrationFailed: z.number(),
+          current: z.number(),
+          skipped: z.number(),
+          sessions: z.array(z.object({
+            sessionId: z.string(),
+            pid: z.number(),
+            status: z.enum(['current', 'migration_requested', 'migration_failed', 'skipped']),
+            reason: z.string().optional(),
+          })),
+        }),
+        401: authSchema401,
+        501: z.object({
+          error: z.literal('migration_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (_request, reply) => {
+    if (!handleMigrateOldSessionRunners) {
+      reply.code(501);
+      return { error: 'migration_handler_unavailable' as const };
+    }
+    const migration = await handleMigrateOldSessionRunners();
+    return {
+      ...migration,
+      sessions: migration.sessions.map((session) => ({ ...session })),
+    };
+  });
+
   // Stop specific session
   typed.post('/stop-session', {
     schema: {
@@ -2359,6 +2397,7 @@ export function startDaemonControlServer({
   handleClaudeSubscriptionAuthTokensRefresh,
   handleExecutionRunConnectedServiceMaterialize,
   handleExecutionRunConnectedServiceRelease,
+  handleMigrateOldSessionRunners,
   runtimeAuthRecoveryScheduler,
   isShuttingDown,
   requestSelfRestart,
@@ -2452,6 +2491,7 @@ export function startDaemonControlServer({
     failingAccessTokenFingerprint?: string | null;
   }>) => Promise<ClaudeSubscriptionAuthTokensRefreshResponse>;
   requestSelfRestart?: (request?: DaemonSelfRestartRequest) => Promise<unknown>;
+  handleMigrateOldSessionRunners?: () => Promise<OldSessionRunnerMigrationResult>;
 }): Promise<{ port: number; stop: () => Promise<void> }> {
   return new Promise((resolve) => {
     const app = createDaemonControlApp({
@@ -2480,6 +2520,7 @@ export function startDaemonControlServer({
       handleClaudeSubscriptionAuthTokensRefresh,
       handleExecutionRunConnectedServiceMaterialize,
       handleExecutionRunConnectedServiceRelease,
+      handleMigrateOldSessionRunners,
       runtimeAuthRecoveryScheduler,
       isShuttingDown,
       requestSelfRestart,

@@ -266,7 +266,7 @@ describe('createSessionRunnerRespawnManager', () => {
     expect(spawnSession).not.toHaveBeenCalled();
   });
 
-  it('forces respawn for connected-service restart requests even when general respawn is disabled', async () => {
+  it('forces an intentional migration respawn with existingSessionId even when general respawn is disabled', async () => {
     vi.useFakeTimers();
     const spawnSession = vi.fn(async (_opts: unknown) => ({ type: 'success' as const, pid: 123 }));
 
@@ -286,7 +286,7 @@ describe('createSessionRunnerRespawnManager', () => {
     const tracked: TrackedSession = {
       startedBy: 'daemon',
       pid: 111,
-      happySessionId: 'sess-connected-service-restart',
+      happySessionId: 'sess-cli-migration',
       spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, resume: 'codex-thread' } as any,
     };
 
@@ -299,7 +299,7 @@ describe('createSessionRunnerRespawnManager', () => {
     await vi.advanceTimersByTimeAsync(50);
     expect(spawnSession).toHaveBeenCalledTimes(1);
     expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
-      existingSessionId: 'sess-connected-service-restart',
+      existingSessionId: 'sess-cli-migration',
       resume: 'codex-thread',
     }));
   });

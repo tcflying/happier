@@ -719,6 +719,7 @@ vi.mock('./sessionEncryption/resolveExistingSessionAttachContext', () => ({
     attachPayload: { v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 0 },
     metadata: null,
     deliveredUserMessageSeq: null,
+    hasHistoricalTranscript: false,
   })),
 }));
 
@@ -1162,6 +1163,7 @@ describe('startDaemon automation wiring (integration)', () => {
         },
         vendorResumeId: 'claude-snapshot-resume',
         sessionPath: '/tmp/project',
+        hasHistoricalTranscript: false,
       });
       vi.mocked(resolveConnectedServiceAuthForSpawn).mockRejectedValueOnce(
         new ConnectedServiceSpawnResumeUnreachableError({

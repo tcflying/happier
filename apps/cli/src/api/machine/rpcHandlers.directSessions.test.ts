@@ -182,7 +182,8 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
       ttlMs: 30_000,
       acquireFollowLease: async () => ({ release: viewerFollowRelease }),
     });
-    const releaseForTakeover = vi.spyOn(followLeaseManager, 'releaseForTakeover');
+    const beginTakeoverFence = vi.spyOn(followLeaseManager, 'beginTakeoverFence');
+    const rollbackTakeoverFence = vi.spyOn(followLeaseManager, 'rollbackTakeoverFence');
 
     registerMachineDirectSessionsRpcHandlers({ rpcHandlerManager, spawnSession, stopSession, followLeaseManager });
 
@@ -195,7 +196,7 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     });
 
     expect(res).toEqual({ ok: true });
-    expect(releaseForTakeover).toHaveBeenCalledWith('sess_happy_direct');
+    expect(beginTakeoverFence).toHaveBeenCalledWith('sess_happy_direct');
     expect(viewerFollowRelease).toHaveBeenCalledTimes(1);
     expect(stopSession).not.toHaveBeenCalled();
     expect(spawnSession).toHaveBeenCalledWith(
@@ -210,7 +211,8 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
       }),
     );
 
-    releaseForTakeover.mockClear();
+    await followLeaseManager.setRuntimeOwned('sess_happy_direct', false);
+    beginTakeoverFence.mockClear();
     spawnSession.mockResolvedValueOnce({
       type: 'error',
       errorCode: 'UNEXPECTED',
@@ -218,7 +220,8 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     });
     const failed = await handler!({ machineId: 'm1', sessionId: 'sess_happy_direct' });
     expect(failed).toEqual({ ok: false, errorCode: 'internal_error', error: 'direct_spawn_failed' });
-    expect(releaseForTakeover).not.toHaveBeenCalled();
+    expect(beginTakeoverFence).toHaveBeenCalledWith('sess_happy_direct');
+    expect(rollbackTakeoverFence).toHaveBeenCalledWith('sess_happy_direct', expect.any(String));
 
     spawnSession.mockResolvedValueOnce({
       type: 'requestToApproveDirectoryCreation',
@@ -230,11 +233,96 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
       errorCode: 'internal_error',
       error: 'directory_approval_required',
     });
-    expect(releaseForTakeover).not.toHaveBeenCalled();
+    expect(rollbackTakeoverFence).toHaveBeenCalledTimes(2);
     await followLeaseManager.detach({
       sessionId: 'sess_happy_direct',
       leaseId: attachedViewer.leaseId,
     });
+  });
+
+  it('fences provider follow before direct spawn and rejects a concurrent takeover without a second spawn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-directSessions-rpc-fence-'));
+    const configDir = join(root, '.claude');
+    const sessionFile = join(configDir, 'projects', 'proj-fence', 'sess-claude-fence.jsonl');
+    await mkdir(join(configDir, 'projects', 'proj-fence'), { recursive: true });
+    await writeFile(sessionFile, jsonlLine({
+      type: 'user',
+      uuid: 'u1',
+      cwd: '/tmp/direct-claude-fence-worktree',
+      message: { content: 'hello' },
+    }), 'utf8');
+    vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', configDir);
+    readCredentialsMock.mockResolvedValue({
+      token: 'token-direct-fence',
+      encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3]) },
+    });
+    fetchSessionByIdMock.mockResolvedValue({
+      id: 'sess_happy_fence',
+      metadataVersion: 1,
+      encryptionMode: 'plain',
+      metadata: JSON.stringify({
+        machineId: 'm1',
+        directSessionV1: {
+          v: 1,
+          providerId: 'claude',
+          machineId: 'm1',
+          remoteSessionId: 'sess-claude-fence',
+          source: { kind: 'claudeConfig', configDir, projectId: 'proj-fence' },
+          linkedAtMs: Date.now(),
+        },
+      }),
+    });
+
+    let resolveSpawn!: (result: SpawnSessionResult) => void;
+    const followLeaseManager = createDirectSessionFollowLeaseManager();
+    const viewerRelease = vi.fn(async () => {});
+    const blockedDuringSpawn = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    await followLeaseManager.attach({
+      sessionId: 'sess_happy_fence',
+      ttlMs: 30_000,
+      acquireFollowLease: async () => ({ release: viewerRelease }),
+    });
+    const spawnSession = vi.fn(async (): Promise<SpawnSessionResult> => {
+      await followLeaseManager.attach({
+        sessionId: 'sess_happy_fence',
+        leaseId: 'viewer-during-spawn',
+        ttlMs: 30_000,
+        acquireFollowLease: blockedDuringSpawn,
+      });
+      return await new Promise<SpawnSessionResult>((resolve) => {
+        resolveSpawn = resolve;
+      });
+    });
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    registerMachineDirectSessionsRpcHandlers({
+      rpcHandlerManager: {
+        registerHandler: (method: string, handler: (params: any) => Promise<any>) => registered.set(method, handler),
+      } as any,
+      spawnSession,
+      stopSession: async () => true,
+      followLeaseManager,
+    });
+    const handler = registered.get(RPC_METHODS.DAEMON_DIRECT_SESSION_TAKEOVER);
+
+    try {
+      const first = handler!({ machineId: 'm1', sessionId: 'sess_happy_fence' });
+      await vi.waitFor(() => expect(spawnSession).toHaveBeenCalledTimes(1));
+      expect(viewerRelease).toHaveBeenCalledTimes(1);
+      expect(blockedDuringSpawn).not.toHaveBeenCalled();
+
+      await expect(handler!({ machineId: 'm1', sessionId: 'sess_happy_fence' })).resolves.toEqual({
+        ok: false,
+        errorCode: 'invalid_request',
+        error: 'takeover_in_progress',
+      });
+      expect(spawnSession).toHaveBeenCalledTimes(1);
+
+      resolveSpawn({ type: 'success', sessionId: 'sess_happy_fence' });
+      await expect(first).resolves.toEqual({ ok: true });
+    } finally {
+      await followLeaseManager.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('requires forceStop before taking over when a trusted local runner still owns the provider session', async () => {

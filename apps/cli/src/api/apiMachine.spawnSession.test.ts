@@ -37,6 +37,47 @@ describe('ApiMachineClient spawn-happy-session handler', () => {
     });
 
     expect(acquireFollowLease).not.toHaveBeenCalled();
+    await client.shutdown();
+  });
+
+  it('disposes direct follow leases through the machine RPC lifecycle on shutdown', async () => {
+    const machine: Machine = {
+      id: 'machine-direct-follow-dispose',
+      encryptionKey: new Uint8Array(32).fill(7),
+      encryptionVariant: 'legacy',
+      metadata: null,
+      metadataVersion: 0,
+      daemonState: null,
+      daemonStateVersion: 0,
+    };
+    const client = new ApiMachineClient('token', machine);
+    let followLeaseManager: any = null;
+    const release = vi.fn(async () => {});
+
+    client.setRPCHandlers({
+      spawnSession: async () => ({ type: 'success', sessionId: 'session-direct-follow-dispose' }),
+      stopSession: async () => true,
+      requestShutdown: () => {},
+    }, {
+      onDirectSessionFollowLeaseManagerReady: (manager) => {
+        followLeaseManager = manager;
+      },
+    });
+    await followLeaseManager.attach({
+      sessionId: 'session-direct-follow-dispose',
+      ttlMs: 30_000,
+      acquireFollowLease: async () => ({ release }),
+    });
+
+    await client.shutdown();
+    await client.shutdown();
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect((client as any).directSessionFollowLeaseManager).toBeNull();
+    await expect(followLeaseManager.attach({
+      sessionId: 'session-direct-follow-dispose',
+      ttlMs: 30_000,
+    })).rejects.toThrow('disposed');
   });
 
   it('forwards terminal spawn options to daemon spawnSession handler', async () => {

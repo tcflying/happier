@@ -20,6 +20,8 @@ export type ExistingSessionAttachContext = Readonly<{
   vendorResumeId: string | null;
   sessionPath: string | null;
   metadata: Record<string, unknown> | null;
+  /** True when the Happier transcript already contains committed rows. */
+  hasHistoricalTranscript: boolean;
 }>;
 
 export type ExistingSessionAttachContextFailureReason =
@@ -29,7 +31,8 @@ export type ExistingSessionAttachContextFailureReason =
   | 'fetchFailed'
   | 'sessionNotFound'
   | 'missingCredentials'
-  | 'invalidEncryptionKey';
+  | 'invalidEncryptionKey'
+  | 'nativeResumeIdMissing';
 
 export type ExistingSessionAttachContextFailure = Readonly<{
   ok: false;
@@ -68,6 +71,16 @@ function resolveExistingSessionPath(metadata: Record<string, unknown> | null): s
   return path || null;
 }
 
+function requiresStrictNativeResume(params: Readonly<{
+  agent: unknown;
+  vendorResumeId: string | null;
+  hasHistoricalTranscript: boolean;
+}>): boolean {
+  if (!params.hasHistoricalTranscript || params.vendorResumeId) return false;
+  const agent = normalizeString(params.agent).toLowerCase();
+  return agent === 'codex' || agent === 'claude' || agent === 'opencode';
+}
+
 function buildExistingSessionAttachContext(params: Readonly<{
   rawSession: Readonly<{
     metadata?: unknown;
@@ -77,6 +90,7 @@ function buildExistingSessionAttachContext(params: Readonly<{
   }>;
   agent: unknown;
   credentials: Credentials | null;
+  explicitVendorResumeId?: unknown;
 }>): ExistingSessionAttachContext | ExistingSessionAttachContextFailure {
   const metadata = resolveExistingSessionMetadata({
     rawSession: params.rawSession,
@@ -84,7 +98,22 @@ function buildExistingSessionAttachContext(params: Readonly<{
   });
   const sessionPath = resolveExistingSessionPath(metadata);
   const mode = resolveSessionStoredContentEncryptionMode(params.rawSession);
-  const lastObservedMessageSeq = resolveLastObservedMessageSeq(params.rawSession);
+  const sessionSeq = resolveLastObservedMessageSeq(params.rawSession);
+  const lastObservedMessageSeq = sessionSeq;
+  const hasHistoricalTranscript = sessionSeq !== undefined && sessionSeq > 0;
+  const vendorResumeId = normalizeString(params.explicitVendorResumeId)
+    || resolveVendorResumeIdForExistingSession({
+      agent: params.agent,
+      credentials: params.credentials,
+      rawSession: params.rawSession,
+    });
+  if (requiresStrictNativeResume({
+    agent: params.agent,
+    vendorResumeId,
+    hasHistoricalTranscript,
+  })) {
+    return { ok: false, reason: 'nativeResumeIdMissing' };
+  }
   if (mode === 'plain') {
     return {
       ok: true,
@@ -93,13 +122,10 @@ function buildExistingSessionAttachContext(params: Readonly<{
         encryptionMode: 'plain',
         ...(lastObservedMessageSeq !== undefined ? { lastObservedMessageSeq } : {}),
       },
-      vendorResumeId: resolveVendorResumeIdForExistingSession({
-        agent: params.agent,
-        credentials: params.credentials,
-        rawSession: params.rawSession,
-      }),
+      vendorResumeId,
       sessionPath,
       metadata,
+      hasHistoricalTranscript,
     };
   }
 
@@ -117,13 +143,10 @@ function buildExistingSessionAttachContext(params: Readonly<{
       encryptionVariant: ctx.encryptionVariant,
       ...(lastObservedMessageSeq !== undefined ? { lastObservedMessageSeq } : {}),
     },
-    vendorResumeId: resolveVendorResumeIdForExistingSession({
-      agent: params.agent,
-      credentials: params.credentials,
-      rawSession: params.rawSession,
-    }),
+    vendorResumeId,
     sessionPath,
     metadata,
+    hasHistoricalTranscript,
   };
 }
 
@@ -132,6 +155,7 @@ export async function resolveExistingSessionAttachContext(_params: Readonly<{
   sessionId: string;
   agent: unknown;
   credentials: Credentials | null;
+  explicitVendorResumeId?: string | null;
   reason?: SessionSnapshotRefreshReasonInput;
 }>): Promise<ExistingSessionAttachContext | ExistingSessionAttachContextFailure> {
   const token = normalizeString(_params.token);
@@ -152,6 +176,7 @@ export async function resolveExistingSessionAttachContext(_params: Readonly<{
       rawSession: raw,
       agent: _params.agent,
       credentials: _params.credentials,
+      explicitVendorResumeId: _params.explicitVendorResumeId,
     });
   } catch (error) {
     if (isAuthenticationError(error)) return { ok: false, reason: 'notAuthenticated' };

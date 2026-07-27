@@ -162,6 +162,9 @@ import {
   createSessionRunnerRespawnManager,
   type SessionRunnerRespawnTerminalReason,
 } from './processSupervision/sessionRunnerRespawn';
+import { migrateOldSessionRunners } from './processSupervision/migrateOldSessionRunners';
+import { readSessionRunnerLockStatus } from './sessionRunnerLock';
+import { resolveSessionRunnerBuildId } from './sessionRunnerBuildId';
 import {
   buildSessionRunnerRespawnDescriptorV1FromSpawnOptions,
   buildTrackedSessionRespawnEnvironmentVariables,
@@ -1574,6 +1577,12 @@ function mapExistingSessionAttachFailureToSpawnError(reason: import('./sessionEn
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.RESUME_MISSING_ENCRYPTION_KEY,
         errorMessage: 'Failed to open session encryption key for resume.',
+      };
+    case 'nativeResumeIdMissing':
+      return {
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.RESUME_NOT_SUPPORTED,
+        errorMessage: 'Historical native session cannot be resumed without its provider resume id.',
       };
   }
 }
@@ -6105,6 +6114,21 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           materializationKey: input.materializationKey,
         });
       },
+      // Keep migration on the canonical planned-restart path. That preserves the
+      // runtime owner proof, the intended-restart budget, and single-spawn
+      // ownership rather than issuing a second raw process signal.
+      handleMigrateOldSessionRunners: async () => await migrateOldSessionRunners({
+        trackedSessions: getCurrentChildren(),
+        currentCliVersion: packageJson.version,
+        currentRunnerBuildId: await resolveSessionRunnerBuildId(),
+        readSessionRunnerLockStatus,
+        requestRestart: async (tracked) => {
+          const sessionId = String(tracked.happySessionId ?? '').trim();
+          if (!sessionId) return false;
+          const restart = await requestVersionRuntimeRefreshWithDeferral({ sessionId, tracked });
+          return restart.signaled;
+        },
+      }),
       isShuttingDown: () => shutdownInitiated || connectedServiceQuotaProducersQuiesced,
       handleSessionRunnerRestart: async (request: RestartSessionRunnerRequestV1) => {
         const tracked = getCurrentChildren().find((child) => child.happySessionId === request.sessionId) ?? null;

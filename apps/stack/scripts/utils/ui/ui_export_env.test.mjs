@@ -7,6 +7,7 @@ test('buildStackWebExportEnv forces stack server context and leaves server URL e
   const env = buildStackWebExportEnv({ baseEnv: { ...process.env } });
 
   assert.equal(env.NODE_ENV, 'production');
+  assert.equal(env.HAPPIER_UI_METRO_MODE, 'build');
   assert.equal(env.EXPO_PUBLIC_DEBUG, '0');
   assert.equal(env.EXPO_PUBLIC_HAPPY_SERVER_CONTEXT, 'stack');
   assert.equal(env.EXPO_PUBLIC_HAPPIER_SERVER_URL, '');
@@ -18,6 +19,7 @@ test('buildStackTauriExportEnv forces stack server context and hardcodes API bas
   const env = buildStackTauriExportEnv({ baseEnv: { ...process.env }, tauriServerUrl });
 
   assert.equal(env.NODE_ENV, 'production');
+  assert.equal(env.HAPPIER_UI_METRO_MODE, 'build');
   assert.equal(env.EXPO_PUBLIC_DEBUG, '0');
   assert.equal(env.EXPO_PUBLIC_HAPPY_SERVER_CONTEXT, 'stack');
   assert.equal(env.EXPO_PUBLIC_HAPPIER_SERVER_URL, tauriServerUrl);

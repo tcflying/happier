@@ -1,5 +1,6 @@
 import { readSettings, updateSettings } from '@/persistence';
 import { deriveServerIdFromName, deriveServerIdFromUrl, sanitizeServerIdForFilesystem } from '@/server/serverId';
+import { assertServerProfileUrlRoles } from '@/server/serverProfileUrlRoles';
 import { isLocalishServerUrl } from '@/server/serverUrlClassification';
 import { createServerUrlComparableKey } from '@happier-dev/protocol';
 import { existsSync } from 'node:fs';
@@ -289,6 +290,11 @@ export async function addServerProfile(opts: Readonly<{
   const webappUrl = String(opts.webappUrl ?? '').trim();
   const shouldUse = opts.use === true;
   const now = Date.now();
+  assertServerProfileUrlRoles({
+    serverUrl,
+    ...(localServerUrl ? { localServerUrl } : {}),
+    webappUrl,
+  });
 
   await updateSettings((current: any) => {
     const servers = current?.servers && typeof current.servers === 'object' ? current.servers : {};
@@ -352,6 +358,11 @@ export async function upsertServerProfileByUrl(opts: Readonly<{
   const webappUrl = String(opts.webappUrl ?? '').trim();
   const shouldUse = opts.use === true;
   const now = Date.now();
+  assertServerProfileUrlRoles({
+    serverUrl,
+    ...(localServerUrl ? { localServerUrl } : {}),
+    webappUrl,
+  });
 
   let resolvedId: string | null = null;
   await updateSettings((current: any) => {

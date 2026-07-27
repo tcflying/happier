@@ -13,6 +13,13 @@ describe('Vitest lane separation', () => {
         expect(slowConfig.test?.globalSetup).toEqual(['./src/test-setup.slow.ts']);
     });
 
+    it('uses the shared mjs shebang transform in every CLI Vitest lane', () => {
+        for (const config of [unitConfig, integrationConfig, slowConfig]) {
+            const plugins = Array.isArray(config.plugins) ? config.plugins : [];
+            expect(plugins.some((plugin) => plugin.name === 'happier-vitest-strip-mjs-shebang')).toBe(true);
+        }
+    });
+
     it('keeps slow tests out of integration lane include patterns', () => {
         const include = integrationConfig.test?.include;
         expect(Array.isArray(include)).toBe(true);

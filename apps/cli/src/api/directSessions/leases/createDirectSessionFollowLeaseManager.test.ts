@@ -64,6 +64,43 @@ describe('createDirectSessionFollowLeaseManager', () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it('shares one provider follow stream across viewers and releases it only after the last detach', async () => {
+    const sharedRelease = vi.fn(async () => {});
+    const acquireFollowLease = vi.fn(async () => ({ release: sharedRelease }));
+    let leaseIndex = 0;
+    const manager = createDirectSessionFollowLeaseManager({
+      randomId: () => `lease-shared-${++leaseIndex}`,
+    });
+
+    const first = await manager.attach({
+      sessionId: 'session-shared-viewers',
+      ttlMs: 30_000,
+      acquireFollowLease,
+    });
+    const second = await manager.attach({
+      sessionId: 'session-shared-viewers',
+      ttlMs: 30_000,
+      acquireFollowLease,
+    });
+
+    expect(acquireFollowLease).toHaveBeenCalledTimes(1);
+    expect(manager.countActiveLeases('session-shared-viewers')).toBe(2);
+
+    await manager.detach({
+      sessionId: 'session-shared-viewers',
+      leaseId: first.leaseId,
+    });
+    expect(sharedRelease).not.toHaveBeenCalled();
+    expect(manager.countActiveLeases('session-shared-viewers')).toBe(1);
+
+    await manager.detach({
+      sessionId: 'session-shared-viewers',
+      leaseId: second.leaseId,
+    });
+    expect(sharedRelease).toHaveBeenCalledTimes(1);
+    expect(manager.countActiveLeases('session-shared-viewers')).toBe(0);
+  });
+
   it('releases follow leases automatically when the viewer lease expires', async () => {
     let nowMs = 5_000;
     const release = vi.fn(async () => {});
@@ -219,7 +256,7 @@ describe('createDirectSessionFollowLeaseManager', () => {
     expect(viewerRelease).not.toHaveBeenCalled();
   });
 
-  it('releases active follow streams and disables background reacquisition when takeover succeeds', async () => {
+  it('releases the shared viewer follow stream and disables background reacquisition when takeover succeeds', async () => {
     const firstRelease = vi.fn(async () => {});
     const secondRelease = vi.fn(async () => {});
     const backgroundAcquire = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
@@ -248,7 +285,7 @@ describe('createDirectSessionFollowLeaseManager', () => {
 
     expect(released).toEqual({ releasedViewerFollowLeases: 2, releasedBackgroundFollowLease: false });
     expect(firstRelease).toHaveBeenCalledTimes(1);
-    expect(secondRelease).toHaveBeenCalledTimes(1);
+    expect(secondRelease).not.toHaveBeenCalled();
 
     await manager.detach({ sessionId: 'session-takeover', leaseId: 'lease-1' });
     await manager.detach({ sessionId: 'session-takeover', leaseId: 'lease-2' });
@@ -277,6 +314,41 @@ describe('createDirectSessionFollowLeaseManager', () => {
     expect(background.leaseAcquired).toBe(false);
   });
 
+  it('only lets the current takeover token commit or roll back its fence', async () => {
+    const release = vi.fn(async () => {});
+    const initialAcquire = vi
+      .fn<() => Promise<DirectSessionFollowLease | null>>()
+      .mockResolvedValueOnce({ release })
+      .mockResolvedValueOnce({ release: vi.fn(async () => {}) });
+    const blockedAcquire = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const manager = createDirectSessionFollowLeaseManager({ randomId: () => 'takeover-token' });
+
+    await manager.attach({
+      sessionId: 'session-takeover-token',
+      ttlMs: 30_000,
+      acquireFollowLease: initialAcquire,
+    });
+    const first = await manager.beginTakeoverFence('session-takeover-token');
+    expect(first).toMatchObject({ token: 'direct-takeover-takeover-token-1' });
+    expect(release).toHaveBeenCalledTimes(1);
+
+    expect(await manager.rollbackTakeoverFence('session-takeover-token', first!.token)).toBe(true);
+    expect(initialAcquire).toHaveBeenCalledTimes(2);
+    const second = await manager.beginTakeoverFence('session-takeover-token');
+    expect(second).toMatchObject({ token: 'direct-takeover-takeover-token-2' });
+    expect(await manager.rollbackTakeoverFence('session-takeover-token', first!.token)).toBe(false);
+
+    await manager.attach({
+      sessionId: 'session-takeover-token',
+      leaseId: 'viewer-during-fence',
+      ttlMs: 30_000,
+      acquireFollowLease: blockedAcquire,
+    });
+    expect(blockedAcquire).not.toHaveBeenCalled();
+    expect(await manager.commitTakeoverFence('session-takeover-token', second!.token)).toBe(true);
+    expect(await manager.commitTakeoverFence('session-takeover-token', second!.token)).toBe(false);
+  });
+
   it('releases a viewer follow lease that finishes acquiring after takeover wins the race', async () => {
     let resolveAcquire!: (lease: DirectSessionFollowLease) => void;
     const acquiredRelease = vi.fn(async () => {});
@@ -296,6 +368,101 @@ describe('createDirectSessionFollowLeaseManager', () => {
     await attaching;
 
     expect(acquiredRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates concurrent detached background acquisition and releases a late result after takeover', async () => {
+    let resolveAcquire!: (lease: DirectSessionFollowLease) => void;
+    const lateRelease = vi.fn(async () => {});
+    const acquireFollowLease = vi.fn(() => new Promise<DirectSessionFollowLease>((resolve) => {
+      resolveAcquire = resolve;
+    }));
+    const manager = createDirectSessionFollowLeaseManager();
+
+    const first = manager.setBackgroundFollowEnabled({
+      sessionId: 'session-background-racing',
+      enabled: true,
+      acquireFollowLease,
+    });
+    const second = manager.setBackgroundFollowEnabled({
+      sessionId: 'session-background-racing',
+      enabled: true,
+      acquireFollowLease,
+    });
+    await vi.waitFor(() => expect(acquireFollowLease).toHaveBeenCalledTimes(1));
+
+    await manager.releaseForTakeover('session-background-racing');
+    resolveAcquire({ release: lateRelease });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { enabled: true, leaseAcquired: false },
+      { enabled: true, leaseAcquired: false },
+    ]);
+    expect(lateRelease).toHaveBeenCalledTimes(1);
+    expect(manager.hasBackgroundFollowLease('session-background-racing')).toBe(false);
+  });
+
+  it('releases a detached background lease that finishes after its policy was disabled', async () => {
+    let resolveAcquire!: (lease: DirectSessionFollowLease) => void;
+    const lateRelease = vi.fn(async () => {});
+    const manager = createDirectSessionFollowLeaseManager();
+    const pending = manager.setBackgroundFollowEnabled({
+      sessionId: 'session-background-disabled',
+      enabled: true,
+      acquireFollowLease: () => new Promise<DirectSessionFollowLease>((resolve) => {
+        resolveAcquire = resolve;
+      }),
+    });
+    await vi.waitFor(() => expect(resolveAcquire).toBeTypeOf('function'));
+
+    await manager.setBackgroundFollowEnabled({
+      sessionId: 'session-background-disabled',
+      enabled: false,
+    });
+    resolveAcquire({ release: lateRelease });
+    await expect(pending).resolves.toEqual({ enabled: true, leaseAcquired: false });
+
+    expect(lateRelease).toHaveBeenCalledTimes(1);
+    expect(manager.hasBackgroundFollowLease('session-background-disabled')).toBe(false);
+  });
+
+  it('disposes shared viewer and background follow leases exactly once without waiting for a pending provider acquisition', async () => {
+    const viewerRelease = vi.fn(async () => {});
+    const backgroundRelease = vi.fn(async () => {});
+    let resolveLateAcquire!: (lease: DirectSessionFollowLease) => void;
+    const lateRelease = vi.fn(async () => {});
+    const manager = createDirectSessionFollowLeaseManager({ randomId: () => 'lease-dispose' });
+
+    await manager.attach({
+      sessionId: 'session-dispose-viewer',
+      ttlMs: 30_000,
+      acquireFollowLease: async () => ({ release: viewerRelease }),
+    });
+    await manager.setBackgroundFollowEnabled({
+      sessionId: 'session-dispose-background',
+      enabled: true,
+      acquireFollowLease: async () => ({ release: backgroundRelease }),
+    });
+    const pendingBackground = manager.setBackgroundFollowEnabled({
+      sessionId: 'session-dispose-late',
+      enabled: true,
+      acquireFollowLease: () => new Promise<DirectSessionFollowLease>((resolve) => {
+        resolveLateAcquire = resolve;
+      }),
+    });
+    await vi.waitFor(() => expect(resolveLateAcquire).toBeTypeOf('function'));
+
+    await manager.dispose();
+    await manager.dispose();
+
+    expect(viewerRelease).toHaveBeenCalledTimes(1);
+    expect(backgroundRelease).toHaveBeenCalledTimes(1);
+    expect(manager.countActiveLeases('session-dispose-viewer')).toBe(0);
+    expect(manager.hasBackgroundFollowLease('session-dispose-background')).toBe(false);
+    await expect(manager.attach({ sessionId: 'session-dispose-viewer', ttlMs: 1_000 })).rejects.toThrow('disposed');
+
+    resolveLateAcquire({ release: lateRelease });
+    await pendingBackground;
+    expect(lateRelease).toHaveBeenCalledTimes(1);
   });
 
   it('releases an active background lease and can reacquire after runtime ownership ends', async () => {

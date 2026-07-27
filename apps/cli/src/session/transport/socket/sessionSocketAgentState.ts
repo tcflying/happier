@@ -24,6 +24,34 @@ export type AgentStateSummary = Readonly<{
   pendingRequestsCount: number;
 }>;
 
+export interface SessionTurnActivityRecheckSnapshot {
+  readonly activity: SessionTurnActivity;
+  readonly sessionProjection: unknown;
+}
+
+type SessionTurnActivityRecheckResult = SessionTurnActivity | SessionTurnActivityRecheckSnapshot;
+
+const SESSION_BUSY_RECHECK_MAX_MS = 30_000;
+
+export function calculateSessionBusyRecheckDelayMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+): number {
+  const normalizedAttempt = Number.isFinite(attempt) ? Math.max(0, Math.trunc(attempt)) : 0;
+  const normalizedBase = Number.isFinite(baseDelayMs) ? Math.max(1, Math.trunc(baseDelayMs)) : 1;
+  const normalizedMax = Number.isFinite(maxDelayMs)
+    ? Math.max(normalizedBase, Math.trunc(maxDelayMs))
+    : normalizedBase;
+  return Math.min(normalizedMax, normalizedBase * (2 ** Math.min(normalizedAttempt, 20)));
+}
+
+function isSessionTurnActivityRecheckSnapshot(
+  value: SessionTurnActivityRecheckResult,
+): value is SessionTurnActivityRecheckSnapshot {
+  return typeof value === 'object' && value !== null && 'activity' in value && 'sessionProjection' in value;
+}
+
 export function summarizeAgentState(value: unknown): AgentStateSummary {
   const obj = value && typeof value === 'object' && !Array.isArray(value) ? (value as any) : null;
   const controlledByUser = typeof obj?.controlledByUser === 'boolean' ? obj.controlledByUser : undefined;
@@ -95,9 +123,10 @@ export async function waitForIdleViaSocket(params: Readonly<{
   timeoutMs: number;
   initialTurnActivity: SessionTurnActivity;
   initialTurnActivityRequiresTranscriptIdleEvidence?: boolean;
-  recheckTurnActivity?: () => Promise<SessionTurnActivity>;
+  recheckTurnActivity?: () => Promise<SessionTurnActivityRecheckResult>;
   initialAgentStateSummary?: AgentStateSummary | null;
   preferProjectionUpdates?: boolean;
+  signal?: AbortSignal;
   // Seed with the latest agentState ciphertext from snapshot, if available.
   initialAgentStateCiphertextBase64: string | null;
 }>): Promise<{ idle: true; observedAt: number }> {
@@ -129,6 +158,8 @@ export async function waitForIdleViaSocket(params: Readonly<{
     let hasFreshAgentStateObservation = false;
     let idleConfirmTimer: ReturnType<typeof setTimeout> | null = null;
     let busyRecheckTimer: ReturnType<typeof setTimeout> | null = null;
+    let busyRecheckAttempt = 0;
+    let onAbort: (() => void) | null = null;
 
     const cleanup = () => {
       if (settled) return;
@@ -140,6 +171,10 @@ export async function waitForIdleViaSocket(params: Readonly<{
       if (busyRecheckTimer) {
         clearTimeout(busyRecheckTimer);
         busyRecheckTimer = null;
+      }
+      if (onAbort) {
+        params.signal?.removeEventListener('abort', onAbort);
+        onAbort = null;
       }
       try {
         socket.off('update', onUpdate as any);
@@ -159,11 +194,34 @@ export async function waitForIdleViaSocket(params: Readonly<{
       cleanup();
       reject(new Error('timeout'));
     }, timeoutMs);
+    onAbort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error('aborted'));
+    };
+    params.signal?.addEventListener('abort', onAbort, { once: true });
 
-    const applyRecheckedTurnActivity = (activity: SessionTurnActivity) => {
+    const applyRecheckedTurnActivity = (
+      result: SessionTurnActivityRecheckResult,
+    ): Readonly<{ activity: SessionTurnActivity; reusedProjection: boolean }> => {
+      const activity = isSessionTurnActivityRecheckSnapshot(result) ? result.activity : result;
       pendingUserTurns = activity.pendingUserTurns;
       activeTaskInFlight = activity.activeTaskInFlight;
       requiresTranscriptIdleEvidence = activity.turnInFlight;
+      if (!isSessionTurnActivityRecheckSnapshot(result)) {
+        return { activity, reusedProjection: false };
+      }
+
+      const projectedActivity = detectSessionTurnActivityFromProjection(result.sessionProjection);
+      const projectedSummary = summarizeProjectedPendingRequests(result.sessionProjection);
+      if (projectedActivity) {
+        preferProjectionUpdates = true;
+        pendingUserTurns = projectedActivity.pendingUserTurns;
+        activeTaskInFlight = projectedActivity.activeTaskInFlight;
+      }
+      latestSummary = projectedSummary ?? { pendingRequestsCount: activity.turnInFlight ? 1 : 0 };
+      hasFreshAgentStateObservation = true;
+      return { activity, reusedProjection: true };
     };
 
     const resolveIdle = () => {
@@ -180,9 +238,8 @@ export async function waitForIdleViaSocket(params: Readonly<{
         return false;
       }
       try {
-        const latestTurnActivity = await params.recheckTurnActivity();
-        applyRecheckedTurnActivity(latestTurnActivity);
-        return !latestTurnActivity.turnInFlight;
+        const latestTurnActivity = applyRecheckedTurnActivity(await params.recheckTurnActivity());
+        return !latestTurnActivity.activity.turnInFlight;
       } catch {
         return false;
       }
@@ -208,27 +265,40 @@ export async function waitForIdleViaSocket(params: Readonly<{
       if (!waitingForIdleAfterFreshBusy) return;
 
       const remainingMs = Math.max(1, deadlineMs - Date.now());
-      const delayMs = Math.min(resolveSessionControlWaitIdleConfirmMs(), remainingMs);
+      if (busyRecheckTimer) return;
 
-      if (busyRecheckTimer) {
-        clearTimeout(busyRecheckTimer);
-        busyRecheckTimer = null;
-      }
-
+      const delayMs = Math.min(
+        calculateSessionBusyRecheckDelayMs(
+          busyRecheckAttempt,
+          resolveSessionControlWaitIdleConfirmMs(),
+          SESSION_BUSY_RECHECK_MAX_MS,
+        ),
+        remainingMs,
+      );
       busyRecheckTimer = setTimeout(() => {
         busyRecheckTimer = null;
+        busyRecheckAttempt += 1;
         void (async () => {
           if (settled) return;
           try {
-            const latestTurnActivity = await params.recheckTurnActivity?.();
-            if (!latestTurnActivity) {
+            const recheckResult = await params.recheckTurnActivity?.();
+            if (!recheckResult) {
               scheduleBusyTurnActivityRecheck();
               return;
             }
-            applyRecheckedTurnActivity(latestTurnActivity);
-            if (latestTurnActivity.turnInFlight) {
+            const latestTurnActivity = applyRecheckedTurnActivity(recheckResult);
+            if (latestTurnActivity.activity.turnInFlight) {
               waitingForIdleAfterFreshBusy = true;
               scheduleBusyTurnActivityRecheck();
+              return;
+            }
+
+            if (latestTurnActivity.reusedProjection) {
+              if (hasTurnInFlight() || !isIdle(latestSummary)) {
+                scheduleBusyTurnActivityRecheck();
+                return;
+              }
+              resolveIdle();
               return;
             }
 
@@ -437,6 +507,11 @@ export async function waitForIdleViaSocket(params: Readonly<{
       resolveIdle();
     };
 
+    if (params.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
     socket.on('connect_error', onConnectError as any);
     socket.on('update', onUpdate as any);
     socket.connect();
@@ -449,9 +524,8 @@ export async function waitForIdleViaSocket(params: Readonly<{
         void (async () => {
           if (params.recheckTurnActivity) {
             try {
-              const latestTurnActivity = await params.recheckTurnActivity();
-              applyRecheckedTurnActivity(latestTurnActivity);
-              if (latestTurnActivity.turnInFlight) {
+            const latestTurnActivity = applyRecheckedTurnActivity(await params.recheckTurnActivity());
+            if (latestTurnActivity.activity.turnInFlight) {
                 waitingForIdleAfterFreshBusy = true;
                 scheduleBusyTurnActivityRecheck();
                 return;

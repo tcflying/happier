@@ -1,5 +1,6 @@
 import {
   inspectDaemonRunningStateAndCleanupStaleState,
+  requestDaemonSessionRunnerMigration,
   restartAllDaemonSessionRunners,
   stopDaemon,
 } from '@/daemon/controlClient';
@@ -67,6 +68,12 @@ function isSameDaemonIdentity(
 export type RestartDaemonAndWaitParams = Readonly<{
   stopSessions?: boolean;
   takeover?: boolean;
+  /**
+   * Explicitly migrate only runners whose lifecycle/build metadata is stale.
+   * Kept separate from `restartSessionRunners`, which restarts every eligible
+   * runner on the current CLI.
+   */
+  migrateSessions?: boolean;
   restartSessionRunners?: boolean;
   restartSessionRunnersMode?: DaemonSessionRunnerRestartMode;
 }>;
@@ -199,6 +206,17 @@ export async function restartDaemonAndWait(params: RestartDaemonAndWaitParams = 
     || !isSameDaemonIdentity(provenIdentityFingerprint, stableIdentityFingerprint)
   ) {
     return restartFailed();
+  }
+
+  if (params.migrateSessions === true) {
+    try {
+      const migration = await requestDaemonSessionRunnerMigration();
+      if (migration.migrationFailed > 0) {
+        return restartFailed();
+      }
+    } catch {
+      return restartFailed();
+    }
   }
 
   let sessionRunnerRestart: RestartAllDaemonSessionRunnersResult | undefined;

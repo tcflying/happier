@@ -12,6 +12,7 @@ export type SessionRunnerLifecycleState = Readonly<{
   cleanupOutcome?: SessionRunnerCleanupOutcome;
   cliVersion: string;
   runnerBuildId?: string;
+  controlPort?: number;
 }>;
 
 export function isSessionRunnerLifecycleAuthoritativelyStale(params: Readonly<{

@@ -85,6 +85,37 @@ const {
         accountId: 'acct_123',
       },
     },
+    runtimeDiagnostics: [
+      {
+        code: 'runner_cleanup_overdue',
+        severity: 'warning',
+        data: {
+          machineId: 'machine_123',
+          sessionId: 'session_stale',
+          pid: 999,
+          generationId: 'generation_stale',
+          processState: 'zombie',
+          lastHeartbeatAtMs: 1_765_000_000_000,
+          cleanupPhase: 'cleanup',
+          recoveryRecommendation: 'Restart the daemon and resume the session.',
+          deadlineAtMs: 1_765_000_030_000,
+          overdueByMs: 45_000,
+        },
+      },
+      {
+        code: 'server_webapp_role_port_drift',
+        severity: 'error',
+        data: {
+          serverId: 'local',
+          resolvedServerUrl: 'http://127.0.0.1:52211',
+          resolvedWebappUrl: 'http://localhost:52211',
+          profileServerUrl: 'http://127.0.0.1:52211',
+          profileWebappUrl: 'http://localhost:52211',
+          driftKinds: ['same_endpoint'],
+          recoveryRecommendation: 'Set distinct relay and web app URLs.',
+        },
+      },
+    ],
   })),
   checkIfDaemonRunningAndCleanupStaleStateMock: vi.fn(async () => true),
   findAllHappyProcessesMock: vi.fn(async () => []),
@@ -179,8 +210,35 @@ describe('doctor cleanup ownership summary', () => {
       expect(output.text()).toContain('http://127.0.0.1:4400');
       expect(output.text()).toContain('Current status:');
       expect(output.text()).toContain('happier doctor repair');
+      expect(output.text()).toContain('Runtime recovery diagnostics');
+      expect(output.text()).toContain('runner_cleanup_overdue');
+      expect(output.text()).toContain('Machine: machine_123');
+      expect(output.text()).toContain('Session: session_stale');
+      expect(output.text()).toContain('Runner generation: generation_stale');
+      expect(output.text()).toContain('Last heartbeat: 1765000000000');
+      expect(output.text()).toContain('Cleanup phase: cleanup');
+      expect(output.text()).toContain('Recovery: Restart the daemon and resume the session.');
+      expect(output.text()).toContain('BLOCKING server_webapp_role_port_drift');
+      expect(output.text()).toContain('Server profile: local');
+      expect(output.text()).toContain('Recovery: Set distinct relay and web app URLs.');
       expect(readDaemonStateMock).not.toHaveBeenCalled();
       expect(checkIfDaemonRunningAndCleanupStaleStateMock).not.toHaveBeenCalled();
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('shows blocking runtime recovery diagnostics in daemon-only mode', async () => {
+    const output = captureConsoleText();
+
+    try {
+      await runDoctorCommand('daemon');
+
+      expect(output.text()).toContain('Runtime recovery diagnostics');
+      expect(output.text()).toContain('BLOCKING server_webapp_role_port_drift');
+      expect(output.text()).toContain('Server profile: local');
+      expect(output.text()).toContain('Recovery: Set distinct relay and web app URLs.');
+      expect(output.text()).not.toContain('Settings (settings.json)');
     } finally {
       output.restore();
     }

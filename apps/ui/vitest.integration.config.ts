@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import baseConfig from './vitest.config';
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating';
+import { vitestMjsShebangPlugin } from '../../scripts/testing/vitestMjsShebangPlugin';
 
 const base = baseConfig as any;
 
@@ -88,4 +89,5 @@ export default defineConfig({
             { find: '@', replacement: resolve('./sources') },
         ],
     },
+    plugins: [vitestMjsShebangPlugin],
 });

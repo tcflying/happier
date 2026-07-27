@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { TrackedSession } from '../types';
 import { isSessionRunnerActive, probeSessionRunnerServiceability, resolveSessionRunnerResumeDecision } from './isSessionRunnerActive';
@@ -90,6 +90,7 @@ describe('isSessionRunnerActive', () => {
   });
 
   it('treats a healthy authoritative runner heartbeat as active', async () => {
+    const challengeSessionRunnerControl = vi.fn(async () => true);
     const res = await isSessionRunnerActive({
       sessionId: 'sess_healthy',
       trackedSessions: [],
@@ -112,12 +113,136 @@ describe('isSessionRunnerActive', () => {
           phaseStartedAtMs: 9_000,
           heartbeatAtMs: 9_999,
           cliVersion: '1.2.3',
+          controlPort: 43_210,
         },
       }),
       getProcessCommandHash: async () => 'a'.repeat(64),
+      challengeSessionRunnerControl,
     });
 
     expect(res).toBe(true);
+    expect(challengeSessionRunnerControl).toHaveBeenCalledWith({
+      sessionId: 'sess_healthy',
+      generationId: 'generation-healthy',
+      controlPort: 43_210,
+    });
+  });
+
+  it('quarantines a generation whose nonce challenge fails instead of treating its live PID as active', async () => {
+    const challengeSessionRunnerControl = vi.fn(async () => false);
+    const quarantineSessionRunnerGeneration = vi.fn(async () => ({
+      ok: true as const,
+      generationId: 'generation-control-failed',
+      quarantinePath: 'runner.quarantined',
+    }));
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_control_failed',
+      trackedSessions: [],
+      nowMs: 10_000,
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: {
+          sessionId: 'sess_control_failed',
+          pid: 123,
+          acquiredAtMs: 1,
+          generationId: 'generation-control-failed',
+          processCommandHash: 'a'.repeat(64),
+        },
+        lifecycle: {
+          sessionId: 'sess_control_failed',
+          pid: 123,
+          generationId: 'generation-control-failed',
+          phase: 'running',
+          phaseStartedAtMs: 9_000,
+          heartbeatAtMs: 9_999,
+          cliVersion: '1.2.3',
+          controlPort: 43_210,
+        },
+      }),
+      getProcessCommandHash: async () => 'a'.repeat(64),
+      challengeSessionRunnerControl,
+      quarantineSessionRunnerGeneration,
+    } as any);
+
+    expect(res).toBe(false);
+    expect(quarantineSessionRunnerGeneration).toHaveBeenCalledWith({
+      sessionId: 'sess_control_failed',
+      expectedGenerationId: 'generation-control-failed',
+      reason: 'control_challenge_failed',
+    });
+  });
+
+  it('keeps a failed control generation occupied when quarantine cannot fence it', async () => {
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_control_unfenced',
+      trackedSessions: [],
+      nowMs: 10_000,
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: {
+          sessionId: 'sess_control_unfenced',
+          pid: 123,
+          acquiredAtMs: 1,
+          generationId: 'generation-control-unfenced',
+          processCommandHash: 'a'.repeat(64),
+        },
+        lifecycle: {
+          sessionId: 'sess_control_unfenced',
+          pid: 123,
+          generationId: 'generation-control-unfenced',
+          phase: 'running',
+          phaseStartedAtMs: 9_000,
+          heartbeatAtMs: 9_999,
+          cliVersion: '1.2.3',
+          controlPort: 43_210,
+        },
+      }),
+      getProcessCommandHash: async () => 'a'.repeat(64),
+      challengeSessionRunnerControl: async () => false,
+      quarantineSessionRunnerGeneration: async () => ({
+        ok: false,
+        reason: 'generation_changed',
+      }),
+    });
+
+    expect(res).toBe(true);
+  });
+
+  it('keeps a newly acquired generation occupied while its control port is being published', async () => {
+    const quarantineSessionRunnerGeneration = vi.fn();
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_control_starting',
+      trackedSessions: [],
+      nowMs: 10_100,
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: {
+          sessionId: 'sess_control_starting',
+          pid: 123,
+          acquiredAtMs: 10_000,
+          generationId: 'generation-control-starting',
+          processCommandHash: 'a'.repeat(64),
+        },
+        lifecycle: {
+          sessionId: 'sess_control_starting',
+          pid: 123,
+          generationId: 'generation-control-starting',
+          phase: 'running',
+          phaseStartedAtMs: 10_000,
+          heartbeatAtMs: 10_100,
+          cliVersion: '2.0.0',
+        },
+      }),
+      getProcessCommandHash: async () => 'a'.repeat(64),
+      quarantineSessionRunnerGeneration,
+      controlChallengeStartupGraceMs: 5_000,
+    } as any);
+
+    expect(res).toBe(true);
+    expect(quarantineSessionRunnerGeneration).not.toHaveBeenCalled();
   });
 
   it('treats cleanup past its authoritative deadline as inactive even while the PID is live', async () => {
@@ -147,6 +272,11 @@ describe('isSessionRunnerActive', () => {
         },
       }),
       getProcessCommandHash: async () => 'a'.repeat(64),
+      quarantineSessionRunnerGeneration: async () => ({
+        ok: true,
+        generationId: 'generation-cleanup',
+        quarantinePath: 'runner.quarantined',
+      }),
     });
 
     expect(res).toBe(false);
@@ -179,6 +309,11 @@ describe('isSessionRunnerActive', () => {
         },
       }),
       getProcessCommandHash: async () => 'a'.repeat(64),
+      quarantineSessionRunnerGeneration: async () => ({
+        ok: true,
+        generationId: 'generation-heartbeat',
+        quarantinePath: 'runner.quarantined',
+      }),
     });
 
     expect(res).toBe(false);
@@ -311,6 +446,11 @@ describe('isSessionRunnerActive', () => {
         },
       }),
       getProcessCommandHash: async () => 'a'.repeat(64),
+      quarantineSessionRunnerGeneration: async () => ({
+        ok: true,
+        generationId: 'generation-stale',
+        quarantinePath: 'runner.quarantined',
+      }),
     });
 
     expect(res).toBe(false);

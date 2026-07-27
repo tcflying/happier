@@ -78,6 +78,65 @@ describe('server profiles', () => {
     });
   });
 
+  it('rejects a loopback web app URL that points at the relay endpoint', async () => {
+    await withTempDir('happier-cli-servers-role-conflict-', async (homeDir) => {
+      patchServerProfileEnv({
+        HAPPIER_HOME_DIR: homeDir,
+        HAPPIER_SERVER_URL: undefined,
+        HAPPIER_WEBAPP_URL: undefined,
+      });
+
+      vi.resetModules();
+      const { addServerProfile, listServerProfiles } = await import('./serverProfiles');
+
+      await expect(addServerProfile({
+        name: 'local-stack',
+        serverUrl: 'http://127.0.0.1:52211',
+        webappUrl: 'http://localhost:52211',
+        use: true,
+      })).rejects.toMatchObject({
+        code: 'server_webapp_same_relay_endpoint',
+      });
+
+      expect((await listServerProfiles()).map((profile) => profile.id)).toEqual(['cloud']);
+    });
+  });
+
+  it('rejects an upsert whose web app aliases localServerUrl without mutating the profile', async () => {
+    await withTempDir('happier-cli-servers-local-role-conflict-', async (homeDir) => {
+      patchServerProfileEnv({
+        HAPPIER_HOME_DIR: homeDir,
+        HAPPIER_SERVER_URL: undefined,
+        HAPPIER_WEBAPP_URL: undefined,
+      });
+
+      vi.resetModules();
+      const {
+        addServerProfile,
+        getServerProfile,
+        upsertServerProfileByUrl,
+      } = await import('./serverProfiles');
+
+      await addServerProfile({
+        name: 'local-stack',
+        serverUrl: 'https://relay.example.test',
+        localServerUrl: 'http://127.0.0.1:52211',
+        webappUrl: 'http://127.0.0.1:18287',
+      });
+
+      await expect(upsertServerProfileByUrl({
+        name: 'local-stack',
+        serverUrl: 'https://relay.example.test',
+        localServerUrl: 'http://127.0.0.1:52211',
+        webappUrl: 'http://localhost:52211',
+      })).rejects.toMatchObject({
+        code: 'server_webapp_same_relay_endpoint',
+      });
+
+      expect((await getServerProfile('local-stack')).webappUrl).toBe('http://127.0.0.1:18287');
+    });
+  });
+
   it('refuses to remove the active server profile unless forced', async () => {
     await withTempDir('happier-cli-servers-remove-', async (homeDir) => {
       patchServerProfileEnv({
@@ -144,7 +203,7 @@ describe('server profiles', () => {
       await addServerProfile({
         name: 'remote-dev-tui',
         serverUrl: 'http://127.0.0.1:52753',
-        webappUrl: 'http://127.0.0.1:52753',
+        webappUrl: 'http://127.0.0.1:52754',
         use: true,
       });
 
@@ -238,7 +297,7 @@ describe('server profiles', () => {
       patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
-        HAPPIER_WEBAPP_URL: 'http://localhost:33005',
+        HAPPIER_WEBAPP_URL: 'http://localhost:33006',
       });
 
       vi.resetModules();
@@ -270,7 +329,7 @@ describe('server profiles', () => {
         name: 'VM A self-host preview',
         serverUrl: 'http://localhost:33005',
         localServerUrl: 'http://127.0.0.1:3005',
-        webappUrl: 'http://localhost:33005',
+        webappUrl: 'http://localhost:33006',
         use: true,
       });
 
@@ -286,7 +345,7 @@ describe('server profiles', () => {
       patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
-        HAPPIER_WEBAPP_URL: 'http://localhost:33005',
+        HAPPIER_WEBAPP_URL: 'http://localhost:33006',
       });
 
       vi.resetModules();
@@ -326,7 +385,7 @@ describe('server profiles', () => {
         name: 'VM A self-host preview',
         serverUrl: 'http://localhost:33005',
         localServerUrl: 'http://127.0.0.1:3005',
-        webappUrl: 'http://localhost:33005',
+        webappUrl: 'http://localhost:33006',
         use: true,
       });
 
@@ -352,7 +411,7 @@ describe('server profiles', () => {
         name: 'VM A self-host preview',
         serverUrl: 'http://localhost:33005',
         localServerUrl: 'http://127.0.0.1:3005',
-        webappUrl: 'http://localhost:33005',
+        webappUrl: 'http://localhost:33006',
         use: false,
       });
 
@@ -361,7 +420,7 @@ describe('server profiles', () => {
       patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
-        HAPPIER_WEBAPP_URL: 'http://localhost:33005',
+        HAPPIER_WEBAPP_URL: 'http://localhost:33006',
       });
 
       vi.resetModules();
@@ -390,7 +449,7 @@ describe('server profiles', () => {
         name: 'VM A self-host preview',
         serverUrl: 'http://localhost:33005',
         localServerUrl: 'http://127.0.0.1:3005',
-        webappUrl: 'http://localhost:33005',
+        webappUrl: 'http://localhost:33006',
         use: true,
       });
 
@@ -405,7 +464,7 @@ describe('server profiles', () => {
       patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
-        HAPPIER_WEBAPP_URL: 'http://localhost:33005',
+        HAPPIER_WEBAPP_URL: 'http://localhost:33006',
       });
 
       vi.resetModules();
@@ -434,7 +493,7 @@ describe('server profiles', () => {
         name: 'VM A self-host preview',
         serverUrl: 'http://localhost:33005',
         localServerUrl: 'http://127.0.0.1:3005',
-        webappUrl: 'http://localhost:33005',
+        webappUrl: 'http://localhost:33006',
         use: false,
       });
 
@@ -444,7 +503,7 @@ describe('server profiles', () => {
         name: 'VM A self-host preview',
         serverUrl: 'http://localhost:33005',
         localServerUrl: 'http://127.0.0.1:3005',
-        webappUrl: 'http://localhost:33005',
+        webappUrl: 'http://localhost:33006',
         use: true,
       });
 
@@ -459,7 +518,7 @@ describe('server profiles', () => {
       patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
-        HAPPIER_WEBAPP_URL: 'http://localhost:33005',
+        HAPPIER_WEBAPP_URL: 'http://localhost:33006',
       });
 
       vi.resetModules();
@@ -488,7 +547,7 @@ describe('server profiles', () => {
         name: 'VM A self-host preview',
         serverUrl: 'http://localhost:33005',
         localServerUrl: 'http://127.0.0.1:3005',
-        webappUrl: 'http://localhost:33005',
+        webappUrl: 'http://localhost:33006',
         use: false,
       });
 

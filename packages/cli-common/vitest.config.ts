@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
+import { vitestMjsShebangPlugin } from '../../scripts/testing/vitestMjsShebangPlugin';
+
 export default defineConfig({
   test: {
     environment: 'node',
@@ -7,4 +9,5 @@ export default defineConfig({
     include: ['src/**/*.test.ts', 'scripts/**/*.test.mjs'],
     exclude: ['tests/**/*.mjs', 'dist/**', 'node_modules/**'],
   },
+  plugins: [vitestMjsShebangPlugin],
 });

@@ -66,6 +66,7 @@ import {
   type StopSessionResult,
 } from './sessions/stopSessionContract';
 import { readProcessRunState } from './processRunState';
+import type { OldSessionRunnerMigrationResult } from './processSupervision/migrateOldSessionRunners';
 
 export type DaemonControlRequestOptions = {
   timeoutMs?: number;
@@ -764,6 +765,78 @@ export async function queryDaemonOpenCodeBrokerLoadHandshake(
 export async function listDaemonSessions(): Promise<any[]> {
   const result = await daemonPost('/list');
   return result.children || [];
+}
+
+const OLD_SESSION_RUNNER_MIGRATION_STATUSES = new Set([
+  'current',
+  'migration_requested',
+  'migration_failed',
+  'skipped',
+]);
+
+const OLD_SESSION_RUNNER_MIGRATION_REASONS = new Set([
+  'cli_version_drift',
+  'runner_build_drift',
+  'runner_build_unknown',
+  'pre_lifecycle_runner',
+  'duplicate_session',
+  'missing_respawn_options',
+  'lock_unavailable',
+  'lock_owner_changed',
+]);
+
+function isOldSessionRunnerMigrationResult(value: unknown): value is OldSessionRunnerMigrationResult {
+  if (!value || typeof value !== 'object') return false;
+  const result = value as {
+    inspected?: unknown;
+    migrationRequested?: unknown;
+    migrationFailed?: unknown;
+    current?: unknown;
+    skipped?: unknown;
+    sessions?: unknown;
+  };
+  const counts = [
+    result.inspected,
+    result.migrationRequested,
+    result.migrationFailed,
+    result.current,
+    result.skipped,
+  ];
+  if (!counts.every((count) => typeof count === 'number' && Number.isInteger(count) && count >= 0)
+    || !Array.isArray(result.sessions)) {
+    return false;
+  }
+
+  return result.sessions.every((session) => {
+    if (!session || typeof session !== 'object') return false;
+    const candidate = session as {
+      sessionId?: unknown;
+      pid?: unknown;
+      status?: unknown;
+      reason?: unknown;
+    };
+    return typeof candidate.sessionId === 'string'
+      && candidate.sessionId.trim().length > 0
+      && typeof candidate.pid === 'number'
+      && Number.isInteger(candidate.pid)
+      && candidate.pid > 0
+      && typeof candidate.status === 'string'
+      && OLD_SESSION_RUNNER_MIGRATION_STATUSES.has(candidate.status)
+      && (candidate.reason === undefined
+        || (typeof candidate.reason === 'string'
+          && OLD_SESSION_RUNNER_MIGRATION_REASONS.has(candidate.reason)));
+  });
+}
+
+export async function requestDaemonSessionRunnerMigration(): Promise<OldSessionRunnerMigrationResult> {
+  const result = await daemonPost('/migrate-sessions');
+  if (result?.error) {
+    throw new Error(String(result.error));
+  }
+  if (!isOldSessionRunnerMigrationResult(result)) {
+    throw new Error('Invalid daemon session-runner migration response');
+  }
+  return result;
 }
 
 export async function stopDaemonSession(sessionId: string): Promise<StopSessionResult> {

@@ -1,3 +1,4 @@
+import { join, normalize } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -35,14 +36,17 @@ describe('doctorRuntimeDiagnostics', () => {
   });
 
   it('reports node source installs with concrete wrapper paths', () => {
-    const exists = vi.fn((path: string) => path.endsWith('/bin/happier.mjs'));
+    const projectRoot = normalize('/repo/apps/cli');
+    const wrapperPath = normalize(join(projectRoot, 'bin', 'happier.mjs'));
+    const cliEntrypointPath = normalize(join(projectRoot, 'dist', 'index.mjs'));
+    const exists = vi.fn((path: string) => normalize(path) === wrapperPath);
 
     const diagnostics = buildDoctorRuntimeDiagnostics({
       runtime: 'node',
       processVersion: 'v22.14.0',
       bunVersion: null,
       nodeVersion: '22.14.0',
-      projectRoot: '/repo/apps/cli',
+      projectRoot,
       exists,
     });
 
@@ -51,12 +55,12 @@ describe('doctorRuntimeDiagnostics', () => {
       runtimeVersion: 'v22.14.0',
       nodeCompatibilityVersion: 'v22.14.0',
       isEmbeddedBundle: false,
-      wrapperPath: '/repo/apps/cli/bin/happier.mjs',
-      cliEntrypointPath: '/repo/apps/cli/dist/index.mjs',
+      wrapperPath,
+      cliEntrypointPath,
       wrapperExists: true,
       cliEntrypointExists: false,
     });
     expect(formatDoctorRuntimeLabel(diagnostics)).toBe('Node.js v22.14.0');
-    expect(formatDoctorSpawnPathLabel(diagnostics.cliEntrypointPath)).toBe('/repo/apps/cli/dist/index.mjs');
+    expect(formatDoctorSpawnPathLabel(diagnostics.cliEntrypointPath)).toBe(cliEntrypointPath);
   });
 });

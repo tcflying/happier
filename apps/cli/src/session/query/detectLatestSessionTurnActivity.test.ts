@@ -47,7 +47,28 @@ describe('detectLatestSessionTurnActivity', () => {
       fetchEncryptedTranscriptPageAfterSeq,
     }));
 
-    const { detectLatestSessionTurnActivity } = await import('./detectLatestSessionTurnActivity');
+    const {
+      detectLatestSessionTurnActivity,
+      detectLatestSessionTurnActivitySnapshot,
+    } = await import('./detectLatestSessionTurnActivity');
+
+    await expect(detectLatestSessionTurnActivitySnapshot({
+      token: 'token',
+      sessionId: 'sess-1',
+      encryptionMode: 'plain',
+      encryptionKey: new Uint8Array(32).fill(1),
+      encryptionVariant: 'dataKey',
+    })).resolves.toEqual({
+      activity: {
+        pendingUserTurns: 0,
+        activeTaskInFlight: false,
+        turnInFlight: false,
+      },
+      sessionProjection: expect.objectContaining({
+        id: 'sess-1',
+        latestTurnStatus: 'completed',
+      }),
+    });
 
     await expect(detectLatestSessionTurnActivity({
       token: 'token',

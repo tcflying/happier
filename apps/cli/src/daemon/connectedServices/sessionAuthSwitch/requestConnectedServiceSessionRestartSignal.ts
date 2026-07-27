@@ -8,7 +8,8 @@ export type ConnectedServiceDaemonRestartTrigger =
   | 'refresh_triggered_restart'
   | 'runtime_auth_recovery_restart'
   | 'usage_limit_recovery'
-  | 'reconnect_propagation';
+  | 'reconnect_propagation'
+  | 'cli_version_migration';
 
 export type ConnectedServiceDaemonRestartDiagnosticStatus =
   | 'requested'

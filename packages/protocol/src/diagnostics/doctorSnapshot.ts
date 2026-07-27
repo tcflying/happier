@@ -154,23 +154,29 @@ export const HappierDoctorWarningSchema = z.object({
   repairCommands: z.array(NonEmptyString),
 });
 
+const RunnerDiagnosticContextSchema = z.object({
+  machineId: NonEmptyString.nullable(),
+  sessionId: NonEmptyString,
+  pid: z.number().int().positive(),
+  generationId: NonEmptyString.nullable(),
+  processState: z.enum(['dead', 'servable', 'stopped', 'zombie']),
+  lastHeartbeatAtMs: z.number().nonnegative().nullable(),
+  cleanupPhase: z.enum(['running', 'cleanup', 'finished', 'unknown']),
+  recoveryRecommendation: NonEmptyString,
+});
+
 export const DoctorRuntimeDiagnosticSchema = z.discriminatedUnion('code', [
   z.object({
     code: z.literal('inactive_session_runner_lock'),
     severity: z.literal('warning'),
-    data: z.object({
-      sessionId: NonEmptyString,
-      pid: z.number().int().positive(),
-      generationId: NonEmptyString.nullable(),
+    data: RunnerDiagnosticContextSchema.extend({
       lockState: z.enum(['live', 'stale', 'unknown']),
     }),
   }),
   z.object({
     code: z.literal('runner_cleanup_overdue'),
     severity: z.literal('warning'),
-    data: z.object({
-      sessionId: NonEmptyString,
-      pid: z.number().int().positive(),
+    data: RunnerDiagnosticContextSchema.extend({
       deadlineAtMs: z.number().nonnegative(),
       overdueByMs: z.number().nonnegative(),
     }),
@@ -178,28 +184,36 @@ export const DoctorRuntimeDiagnosticSchema = z.discriminatedUnion('code', [
   z.object({
     code: z.literal('runner_heartbeat_stale'),
     severity: z.literal('warning'),
-    data: z.object({
-      sessionId: NonEmptyString,
-      pid: z.number().int().positive(),
+    data: RunnerDiagnosticContextSchema.extend({
       heartbeatState: z.enum(['stale', 'missing']),
       heartbeatAgeMs: z.number().nonnegative().nullable(),
+    }),
+  }),
+  z.object({
+    code: z.literal('runner_log_stale'),
+    severity: z.literal('warning'),
+    data: RunnerDiagnosticContextSchema.extend({
+      logState: z.enum(['stale', 'missing']),
+      fileName: NonEmptyString.nullable(),
+      lastLogWriteAtMs: z.number().nonnegative().nullable(),
+      logAgeMs: z.number().nonnegative().nullable(),
     }),
   }),
   z.object({
     code: z.literal('session_mutation_dead_letter'),
     severity: z.literal('warning'),
     data: z.object({
+      machineId: NonEmptyString.nullable(),
       fileName: NonEmptyString,
       sessionIds: z.array(NonEmptyString),
       entryCount: z.number().int().positive(),
+      recoveryRecommendation: NonEmptyString,
     }),
   }),
   z.object({
     code: z.literal('runner_cli_build_drift'),
     severity: z.literal('warning'),
-    data: z.object({
-      sessionId: NonEmptyString,
-      pid: z.number().int().positive(),
+    data: RunnerDiagnosticContextSchema.extend({
       runnerCliVersion: NonEmptyString,
       currentCliVersion: NonEmptyString,
       runnerBuildId: NonEmptyString.nullable(),
@@ -208,14 +222,16 @@ export const DoctorRuntimeDiagnosticSchema = z.discriminatedUnion('code', [
   }),
   z.object({
     code: z.literal('server_webapp_role_port_drift'),
-    severity: z.literal('warning'),
+    severity: z.enum(['warning', 'error']),
     data: z.object({
       serverId: NonEmptyString,
       resolvedServerUrl: NonEmptyString,
       resolvedWebappUrl: NonEmptyString,
       profileServerUrl: NonEmptyString,
+      profileLocalServerUrl: NonEmptyString.nullable().optional(),
       profileWebappUrl: NonEmptyString,
-      driftKinds: z.array(z.enum(['role', 'port'])).min(1),
+      driftKinds: z.array(z.enum(['role', 'port', 'same_endpoint'])).min(1),
+      recoveryRecommendation: NonEmptyString,
     }),
   }),
 ]);
@@ -347,6 +363,9 @@ export function sanitizeDoctorSnapshotUrls(snapshot: DoctorSnapshot): DoctorSnap
               resolvedServerUrl: sanitizeUrl(finding.data.resolvedServerUrl),
               resolvedWebappUrl: sanitizeUrl(finding.data.resolvedWebappUrl),
               profileServerUrl: sanitizeUrl(finding.data.profileServerUrl),
+              profileLocalServerUrl: finding.data.profileLocalServerUrl
+                ? sanitizeUrl(finding.data.profileLocalServerUrl)
+                : finding.data.profileLocalServerUrl,
               profileWebappUrl: sanitizeUrl(finding.data.profileWebappUrl),
             },
           }

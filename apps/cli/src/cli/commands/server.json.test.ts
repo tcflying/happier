@@ -258,7 +258,7 @@ describe('happier server --json', () => {
       if (!address || typeof address === 'string') throw new Error('Failed to resolve test server address');
       const url = `http://127.0.0.1:${address.port}`;
 
-      await addServerProfile({ name: 'Local', serverUrl: url, webappUrl: url, use: true });
+      await addServerProfile({ name: 'Local', serverUrl: url, webappUrl: 'http://127.0.0.1:18287', use: true });
 
       await handleServerCommand(['test', '--json']);
 
@@ -304,7 +304,7 @@ describe('happier server --json', () => {
       if (!address || typeof address === 'string') throw new Error('Failed to resolve test server address');
       const url = `http://127.0.0.1:${address.port}`;
 
-      await addServerProfile({ name: 'Local', serverUrl: url, webappUrl: url, use: true });
+      await addServerProfile({ name: 'Local', serverUrl: url, webappUrl: 'http://127.0.0.1:18287', use: true });
 
       await handleServerCommand(['test', '--json']);
 

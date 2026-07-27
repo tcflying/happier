@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating'
+import { vitestMjsShebangPlugin } from '../../scripts/testing/vitestMjsShebangPlugin'
 
 const maxForksEnv = Number.parseInt(process.env.VITEST_UI_MAX_FORKS ?? '', 10);
 const maxForks = Number.isFinite(maxForksEnv) && maxForksEnv > 0 ? maxForksEnv : 1;
@@ -232,5 +233,5 @@ export default defineConfig({
             { find: '@', replacement: resolve('./sources') },
         ],
     },
-    plugins: [expoNodeModuleStubsPlugin],
+    plugins: [vitestMjsShebangPlugin, expoNodeModuleStubsPlugin],
 })

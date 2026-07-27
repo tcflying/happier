@@ -1,5 +1,5 @@
 import { buildCodexAgentRuntimeDescriptor } from '@happier-dev/agents';
-import { sealConnectedServiceQuotaSnapshotCiphertext } from '@happier-dev/protocol';
+import { sealLegacyConnectedServiceQuotaSnapshotFixtureCiphertext } from '@happier-dev/protocol/testing/accountScopedCipherFixtures';
 import { describe, expect, it, vi } from 'vitest';
 
 const { fetchSessionById, fetchSessionsPage } = vi.hoisted(() => ({
@@ -298,10 +298,10 @@ describe('Fusion provider telemetry MCP extension', () => {
 
   it('opens a persisted sealed snapshot locally without reading provider capacity data', async () => {
     const snapshot = createQuotaSnapshot('sealed-profile-private');
-    const ciphertext = sealConnectedServiceQuotaSnapshotCiphertext({
+    const ciphertext = sealLegacyConnectedServiceQuotaSnapshotFixtureCiphertext({
       material: { type: 'legacy', secret: CREDENTIALS.encryption.secret },
       payload: snapshot,
-      randomBytes: (length) => new Uint8Array(length).fill(7),
+      randomBytes: (length: number) => new Uint8Array(length).fill(7),
     });
     const api: FusionProviderTelemetryHostApiV1 = {
       getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => ({

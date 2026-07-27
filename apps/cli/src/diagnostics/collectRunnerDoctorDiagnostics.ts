@@ -1,4 +1,5 @@
-import { readdir, readFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { configuration } from '@/configuration';
@@ -57,6 +58,53 @@ async function collectMutationDeadLetters(activeServerDir: string): Promise<Read
   return results.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
 }
 
+async function collectSessionRunnerLogsByPid(logsDir: string): Promise<ReadonlyMap<number, Readonly<{
+  fileName: string;
+  lastWriteAtMs: number;
+}>>> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(logsDir, { withFileTypes: true });
+  } catch {
+    return new Map();
+  }
+
+  const candidates = entries.flatMap((entry) => {
+    if (!entry.isFile()) return [];
+    const match = entry.name.match(/-pid-(\d+)\.log$/);
+    if (!match) return [];
+    const pid = Number(match[1]);
+    return Number.isInteger(pid) && pid > 0
+      ? [{ pid, fileName: entry.name, filePath: join(logsDir, entry.name) }]
+      : [];
+  });
+  const inspected = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      const fileStat = await stat(candidate.filePath);
+      return {
+        pid: candidate.pid,
+        fileName: candidate.fileName,
+        lastWriteAtMs: Math.max(0, Math.floor(fileStat.mtimeMs)),
+      };
+    } catch {
+      return null;
+    }
+  }));
+
+  const byPid = new Map<number, Readonly<{ fileName: string; lastWriteAtMs: number }>>();
+  for (const candidate of inspected) {
+    if (!candidate) continue;
+    const current = byPid.get(candidate.pid);
+    if (!current || candidate.lastWriteAtMs > current.lastWriteAtMs) {
+      byPid.set(candidate.pid, {
+        fileName: candidate.fileName,
+        lastWriteAtMs: candidate.lastWriteAtMs,
+      });
+    }
+  }
+  return byPid;
+}
+
 async function collectRunnerLocks(params: Readonly<{
   happyHomeDir: string;
   activeSessionIds: ReadonlySet<string>;
@@ -105,7 +153,7 @@ export async function collectRunnerDoctorDiagnostics(params: Readonly<{
   const activeSessionIds = new Set(sessions
     .map((session) => typeof session?.happySessionId === 'string' ? session.happySessionId.trim() : '')
     .filter(Boolean));
-  const [runners, mutationDeadLetters, currentRunnerBuildId] = await Promise.all([
+  const [runnerLocks, mutationDeadLetters, currentRunnerBuildId, runnerLogsByPid] = await Promise.all([
     collectRunnerLocks({
       happyHomeDir: configuration.happyHomeDir,
       activeSessionIds,
@@ -113,14 +161,28 @@ export async function collectRunnerDoctorDiagnostics(params: Readonly<{
     }),
     collectMutationDeadLetters(configuration.activeServerDir),
     resolveSessionRunnerBuildId(),
+    collectSessionRunnerLogsByPid(configuration.logsDir),
   ]);
+  const runners = runnerLocks.map((runner) => {
+    const log = runnerLogsByPid.get(runner.lock.pid) ?? null;
+    return {
+      ...runner,
+      log: log && log.lastWriteAtMs >= runner.lock.acquiredAtMs ? log : null,
+    };
+  });
   const activeProfile = params.settings.servers?.[configuration.activeServerId] ?? null;
+  const machineId = String(
+    params.settings.machineIdByServerId?.[configuration.activeServerId]
+    ?? params.settings.machineId
+    ?? '',
+  ).trim() || null;
 
   return buildRunnerDoctorDiagnostics({
     nowMs: Math.max(1, Math.floor(params.nowMs ?? Date.now())),
     heartbeatTimeoutMs: SESSION_RUNNER_HEARTBEAT_TIMEOUT_MS,
     currentCliVersion: configuration.currentCliVersion,
     currentRunnerBuildId,
+    machineId,
     runners,
     mutationDeadLetters,
     serverRoles: activeProfile
@@ -129,6 +191,7 @@ export async function collectRunnerDoctorDiagnostics(params: Readonly<{
         resolvedServerUrl: configuration.serverUrl,
         resolvedWebappUrl: configuration.webappUrl,
         profileServerUrl: activeProfile.serverUrl,
+        profileLocalServerUrl: activeProfile.localServerUrl ?? null,
         profileWebappUrl: activeProfile.webappUrl,
       }
       : null,

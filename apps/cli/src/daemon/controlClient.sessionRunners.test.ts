@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { restartAllDaemonSessionRunners } from './controlClient';
+import {
+  requestDaemonSessionRunnerMigration,
+  restartAllDaemonSessionRunners,
+} from './controlClient';
 
 const readDaemonStateMock = vi.hoisted(() => vi.fn(async () => ({
   pid: process.pid,
@@ -86,5 +89,28 @@ describe('daemon control client: session runner restart', () => {
       dryRun: true,
       reason: 'daemon_restart_session_runners_command',
     })).rejects.toThrow('Invalid daemon session runner restart response');
+  });
+
+  it.each([
+    [{ sessionId: '', pid: 123, status: 'current' }],
+    [{ sessionId: 'sess_1', pid: 0, status: 'current' }],
+    [{ sessionId: 'sess_1', pid: 123, status: 'unknown' }],
+    [{ sessionId: 'sess_1', pid: 123, status: 'current', reason: 'unknown' }],
+  ])('fails closed when the daemon returns malformed per-session migration outcomes: %j', async (sessions) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        inspected: 1,
+        migrationRequested: 1,
+        migrationFailed: 0,
+        current: 0,
+        skipped: 0,
+        sessions,
+      }),
+    } as Response);
+
+    await expect(requestDaemonSessionRunnerMigration())
+      .rejects.toThrow('Invalid daemon session-runner migration response');
   });
 });

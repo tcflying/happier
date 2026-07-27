@@ -36,21 +36,6 @@ function writeFixtureFiles(rootDir: string, files: Record<string, string>): void
     }
 }
 
-function applyPatch(rootDir: string, patchRelativePath: string): void {
-    const result = spawnSync(
-        'git',
-        ['apply', '--unsafe-paths', join(getRepoRoot(), patchRelativePath)],
-        {
-            cwd: rootDir,
-            encoding: 'utf8',
-        },
-    );
-
-    if (result.status !== 0) {
-        throw new Error(`Failed to apply ${patchRelativePath}: ${result.stderr || result.stdout}`);
-    }
-}
-
 function applyPatchPackage(rootDir: string, patchContentsByFile: Record<string, string>): void {
     const patchDir = join(rootDir, 'patches');
     mkdirSync(patchDir, { recursive: true });
@@ -157,6 +142,15 @@ describe('apps/ui patch-package Metro worklets patches', () => {
         fixtureDirs.push(fixtureDir);
 
         writeFixtureFiles(fixtureDir, {
+            'package.json': JSON.stringify({
+                dependencies: {
+                    'metro-runtime': '0.83.3',
+                },
+            }),
+            'node_modules/metro-runtime/package.json': JSON.stringify({
+                name: 'metro-runtime',
+                version: '0.83.3',
+            }),
             'node_modules/metro-runtime/src/modules/HMRClient.js': `"use strict";
 
 const EventEmitter = require("./vendor/eventemitter3");
@@ -222,7 +216,7 @@ class HMRClient extends EventEmitter {
       } else if (this._pendingUpdate == null) {
         this._pendingUpdate = update;
       } else {
-        this._pendingUpdate = update;
+        this._pendingUpdate = mergeUpdates(this._pendingUpdate, update);
       }
     });
   }
@@ -265,8 +259,59 @@ class HMRClient extends EventEmitter {
     return this._pendingUpdate != null;
   }
 }
+function mergeUpdates(base, next) {
+  const addedIDs = new Set();
+  const deletedIDs = new Set();
+  const moduleMap = new Map();
+  applyUpdateLocally(base);
+  applyUpdateLocally(next);
+  function applyUpdateLocally(update) {
+    update.deleted.forEach((id) => {
+      if (addedIDs.has(id)) {
+        addedIDs.delete(id);
+      } else {
+        deletedIDs.add(id);
+      }
+      moduleMap.delete(id);
+    });
+    update.added.forEach((item) => {
+      const id = item.module[0];
+      if (deletedIDs.has(id)) {
+        deletedIDs.delete(id);
+      } else {
+        addedIDs.add(id);
+      }
+      moduleMap.set(id, item);
+    });
+    update.modified.forEach((item) => {
+      const id = item.module[0];
+      moduleMap.set(id, item);
+    });
+  }
+  const result = {
+    isInitialUpdate: next.isInitialUpdate,
+    revisionId: next.revisionId,
+    added: [],
+    modified: [],
+    deleted: [],
+  };
+  deletedIDs.forEach((id) => {
+    result.deleted.push(id);
+  });
+  moduleMap.forEach((item, id) => {
+    if (deletedIDs.has(id)) {
+      return;
+    }
+    if (addedIDs.has(id)) {
+      result.added.push(item);
+    } else {
+      result.modified.push(item);
+    }
+  });
+  return result;
+}
 module.exports = HMRClient;
-`,
+`.replace(/\r\n/g, '\n'),
             'node_modules/metro-runtime/src/modules/vendor/eventemitter3.js': `module.exports = class EventEmitter {
   constructor() {
     this.listeners = new Map();
@@ -285,7 +330,12 @@ module.exports = HMRClient;
 `,
         });
 
-        applyPatch(fixtureDir, 'apps/ui/patches/metro-runtime+0.83.3.patch');
+        applyPatchPackage(fixtureDir, {
+            'metro-runtime+0.83.3.patch': readFileSync(
+                join(getRepoRoot(), 'apps/ui/patches/metro-runtime+0.83.3.patch'),
+                'utf8',
+            ),
+        });
 
         const hmrClientModulePath = join(
             fixtureDir,

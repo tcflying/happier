@@ -1654,6 +1654,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       await Promise.all([
         promptAssetTransfers.dispose(),
         promptRegistryTransfers.dispose(),
+        directSessionFollowLeaseManager.dispose(),
       ]);
     },
   };

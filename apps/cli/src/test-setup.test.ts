@@ -57,6 +57,45 @@ describe('CLI test global setup', () => {
         expect(ensureDistBuiltOnce).toHaveBeenCalledWith('/tmp/happier-cli-project');
     });
 
+    it('checks existing artifacts without rebuilding in focused-test mode', async () => {
+        const { setup } = await importSetupModule();
+        const assertSharedDepsAvailable = vi.fn();
+        const ensureSharedDepsBuiltOnce = vi.fn(async () => undefined);
+        const ensureDistBuiltOnce = vi.fn(async () => undefined);
+
+        await setup({
+            buildMode: 'existing-only',
+            dependencies: {
+                resolveProjectRoot: () => '/tmp/happier-cli-project',
+                assertSharedDepsAvailable,
+                ensureSharedDepsBuiltOnce,
+                ensureDistBuiltOnce,
+            },
+        });
+
+        expect(assertSharedDepsAvailable).toHaveBeenCalledWith('/tmp/happier-cli-project');
+        expect(ensureSharedDepsBuiltOnce).not.toHaveBeenCalled();
+        expect(ensureDistBuiltOnce).not.toHaveBeenCalled();
+    });
+
+    it('fails focused-test mode instead of rebuilding when bundled artifacts are missing', async () => {
+        const { setup } = await importSetupModule();
+        const ensureSharedDepsBuiltOnce = vi.fn(async () => undefined);
+        const ensureDistBuiltOnce = vi.fn(async () => undefined);
+
+        await expect(setup({
+            buildMode: 'existing-only',
+            dependencies: {
+                resolveProjectRoot: () => join(cliProjectRoot, '__missing_focused_artifacts__'),
+                ensureSharedDepsBuiltOnce,
+                ensureDistBuiltOnce,
+            },
+        })).rejects.toThrow(/never rebuild shared dist directories[\s\S]*sessionFork\.js/i);
+
+        expect(ensureSharedDepsBuiltOnce).not.toHaveBeenCalled();
+        expect(ensureDistBuiltOnce).not.toHaveBeenCalled();
+    });
+
     it('respects the global skip-build override', async () => {
         const { setup } = await importSetupModule();
         process.env.HAPPIER_CLI_TEST_SKIP_BUILD = 'true';

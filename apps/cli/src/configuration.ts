@@ -1105,6 +1105,21 @@ function resolveServerSelection(params: Readonly<{
     return Boolean(targetComparableKey && localComparableKey && targetComparableKey === localComparableKey);
   };
 
+  const explicitPersistedProfile = params.envActiveServerId && params.persisted
+    ? params.persisted.servers[params.envActiveServerId] ?? null
+    : null;
+  if (explicitPersistedProfile) {
+    const canonicalServerUrl = normalizeServerUrl(explicitPersistedProfile.serverUrl);
+    const apiServerUrl = normalizeServerUrl(explicitPersistedProfile.localServerUrl ?? '')
+      || canonicalServerUrl;
+    return {
+      activeServerId: explicitPersistedProfile.id,
+      serverUrl: canonicalServerUrl,
+      apiServerUrl,
+      webappUrl: normalizeServerUrl(explicitPersistedProfile.webappUrl),
+    };
+  }
+
   // Env override semantics (compat):
   // - If HAPPIER_PUBLIC_SERVER_URL is set: treat it as canonical serverUrl and use HAPPIER_LOCAL_SERVER_URL/HAPPIER_SERVER_URL for apiServerUrl.
   // - Else: treat HAPPIER_SERVER_URL as canonical serverUrl (legacy), and use HAPPIER_LOCAL_SERVER_URL as apiServerUrl override if provided.

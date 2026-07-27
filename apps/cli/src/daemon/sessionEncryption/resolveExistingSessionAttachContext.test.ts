@@ -78,7 +78,12 @@ describe('resolveExistingSessionAttachContext', () => {
         id: 'sess_owed',
         seq: 42,
         encryptionMode: 'plain',
-        metadata: JSON.stringify({ flavor: 'claude', path: '/tmp', deliveredUserMessageSeqV1: 4 }),
+        metadata: JSON.stringify({
+          flavor: 'claude',
+          path: '/tmp',
+          claudeSessionId: 'vendor-owed-1',
+          deliveredUserMessageSeqV1: 4,
+        }),
         dataEncryptionKey: null,
       }),
     );
@@ -96,15 +101,65 @@ describe('resolveExistingSessionAttachContext', () => {
         id: 'sess_legacy',
         seq: 42,
         encryptionMode: 'plain',
-        metadata: JSON.stringify({ flavor: 'claude', path: '/tmp' }),
+        metadata: JSON.stringify({ flavor: 'gemini', path: '/tmp' }),
         dataEncryptionKey: null,
       }),
     );
 
-    const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_legacy', agent: 'claude', credentials: null });
+    const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_legacy', agent: 'gemini', credentials: null });
     expect(out).toMatchObject({
       ok: true,
       attachPayload: { v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 42 },
+      hasHistoricalTranscript: true,
+    });
+  });
+
+  it('fails closed for historical Codex, Claude, and OpenCode transcripts when the native resume id is missing', async () => {
+    for (const agent of ['codex', 'claude', 'opencode'] as const) {
+      vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+        createSessionRecordFixture({
+          id: `sess_${agent}`,
+          seq: 42,
+          encryptionMode: 'plain',
+          metadata: JSON.stringify({ flavor: agent, path: '/tmp' }),
+          dataEncryptionKey: null,
+        }),
+      );
+
+      await expect(resolveExistingSessionAttachContext({
+        token: 't',
+        sessionId: `sess_${agent}`,
+        agent,
+        credentials: null,
+      })).resolves.toEqual({
+        ok: false,
+        reason: 'nativeResumeIdMissing',
+      });
+    }
+  });
+
+  it('accepts an explicit native resume id for a historical thread whose metadata lost the id', async () => {
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+      createSessionRecordFixture({
+        id: 'sess_explicit_resume',
+        seq: 42,
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({ flavor: 'codex', path: '/tmp' }),
+        dataEncryptionKey: null,
+      }),
+    );
+
+    const out = await resolveExistingSessionAttachContext({
+      token: 't',
+      sessionId: 'sess_explicit_resume',
+      agent: 'codex',
+      credentials: null,
+      explicitVendorResumeId: 'native-explicit-1',
+    });
+
+    expect(out).toMatchObject({
+      ok: true,
+      vendorResumeId: 'native-explicit-1',
     });
   });
 
@@ -117,6 +172,7 @@ describe('resolveExistingSessionAttachContext', () => {
         metadata: JSON.stringify({
           flavor: 'claude',
           path: '/tmp',
+          claudeSessionId: 'vendor-plain-restore-1',
           permissionMode: 'yolo',
           permissionModeUpdatedAt: 200,
           connectedServices: {

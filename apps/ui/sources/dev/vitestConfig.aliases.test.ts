@@ -23,6 +23,7 @@ describe('vitest config aliases', () => {
             ? config.plugins
             : [];
         expect(plugins.some((plugin) => plugin.name === 'happier-vitest-expo-node-module-stubs')).toBe(true);
+        expect(plugins.some((plugin) => plugin.name === 'happier-vitest-strip-mjs-shebang')).toBe(true);
     });
 
     it('resolves workspace agent imports to source files so vitest does not load stale dist exports', async () => {

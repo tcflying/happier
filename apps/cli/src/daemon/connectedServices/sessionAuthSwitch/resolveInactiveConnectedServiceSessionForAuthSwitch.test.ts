@@ -40,6 +40,7 @@ describe('resolveInactiveConnectedServiceSessionForAuthSwitch', () => {
       vendorResumeId: 'vendor-1',
       sessionPath: '/tmp/repo',
       deliveredUserMessageSeq: null,
+      hasHistoricalTranscript: false,
       metadata: {
         agentId: 'claude',
         path: '/tmp/repo',
@@ -90,6 +91,7 @@ describe('resolveInactiveConnectedServiceSessionForAuthSwitch', () => {
       vendorResumeId: 'vendor-1',
       sessionPath: '/tmp/repo',
       deliveredUserMessageSeq: null,
+      hasHistoricalTranscript: false,
       metadata: {
         connectedServices,
         connectedServiceMaterializationIdentityV1: materializationIdentity,
@@ -121,6 +123,7 @@ describe('resolveInactiveConnectedServiceSessionForAuthSwitch', () => {
       vendorResumeId: null,
       sessionPath: '/tmp/repo',
       deliveredUserMessageSeq: null,
+      hasHistoricalTranscript: false,
       metadata: {
         agentId: 'pi',
         path: '/tmp/repo',

@@ -90,6 +90,7 @@ ${chalk.bold('Usage:')}
   happier daemon stop --all         Stop daemons for all configured relays
   happier daemon restart [--takeover]  Restart the daemon
   happier daemon restart --kill-sessions  Restart the daemon and its tracked sessions
+  happier daemon restart --migrate-sessions  Restart, then respawn CLI-version-drifted runners
   happier daemon start-sync [--takeover]  Start the daemon synchronously
   happier daemon status             Show daemon status
   happier daemon status --all       Show daemon status for all configured relays
@@ -532,6 +533,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
   if (daemonSubcommand === 'restart') {
     const jsonRequested = args.includes('--json');
     const restartSessionRunners = args.includes('--restart-session-runners');
+    const migrateSessions = args.includes('--migrate-sessions');
     const stopSessions = args.includes('--kill-sessions');
     if (restartSessionRunners && stopSessions) {
       const message = '`happier daemon restart --restart-session-runners` cannot be combined with `--kill-sessions`.';
@@ -629,13 +631,13 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
           restartSessionRunnersMode: 'force_current_cli' as const,
         }
         : {}),
+      ...(migrateSessions ? { migrateSessions: true } : {}),
     });
     const started = typeof restartResult === 'boolean' ? restartResult : restartResult.ok;
     const restartStatus = typeof restartResult === 'boolean' ? undefined : restartResult.status;
     const sessionRunnerRestart = typeof restartResult === 'boolean'
       ? undefined
       : restartResult.sessionRunnerRestart;
-
     if (started) {
       if (restartStatus === 'starting') {
         const latestDaemonLog = await getLatestDaemonLog().catch(() => null);

@@ -1,22 +1,11 @@
 import { spawn } from 'node:child_process';
-import {
-  closeSync,
-  createWriteStream,
-  mkdirSync,
-  openSync,
-  readSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { join } from 'node:path';
-import { Writable } from 'node:stream';
+import { mkdirSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
+import { createRuntimeLogSink } from './rotating_log_sink.mjs';
 import { terminateProcessGroup } from './terminate.mjs';
 
 const plannedExitMarker = Symbol('happier.stack.plannedExit');
-const DEFAULT_TEE_MAX_BYTES = 16 * 1024 * 1024;
 
 export function resolveDefaultShellForCommand(cmd, { platform = process.platform } = {}) {
   if (platform !== 'win32') return false;
@@ -42,10 +31,7 @@ function normalizePlannedExitReason(reason) {
 }
 
 export function markSpawnedProcessPlannedExit(child, reason = 'planned') {
-  if (!child || (typeof child !== 'object' && typeof child !== 'function')) {
-    return () => {};
-  }
-
+  if (!child || (typeof child !== 'object' && typeof child !== 'function')) return () => {};
   const marker = { reason: normalizePlannedExitReason(reason) };
   try {
     Object.defineProperty(child, plannedExitMarker, {
@@ -61,14 +47,11 @@ export function markSpawnedProcessPlannedExit(child, reason = 'planned') {
       return () => {};
     }
   }
-
   return () => {
     try {
-      if (child[plannedExitMarker] === marker) {
-        delete child[plannedExitMarker];
-      }
+      if (child[plannedExitMarker] === marker) delete child[plannedExitMarker];
     } catch {
-      // ignore cleanup failures; the marker only affects best-effort log wording
+      // The marker only affects best-effort exit wording.
     }
   };
 }
@@ -81,10 +64,35 @@ export function getSpawnedProcessPlannedExitReason(child) {
 function formatSpawnedProcessExitLine(prefix, code, sig, child) {
   const plannedReason = getSpawnedProcessPlannedExitReason(child);
   const trimmedPrefix = String(prefix ?? '').trimEnd();
-  if (plannedReason) {
-    return `${trimmedPrefix} planned ${plannedReason} exit (code=${code}, sig=${sig})\n`;
-  }
-  return `${trimmedPrefix} exited (code=${code}, sig=${sig})\n`;
+  return plannedReason
+    ? `${trimmedPrefix} planned ${plannedReason} exit (code=${code}, sig=${sig})\n`
+    : `${trimmedPrefix} exited (code=${code}, sig=${sig})\n`;
+}
+
+function createWritableFinishController(stream) {
+  if (!stream) return { endAndWait: async () => {} };
+  let settle;
+  const completion = new Promise((resolve) => { settle = resolve; });
+  stream.once('finish', settle);
+  stream.once('close', settle);
+  stream.on('error', settle);
+  let endRequested = false;
+  return {
+    async endAndWait() {
+      if (!endRequested) {
+        endRequested = true;
+        try { stream.end(); } catch { settle(); }
+      }
+      await completion;
+    },
+  };
+}
+
+function writeChildStdinBestEffort(child, input) {
+  const stdin = child?.stdin;
+  if (!stdin) return;
+  stdin.on('error', () => {});
+  try { stdin.end(String(input)); } catch { /* child may already have exited */ }
 }
 
 function nextLineBreakIndex(s) {
@@ -142,128 +150,46 @@ function sanitizeLogFileToken(raw) {
   return cleaned || 'proc';
 }
 
-function createWritableFinishController(stream) {
-  if (!stream) {
-    return { endAndWait: async () => {} };
-  }
-  let settle;
-  const completion = new Promise((resolve) => {
-    settle = resolve;
-  });
-  stream.once('finish', settle);
-  stream.once('close', settle);
-  stream.on('error', settle);
-  let endRequested = false;
-  return {
-    async endAndWait() {
-      if (!endRequested) {
-        endRequested = true;
-        try {
-          stream.end();
-        } catch {
-          settle();
-        }
-      }
-      await completion;
-    },
-  };
+function isWithinPath(root, candidate) {
+  const relation = relative(resolve(root), resolve(candidate));
+  return relation === '' || (!relation.startsWith('..') && !isAbsolute(relation));
 }
 
-function createBoundedTeeStream(filePath, maxBytes) {
-  const normalizedMaxBytes = Number.isFinite(maxBytes) && maxBytes > 0
-    ? Math.trunc(maxBytes)
-    : DEFAULT_TEE_MAX_BYTES;
-  const rotatedPath = `${filePath}.1`;
-  let size = 0;
-  try {
-    size = statSync(filePath).size;
-  } catch {
-    size = 0;
-  }
-  if (size > normalizedMaxBytes) {
-    let descriptor = null;
-    try {
-      const tail = Buffer.allocUnsafe(normalizedMaxBytes);
-      descriptor = openSync(filePath, 'r');
-      const bytesRead = readSync(
-        descriptor,
-        tail,
-        0,
-        normalizedMaxBytes,
-        size - normalizedMaxBytes,
-      );
-      closeSync(descriptor);
-      descriptor = null;
-      rmSync(rotatedPath, { force: true });
-      writeFileSync(rotatedPath, tail.subarray(0, bytesRead));
-      writeFileSync(filePath, '');
-      size = 0;
-    } catch {
-      if (descriptor != null) {
-        try {
-          closeSync(descriptor);
-        } catch {
-          // Ignore cleanup failure; normal stream error handling remains authoritative.
-        }
-      }
+export function resolveRuntimeTeePath({
+  label,
+  teeFile,
+  env = process.env,
+  cwd = process.cwd(),
+} = {}) {
+  const trustedRoots = [];
+  const addTrustedRoot = (value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return;
+    const canonical = resolve(raw);
+    if (!trustedRoots.includes(canonical)) trustedRoots.push(canonical);
+  };
+
+  addTrustedRoot(env?.HAPPIER_STACK_LOG_TEE_DIR);
+  const cliHomeDir = String(
+    env?.HAPPIER_HOME_DIR ?? env?.HAPPIER_STACK_CLI_HOME_DIR ?? ''
+  ).trim();
+  if (cliHomeDir) addTrustedRoot(join(dirname(resolve(cliHomeDir)), 'logs'));
+  addTrustedRoot(join(resolve(cwd), '.project', 'logs'));
+
+  const primaryRoot = trustedRoots[0];
+  const requested = String(teeFile ?? '').trim();
+  if (requested) {
+    const canonicalRequested = resolve(requested);
+    if (trustedRoots.some((root) => isWithinPath(root, canonicalRequested))) {
+      return canonicalRequested;
     }
+    const relocatedName = basename(canonicalRequested) || `${sanitizeLogFileToken(label)}.log`;
+    return join(primaryRoot, relocatedName);
   }
-  let writer = null;
-  const openDestination = (flags) => {
-    const stream = createWriteStream(filePath, { flags });
-    stream.on('error', (error) => {
-      if (writer && !writer.destroyed) writer.destroy(error);
-    });
-    return stream;
-  };
-  let destination = openDestination('a');
 
-  writer = new Writable({
-    write(chunk, _encoding, callback) {
-      let bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (bytes.length > normalizedMaxBytes) {
-        bytes = bytes.subarray(bytes.length - normalizedMaxBytes);
-      }
-
-      const writeCurrent = () => {
-        size += bytes.length;
-        destination.write(bytes, callback);
-      };
-      if (size + bytes.length <= normalizedMaxBytes) {
-        writeCurrent();
-        return;
-      }
-
-      destination.end(() => {
-        try {
-          rmSync(rotatedPath, { force: true });
-          renameSync(filePath, rotatedPath);
-        } catch {
-          // Rotation is best-effort. Reopening with `w` below still bounds the active file.
-        }
-        destination = openDestination('w');
-        size = 0;
-        writeCurrent();
-      });
-    },
-    final(callback) {
-      destination.end(callback);
-    },
-  });
-  return writer;
-}
-
-function writeChildStdinBestEffort(child, input) {
-  const stdin = child?.stdin;
-  if (!stdin) return;
-  // Pipe errors are emitted asynchronously, so a try/catch around write/end is insufficient.
-  // The child exit code remains the command outcome when it intentionally closes stdin early.
-  stdin.on('error', () => {});
-  try {
-    stdin.end(String(input));
-  } catch {
-    // The child may exit synchronously before its stdin stream is writable.
-  }
+  const canonicalLabel = String(label ?? '').trim();
+  if (!canonicalLabel) return '';
+  return join(primaryRoot, `${sanitizeLogFileToken(canonicalLabel)}.log`);
 }
 
 export function spawnProc(label, cmd, args, env, options = {}) {
@@ -271,7 +197,6 @@ export function spawnProc(label, cmd, args, env, options = {}) {
     silent = false,
     teeFile,
     teeLabel,
-    teeMaxBytes = DEFAULT_TEE_MAX_BYTES,
     onLine,
     ...spawnOptions
   } = options ?? {};
@@ -284,19 +209,18 @@ export function spawnProc(label, cmd, args, env, options = {}) {
   const outPrefix = `[${label}] `;
   const errPrefix = `[${label}] `;
 
-  let teePath = typeof teeFile === 'string' && teeFile.trim() ? teeFile.trim() : '';
-  if (!teePath) {
-    const teeDir = String(env?.HAPPIER_STACK_LOG_TEE_DIR ?? '').trim();
-    if (teeDir) {
-      try {
-        mkdirSync(teeDir, { recursive: true });
-      } catch {
-        // ignore
-      }
-      teePath = join(teeDir, `${sanitizeLogFileToken(label)}.log`);
-    }
+  const teePath = resolveRuntimeTeePath({
+    label: typeof teeLabel === 'string' && teeLabel.trim() ? teeLabel : label,
+    teeFile,
+    env,
+    cwd: spawnOptionsRest.cwd ?? process.cwd(),
+  });
+  try {
+    mkdirSync(dirname(teePath), { recursive: true });
+  } catch {
+    // ignore
   }
-  const teeStream = teePath ? createBoundedTeeStream(teePath, teeMaxBytes) : null;
+  const teeStream = createRuntimeLogSink(teePath, env);
   const teeFinish = createWritableFinishController(teeStream);
   const teePrefix = (() => {
     const t = typeof teeLabel === 'string' ? teeLabel.trim() : '';
@@ -381,9 +305,7 @@ export function spawnProc(label, cmd, args, env, options = {}) {
 }
 
 export async function killProcessTree(child, signal, { graceMs = 800, boundary } = {}) {
-  if (!child) {
-    return { ok: true, alreadyExited: true };
-  }
+  if (!child) return { ok: true, alreadyExited: true };
   const platform = boundary?.platform ?? process.platform;
   if (
     platform === 'win32'
@@ -391,7 +313,6 @@ export async function killProcessTree(child, signal, { graceMs = 800, boundary }
   ) {
     return { ok: false, reason: 'leader_absent_without_tree_proof' };
   }
-
   if (!child.pid) {
     try {
       return { ok: child.kill?.(signal) !== false, signal };
@@ -399,7 +320,6 @@ export async function killProcessTree(child, signal, { graceMs = 800, boundary }
       return { ok: false, reason: 'missing_pid_kill_failed' };
     }
   }
-
   return await terminateProcessGroup(child.pid, { graceMs, signal, boundary });
 }
 
@@ -416,9 +336,7 @@ export async function run(cmd, args, options = {}) {
         : baseStdio;
 
     const proc = spawn(cmd, args, { shell, ...spawnOptions, stdio });
-    if (input != null && proc.stdin) {
-      writeChildStdinBestEffort(proc, input);
-    }
+    if (input != null && proc.stdin) writeChildStdinBestEffort(proc, input);
     const t =
       Number.isFinite(timeoutMs) && timeoutMs > 0
         ? setTimeout(() => {
@@ -448,13 +366,6 @@ export async function runCapture(cmd, args, options = {}) {
     let out = '';
     let err = '';
     let settled = false;
-    const abortError = () => {
-      const error = new Error(`${cmd} ${args.join(' ')} aborted`);
-      error.code = 'ABORT_ERR';
-      error.out = out;
-      error.err = err;
-      return error;
-    };
     const cleanup = () => {
       if (t) clearTimeout(t);
       signal?.removeEventListener?.('abort', onAbort);
@@ -470,6 +381,13 @@ export async function runCapture(cmd, args, options = {}) {
       settled = true;
       cleanup();
       resolvePromise(value);
+    };
+    const abortError = () => {
+      const error = new Error(`${cmd} ${args.join(' ')} aborted`);
+      error.code = 'ABORT_ERR';
+      error.out = out;
+      error.err = err;
+      return error;
     };
     const onAbort = () => {
       try { proc.kill('SIGKILL'); } catch {}
@@ -490,11 +408,8 @@ export async function runCapture(cmd, args, options = {}) {
             rejectOnce(e);
           }, timeoutMs)
         : null;
-    if (signal?.aborted) {
-      onAbort();
-    } else {
-      signal?.addEventListener?.('abort', onAbort, { once: true });
-    }
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener?.('abort', onAbort, { once: true });
     proc.stdout?.on('data', (d) => (out += d.toString()));
     proc.stderr?.on('data', (d) => (err += d.toString()));
     proc.on('error', rejectOnce);
@@ -530,7 +445,17 @@ export async function runCaptureResult(cmd, args, options = {}) {
     const errState = { buf: '' };
     const prefix = shouldStream ? `[${label}] ` : '';
 
-    const teePath = String(teeFile ?? '').trim();
+    // runCaptureResult also backs structured review artifacts whose explicit paths are part of
+    // their durable contract. Preserve an explicit artifact path; only implicit runtime output
+    // is centralized into the trusted log directory.
+    const explicitTeePath = String(teeFile ?? '').trim();
+    const teePath = explicitTeePath
+      ? resolve(explicitTeePath)
+      : resolveRuntimeTeePath({
+          label: String(teeLabel ?? streamLabel ?? '').trim(),
+          env: spawnOptions?.env ?? process.env,
+          cwd: spawnOptions?.cwd ?? process.cwd(),
+        });
     const shouldTee = Boolean(teePath);
     const teeOutState = { buf: '' };
     const teeErrState = { buf: '' };
@@ -540,7 +465,14 @@ export async function runCaptureResult(cmd, args, options = {}) {
       if (label) return `[${label}] `;
       return '';
     })();
-    const teeStream = shouldTee ? createWriteStream(teePath, { flags: 'a' }) : null;
+    if (shouldTee) {
+      try {
+        mkdirSync(dirname(teePath), { recursive: true });
+      } catch {
+        // ignore
+      }
+    }
+    const teeStream = shouldTee ? createRuntimeLogSink(teePath, spawnOptions?.env ?? process.env) : null;
     const teeFinish = createWritableFinishController(teeStream);
     const keepaliveEveryMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : 0;
     let terminalOverride = null;
@@ -595,9 +527,7 @@ export async function runCaptureResult(cmd, args, options = {}) {
       if (shouldTee && teeStream) writeWithPrefix(teeStream, teePrefix, teeErrState, d);
     });
 
-    if (input != null && proc.stdin) {
-      writeChildStdinBestEffort(proc, input);
-    }
+    if (input != null && proc.stdin) writeChildStdinBestEffort(proc, input);
     proc.on('error', (e) => {
       if (t) clearTimeout(t);
       if (hb) clearInterval(hb);

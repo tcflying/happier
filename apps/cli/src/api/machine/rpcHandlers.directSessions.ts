@@ -612,15 +612,28 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
       return err('invalid_request', 'direct_session_directory_unavailable') satisfies DirectSessionTakeoverResponse;
     }
 
-    const spawnResult = await params.spawnSession(spawnOptions);
+    const takeoverFence = await followLeaseManager.beginTakeoverFence(parsed.data.sessionId);
+    if (!takeoverFence) {
+      return err('invalid_request', 'takeover_in_progress') satisfies DirectSessionTakeoverResponse;
+    }
+
+    let spawnResult: SpawnSessionResult;
+    try {
+      spawnResult = await params.spawnSession(spawnOptions);
+    } catch (error) {
+      await followLeaseManager.rollbackTakeoverFence(parsed.data.sessionId, takeoverFence.token);
+      const message = error instanceof Error ? error.message : 'direct_spawn_failed';
+      return err('internal_error', message) satisfies DirectSessionTakeoverResponse;
+    }
     if (spawnResult.type !== 'success') {
+      await followLeaseManager.rollbackTakeoverFence(parsed.data.sessionId, takeoverFence.token);
       return err(
         'internal_error',
         spawnResult.type === 'error' ? spawnResult.errorMessage : 'directory_approval_required',
       ) satisfies DirectSessionTakeoverResponse;
     }
 
-    await followLeaseManager.releaseForTakeover(parsed.data.sessionId);
+    followLeaseManager.commitTakeoverFence(parsed.data.sessionId, takeoverFence.token);
 
     return { ok: true } satisfies DirectSessionTakeoverResponse;
   });
@@ -701,15 +714,28 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
       ...directSpawnOptions,
       transcriptStorage: 'persisted',
     };
-    const spawnResult = await params.spawnSession(persistedSpawnOptions);
+    const takeoverFence = await followLeaseManager.beginTakeoverFence(parsed.data.sessionId);
+    if (!takeoverFence) {
+      return err('invalid_request', 'takeover_in_progress') satisfies DirectSessionTakeoverPersistResponse;
+    }
+
+    let spawnResult: SpawnSessionResult;
+    try {
+      spawnResult = await params.spawnSession(persistedSpawnOptions);
+    } catch (error) {
+      await followLeaseManager.rollbackTakeoverFence(parsed.data.sessionId, takeoverFence.token);
+      const message = error instanceof Error ? error.message : 'persisted_spawn_failed';
+      return err('internal_error', message) satisfies DirectSessionTakeoverPersistResponse;
+    }
     if (spawnResult.type !== 'success') {
+      await followLeaseManager.rollbackTakeoverFence(parsed.data.sessionId, takeoverFence.token);
       return err(
         'internal_error',
         spawnResult.type === 'error' ? spawnResult.errorMessage : 'directory_approval_required',
       ) satisfies DirectSessionTakeoverPersistResponse;
     }
 
-    await followLeaseManager.releaseForTakeover(parsed.data.sessionId);
+    followLeaseManager.commitTakeoverFence(parsed.data.sessionId, takeoverFence.token);
 
     await updateSessionMetadataWithRetry({
       token: credentials.token,

@@ -50,6 +50,7 @@ describe('happier session status (integration)', () => {
           flavor: 'claude',
           tag: 'MyTag',
           host: 'host1',
+          modelOverrideV1: { v: 1, updatedAt: 3, modelId: 'gpt-5.6-sol' },
         },
         dek,
       ),
@@ -186,6 +187,10 @@ describe('happier session status (integration)', () => {
       expect(parsed.data?.session?.id).toBe('sess_integration_status_123');
       expect(parsed.data?.agentState?.pendingRequestsCount).toBe(1);
       expect(parsed.data?.agentState?.controlledByUser).toBe(false);
+      expect(parsed.data?.modelOverride).toEqual({
+        modelId: 'gpt-5.6-sol',
+        updatedAt: 3,
+      });
     } finally {
       output.restore();
     }

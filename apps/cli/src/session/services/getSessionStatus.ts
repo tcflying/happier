@@ -1,6 +1,10 @@
 import type { Credentials } from '@/persistence';
+import { ModelOverrideV1Schema } from '@happier-dev/protocol';
 import { summarizeSessionRecord, type SessionSummary } from '@/cli/output/session/sessionSummary';
-import { decryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
+import {
+  decryptSessionPayload,
+  tryDecryptSessionMetadata,
+} from '@/session/transport/encryption/sessionEncryptionContext';
 import {
   readLatestAgentStateSummaryViaSocket,
   summarizeAgentState,
@@ -10,7 +14,12 @@ import {
 import { resolveSessionTransportContext } from './resolveSessionTransportContext';
 
 export type GetSessionStatusResult =
-  | Readonly<{ ok: true; session: SessionSummary; agentState: AgentStateSummary | null }>
+  | Readonly<{
+      ok: true;
+      session: SessionSummary;
+      agentState: AgentStateSummary | null;
+      modelOverride: Readonly<{ modelId: string | null; updatedAt: number }> | null;
+    }>
   | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'unsupported'; candidates?: string[] }>;
 
 function summarizeSessionAgentState(params: Readonly<{
@@ -36,6 +45,23 @@ function summarizeSessionAgentState(params: Readonly<{
   } catch {
     return null;
   }
+}
+
+function summarizeSessionModelOverride(params: Readonly<{
+  credentials: Credentials;
+  sessionTarget: Extract<Awaited<ReturnType<typeof resolveSessionTransportContext>>, { ok: true }>;
+}>): Readonly<{ modelId: string | null; updatedAt: number }> | null {
+  const metadata = tryDecryptSessionMetadata({
+    credentials: params.credentials,
+    rawSession: params.sessionTarget.rawSession,
+  });
+  const parsed = ModelOverrideV1Schema.safeParse(metadata?.modelOverrideV1);
+  if (!parsed.success) return null;
+
+  return {
+    modelId: parsed.data.modelId,
+    updatedAt: parsed.data.updatedAt,
+  };
 }
 
 function resolveLiveStatusWaitMs(): number {
@@ -89,5 +115,9 @@ export async function getSessionStatus(params: Readonly<{
       session: sessionTarget.rawSession,
     }),
     agentState: agentStateSummary,
+    modelOverride: summarizeSessionModelOverride({
+      credentials: params.credentials,
+      sessionTarget,
+    }),
   };
 }

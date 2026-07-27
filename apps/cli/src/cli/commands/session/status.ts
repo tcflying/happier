@@ -56,15 +56,21 @@ export async function cmdSessionStatus(
     return;
   }
 
+  const data = {
+    session: result.session,
+    ...(result.agentState ? { agentState: result.agentState } : {}),
+    ...(result.modelOverride ? { modelOverride: result.modelOverride } : {}),
+  };
+
   if (json) {
     printJsonEnvelope({
       ok: true,
       kind: 'session_status',
-      data: { session: result.session, ...(result.agentState ? { agentState: result.agentState } : {}) },
+      data,
     });
     return;
   }
 
   console.log(chalk.green('✓'), 'status fetched');
-  console.log(JSON.stringify({ session: result.session, agentState: result.agentState }, null, 2));
+  console.log(JSON.stringify(data, null, 2));
 }

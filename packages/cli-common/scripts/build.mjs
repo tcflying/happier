@@ -279,23 +279,50 @@ function runFirstAvailableChecked(candidates, options, runCommandImpl) {
   throw lastError ?? new Error('No package-manager command candidates were available');
 }
 
-async function replaceDistWithStagedBuild({ distDir, tempDistDir, backupDir }) {
-  const isRetryableRenameError = (error) => {
-    const code = error?.code;
-    return code === 'ENOTEMPTY' || code === 'EBUSY' || code === 'EPERM' || code === 'EACCES';
-  };
+const RETRYABLE_RENAME_ERROR_CODES = new Set(['ENOTEMPTY', 'EBUSY', 'EPERM', 'EACCES']);
 
+function isRetryableRenameError(error) {
+  return RETRYABLE_RENAME_ERROR_CODES.has(error?.code);
+}
+
+export async function renameWithControlledRetry(from, to, options = {}) {
+  const renameImpl = options.renameImpl ?? rename;
+  const delayImpl = options.delayImpl ?? delay;
+  const maxAttempts = Math.max(1, Math.trunc(options.maxAttempts ?? 5));
+  const initialDelayMs = Math.max(0, Math.trunc(options.initialDelayMs ?? 25));
+  const maxDelayMs = Math.max(initialDelayMs, Math.trunc(options.maxDelayMs ?? 200));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await renameImpl(from, to);
+      return;
+    } catch (error) {
+      if (!isRetryableRenameError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      const retryDelayMs = Math.min(maxDelayMs, initialDelayMs * (2 ** (attempt - 1)));
+      await delayImpl(retryDelayMs);
+    }
+  }
+}
+
+async function replaceDistWithStagedBuild({
+  distDir,
+  tempDistDir,
+  backupDir,
+  renameRetryOptions,
+}) {
   let hadExisting = false;
   await rm(backupDir, { recursive: true, force: true });
   try {
-    await rename(distDir, backupDir);
+    await renameWithControlledRetry(distDir, backupDir, renameRetryOptions);
     hadExisting = true;
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
 
   try {
-    await rename(tempDistDir, distDir);
+    await renameWithControlledRetry(tempDistDir, distDir, renameRetryOptions);
   } catch (error) {
     if (isRetryableRenameError(error)) {
       try {
@@ -314,7 +341,7 @@ async function replaceDistWithStagedBuild({ distDir, tempDistDir, backupDir }) {
       }
     }
     if (hadExisting) {
-      await rename(backupDir, distDir).catch((restoreError) => {
+      await renameWithControlledRetry(backupDir, distDir, renameRetryOptions).catch((restoreError) => {
         error.restoreError = restoreError;
       });
     }
@@ -378,7 +405,12 @@ export async function buildCliCommonDist(options = {}) {
       );
 
       verifyStagedExportTargets({ packageDir, tempDistDir, packageJson });
-      await replaceDistWithStagedBuild({ distDir, tempDistDir, backupDir });
+      await replaceDistWithStagedBuild({
+        distDir,
+        tempDistDir,
+        backupDir,
+        renameRetryOptions: options.renameRetryOptions,
+      });
       verifyPackageExportTargets({ packageDir, packageJson });
     } finally {
       await rm(tempDistDir, { recursive: true, force: true }).catch(() => {});

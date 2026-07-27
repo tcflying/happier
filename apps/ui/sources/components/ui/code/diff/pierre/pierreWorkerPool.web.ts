@@ -5,6 +5,7 @@ import { ensureHappierPierreThemesRegistered, HAPPIER_PIERRE_THEME_IDS, type Hap
 import { createPierreDiffWorker } from './pierreWorkerFactory.web';
 import type { PierreDiffPresentationStyle } from './resolvePierreWorkerPoolConfig';
 import { resolvePierreWorkerPoolConfig } from './resolvePierreWorkerPoolConfig';
+import { ensurePierreWorkerAssetsAvailable, getPierreWorkerAssetAvailability } from './pierreWorkerAssetAvailability.web';
 
 const PRELOAD_LANGS: SupportedLanguages[] = [
     'typescript',
@@ -38,6 +39,10 @@ function buildWorkerPoolThemeKey(themeIds: HappierPierreThemeIds): string {
 export function getPierreDiffWorkerPool(params?: Readonly<{ style?: PierreDiffPresentationStyle; themeIds?: HappierPierreThemeIds }>): WorkerPoolManager | null {
     if (typeof window === 'undefined') return null;
     if (typeof requestAnimationFrame !== 'function') return null;
+    if (getPierreWorkerAssetAvailability() !== 'available') {
+        void ensurePierreWorkerAssetsAvailable();
+        return null;
+    }
     const style: PierreDiffPresentationStyle = params?.style ?? 'split';
     const themeIds = resolveWorkerPoolThemeIds(params?.themeIds);
     const themeKey = buildWorkerPoolThemeKey(themeIds);

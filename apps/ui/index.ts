@@ -20,6 +20,14 @@ if (typeof window !== 'undefined') {
     }
 
     try {
+        if (process.env.EXPO_PUBLIC_HAPPIER_HMR_SOAK === '1') {
+            require('happier-hmr-soak-marker');
+        }
+    } catch {
+        // The marker is QA-only and must never prevent the UI from starting.
+    }
+
+    try {
         if (typeof (window as unknown as { __TAURI__?: unknown }).__TAURI__ !== 'undefined' && (globalThis as unknown as { __DEV__?: boolean }).__DEV__) {
             const mod = require('./sources/desktop/mcp/installTauriMcpWebviewDriverScripts');
             if (typeof mod === 'object' && mod !== null && 'installTauriMcpWebviewDriverScripts' in mod) {

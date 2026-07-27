@@ -48,6 +48,7 @@ describe('resolveRespawnSessionRuntimeSnapshot', () => {
       vendorResumeId: 'persisted-vendor-resume',
       sessionPath: '/tmp/repo',
       deliveredUserMessageSeq: null,
+      hasHistoricalTranscript: false,
       metadata: {
         connectedServices: persistedConnectedServices,
         connectedServiceMaterializationIdentityV1: persistedMaterializationIdentity,

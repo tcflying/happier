@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 beforeEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
+    vi.doMock('./pierreWorkerAssetAvailability.web', () => ({
+        ensurePierreWorkerAssetsAvailable: vi.fn(async () => {}),
+        getPierreWorkerAssetAvailability: () => 'available',
+    }));
     delete (globalThis as { window?: unknown }).window;
     delete (globalThis as { document?: unknown }).document;
     delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
@@ -16,6 +20,23 @@ function installBrowserWorkerGlobals(): void {
 }
 
 describe('getPierreDiffWorkerPool', () => {
+    it('does not construct a worker pool while generated worker assets are unavailable', async () => {
+        installBrowserWorkerGlobals();
+        const createWorker = vi.fn();
+        vi.doMock('./pierreWorkerAssetAvailability.web', () => ({
+            ensurePierreWorkerAssetsAvailable: vi.fn(async () => {}),
+            getPierreWorkerAssetAvailability: () => 'unavailable',
+        }));
+        vi.doMock('./pierreWorkerFactory.web', () => ({
+            createPierreDiffWorker: createWorker,
+        }));
+
+        const { getPierreDiffWorkerPool } = await import('./pierreWorkerPool.web');
+
+        expect(getPierreDiffWorkerPool({ style: 'split' })).toBeNull();
+        expect(createWorker).not.toHaveBeenCalled();
+    });
+
     it('fails closed (returns null) when workers cannot be constructed', async () => {
         installBrowserWorkerGlobals();
         (globalThis as any).Worker = function Worker() {

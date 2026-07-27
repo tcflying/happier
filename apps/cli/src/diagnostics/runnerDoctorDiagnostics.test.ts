@@ -138,6 +138,60 @@ describe('buildRunnerDoctorDiagnostics', () => {
     ]));
   });
 
+  it('reports a stalled runner log with complete recovery context', () => {
+    const findings = buildRunnerDoctorDiagnostics({
+      nowMs: 100_000,
+      heartbeatTimeoutMs: 30_000,
+      currentCliVersion: '1.2.3',
+      currentRunnerBuildId: 'build-current',
+      machineId: 'machine-local',
+      runners: [{
+        sessionActive: false,
+        processState: 'servable',
+        lock: {
+          sessionId: 'session-log-stale',
+          pid: 456,
+          acquiredAtMs: 10_000,
+          generationId: 'generation-log-stale',
+          processCommandHash: 'a'.repeat(64),
+        },
+        lifecycle: {
+          sessionId: 'session-log-stale',
+          pid: 456,
+          generationId: 'generation-log-stale',
+          phase: 'cleanup',
+          phaseStartedAtMs: 60_000,
+          heartbeatAtMs: 65_000,
+          cleanupDeadlineAtMs: 120_000,
+          cliVersion: '1.2.3',
+          runnerBuildId: 'build-current',
+        },
+        log: {
+          fileName: '2026-07-27-04-00-00-pid-456.log',
+          lastWriteAtMs: 60_000,
+        },
+      }],
+      mutationDeadLetters: [],
+      serverRoles: null,
+    });
+
+    expect(findings).toContainEqual(expect.objectContaining({
+      code: 'runner_log_stale',
+      severity: 'warning',
+      data: expect.objectContaining({
+        machineId: 'machine-local',
+        sessionId: 'session-log-stale',
+        pid: 456,
+        generationId: 'generation-log-stale',
+        lastHeartbeatAtMs: 65_000,
+        cleanupPhase: 'cleanup',
+        logState: 'stale',
+        lastLogWriteAtMs: 60_000,
+        recoveryRecommendation: expect.any(String),
+      }),
+    }));
+  });
+
   it('does not infer port drift from a pure server/webapp role swap', () => {
     const findings = buildRunnerDoctorDiagnostics({
       nowMs: 100_000,
@@ -159,6 +213,65 @@ describe('buildRunnerDoctorDiagnostics', () => {
       expect.objectContaining({
         code: 'server_webapp_role_port_drift',
         data: expect.objectContaining({ driftKinds: ['role'] }),
+      }),
+    ]);
+  });
+
+  it('blocks a loopback profile whose web app points at the relay endpoint', () => {
+    const findings = buildRunnerDoctorDiagnostics({
+      nowMs: 100_000,
+      heartbeatTimeoutMs: 30_000,
+      currentCliVersion: '1.2.3',
+      currentRunnerBuildId: null,
+      runners: [],
+      mutationDeadLetters: [],
+      serverRoles: {
+        serverId: 'local',
+        resolvedServerUrl: 'http://127.0.0.1:52211',
+        resolvedWebappUrl: 'http://localhost:52211',
+        profileServerUrl: 'http://127.0.0.1:52211',
+        profileWebappUrl: 'http://localhost:52211',
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        code: 'server_webapp_role_port_drift',
+        severity: 'error',
+        data: expect.objectContaining({
+          driftKinds: ['same_endpoint'],
+          recoveryRecommendation: expect.any(String),
+        }),
+      }),
+    ]);
+  });
+
+  it('blocks a web app URL that aliases the profile local relay URL', () => {
+    const findings = buildRunnerDoctorDiagnostics({
+      nowMs: 100_000,
+      heartbeatTimeoutMs: 30_000,
+      currentCliVersion: '1.2.3',
+      currentRunnerBuildId: null,
+      runners: [],
+      mutationDeadLetters: [],
+      serverRoles: {
+        serverId: 'local-stack',
+        resolvedServerUrl: 'http://127.0.0.1:52211',
+        resolvedWebappUrl: 'http://localhost:52211',
+        profileServerUrl: 'https://relay.example.test',
+        profileLocalServerUrl: 'http://127.0.0.1:52211',
+        profileWebappUrl: 'http://localhost:52211',
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        code: 'server_webapp_role_port_drift',
+        severity: 'error',
+        data: expect.objectContaining({
+          profileLocalServerUrl: 'http://127.0.0.1:52211',
+          driftKinds: ['same_endpoint'],
+        }),
       }),
     ]);
   });

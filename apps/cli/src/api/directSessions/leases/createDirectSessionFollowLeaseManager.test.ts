@@ -64,6 +64,43 @@ describe('createDirectSessionFollowLeaseManager', () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it('shares one provider follow stream across viewers and releases it only after the last detach', async () => {
+    const sharedRelease = vi.fn(async () => {});
+    const acquireFollowLease = vi.fn(async () => ({ release: sharedRelease }));
+    let leaseIndex = 0;
+    const manager = createDirectSessionFollowLeaseManager({
+      randomId: () => `lease-shared-${++leaseIndex}`,
+    });
+
+    const first = await manager.attach({
+      sessionId: 'session-shared-viewers',
+      ttlMs: 30_000,
+      acquireFollowLease,
+    });
+    const second = await manager.attach({
+      sessionId: 'session-shared-viewers',
+      ttlMs: 30_000,
+      acquireFollowLease,
+    });
+
+    expect(acquireFollowLease).toHaveBeenCalledTimes(1);
+    expect(manager.countActiveLeases('session-shared-viewers')).toBe(2);
+
+    await manager.detach({
+      sessionId: 'session-shared-viewers',
+      leaseId: first.leaseId,
+    });
+    expect(sharedRelease).not.toHaveBeenCalled();
+    expect(manager.countActiveLeases('session-shared-viewers')).toBe(1);
+
+    await manager.detach({
+      sessionId: 'session-shared-viewers',
+      leaseId: second.leaseId,
+    });
+    expect(sharedRelease).toHaveBeenCalledTimes(1);
+    expect(manager.countActiveLeases('session-shared-viewers')).toBe(0);
+  });
+
   it('releases follow leases automatically when the viewer lease expires', async () => {
     let nowMs = 5_000;
     const release = vi.fn(async () => {});
@@ -219,7 +256,7 @@ describe('createDirectSessionFollowLeaseManager', () => {
     expect(viewerRelease).not.toHaveBeenCalled();
   });
 
-  it('releases active follow streams and disables background reacquisition when takeover succeeds', async () => {
+  it('releases the shared viewer follow stream and disables background reacquisition when takeover succeeds', async () => {
     const firstRelease = vi.fn(async () => {});
     const secondRelease = vi.fn(async () => {});
     const backgroundAcquire = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
@@ -248,7 +285,7 @@ describe('createDirectSessionFollowLeaseManager', () => {
 
     expect(released).toEqual({ releasedViewerFollowLeases: 2, releasedBackgroundFollowLease: false });
     expect(firstRelease).toHaveBeenCalledTimes(1);
-    expect(secondRelease).toHaveBeenCalledTimes(1);
+    expect(secondRelease).not.toHaveBeenCalled();
 
     await manager.detach({ sessionId: 'session-takeover', leaseId: 'lease-1' });
     await manager.detach({ sessionId: 'session-takeover', leaseId: 'lease-2' });

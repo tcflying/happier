@@ -106,6 +106,38 @@ describe('DoctorSnapshotSchema', () => {
           repairCommands: ['happier doctor repair --yes'],
         },
       ],
+      runtimeDiagnostics: [
+        {
+          code: 'runner_cleanup_overdue',
+          severity: 'warning',
+          data: {
+            machineId: 'machine_123',
+            sessionId: 'session_stale',
+            pid: 9001,
+            generationId: 'generation_stale',
+            processState: 'zombie',
+            lastHeartbeatAtMs: 1_765_000_000_000,
+            cleanupPhase: 'cleanup',
+            recoveryRecommendation: 'Restart the daemon and resume the session.',
+            deadlineAtMs: 1_765_000_030_000,
+            overdueByMs: 45_000,
+          },
+        },
+        {
+          code: 'server_webapp_role_port_drift',
+          severity: 'error',
+          data: {
+            serverId: 'local',
+            resolvedServerUrl: 'http://127.0.0.1:52211/?token=abc',
+            resolvedWebappUrl: 'http://localhost:52211/?token=abc',
+            profileServerUrl: 'https://relay.example.test/?token=abc',
+            profileLocalServerUrl: 'http://127.0.0.1:52211/?token=abc',
+            profileWebappUrl: 'http://localhost:52211/?token=abc',
+            driftKinds: ['same_endpoint'],
+            recoveryRecommendation: 'Set distinct relay and web app URLs.',
+          },
+        },
+      ],
       daemonStatus: {
         server: {
           activeServerId: 'cloud',
@@ -160,6 +192,23 @@ describe('DoctorSnapshotSchema', () => {
     expect(parsed.snapshot.relays?.happier?.relays[0]?.relayUrl).toBe('http://127.0.0.1:4400');
     expect(parsed.snapshot.relays?.happier?.relays[0]?.warnings).toEqual(['Legacy relay install detected at http://127.0.0.1:4400']);
     expect(parsed.snapshot.warnings?.[0]?.repairCommands).toEqual(['happier doctor repair --yes']);
+    expect(parsed.snapshot.runtimeDiagnostics?.[0]).toEqual(expect.objectContaining({
+      code: 'runner_cleanup_overdue',
+      data: expect.objectContaining({
+        machineId: 'machine_123',
+        sessionId: 'session_stale',
+        generationId: 'generation_stale',
+        cleanupPhase: 'cleanup',
+      }),
+    }));
+    expect(parsed.snapshot.runtimeDiagnostics?.[1]).toEqual(expect.objectContaining({
+      code: 'server_webapp_role_port_drift',
+      severity: 'error',
+      data: expect.objectContaining({
+        profileLocalServerUrl: 'http://127.0.0.1:52211',
+        driftKinds: ['same_endpoint'],
+      }),
+    }));
   });
 
   it('returns a stable error for invalid JSON', () => {

@@ -1,0 +1,27 @@
+diff --git a/node_modules/metro-file-map/src/watchers/NativeWatcher.js b/node_modules/metro-file-map/src/watchers/NativeWatcher.js
+index 11e19fb..6190a31 100644
+--- a/node_modules/metro-file-map/src/watchers/NativeWatcher.js
++++ b/node_modules/metro-file-map/src/watchers/NativeWatcher.js
+@@ -38,6 +38,7 @@
+ class NativeWatcher extends _AbstractWatcher.AbstractWatcher {
+   #fsWatcher;
+   static isSupported() {
+-    return (0, _os.platform)() === "darwin";
++    const platform = (0, _os.platform)();
++    return platform === "darwin" || platform === "win32";
+   }
+   constructor(dir, opts) {
+@@ -68,6 +69,13 @@ class NativeWatcher extends _AbstractWatcher.AbstractWatcher {
+     }
+   }
+   async _handleEvent(relativePath) {
++    // On Windows, Node's fs.watch may report a directory-level event without
++    // a filename. There is no file to reconcile in that case, and passing
++    // null to path.resolve would crash Metro's watcher process.
++    if (typeof relativePath !== "string" || relativePath.length === 0) {
++      debug("Ignoring event without a relative path (root: %s)", this.root);
++      return;
++    }
+     const absolutePath = path.resolve(this.root, relativePath);
+     if (this.doIgnore(relativePath)) {
+       debug("Ignoring event on %s (root: %s)", relativePath, this.root);

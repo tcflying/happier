@@ -31,6 +31,87 @@ describe('cli-common build Windows rename fallback', () => {
     }
   });
 
+  it('retries transient Windows rename errors within a bounded delay budget', async () => {
+    const { renameWithControlledRetry } = await import(pathToFileURL(join(scriptsDir, 'build.mjs')).href);
+    const renameImpl = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('EPERM: transient scanner lock'), { code: 'EPERM' }))
+      .mockRejectedValueOnce(Object.assign(new Error('EBUSY: transient scanner lock'), { code: 'EBUSY' }))
+      .mockResolvedValue(undefined);
+    const observedDelays = [];
+
+    await renameWithControlledRetry('from-dir', 'to-dir', {
+      renameImpl,
+      delayImpl: async (delayMs) => {
+        observedDelays.push(delayMs);
+      },
+      maxAttempts: 3,
+      initialDelayMs: 10,
+      maxDelayMs: 20,
+    });
+
+    expect(renameImpl).toHaveBeenCalledTimes(3);
+    expect(observedDelays).toEqual([10, 20]);
+  });
+
+  it('leaves the live dist intact when its rename stays locked', async () => {
+    const { buildCliCommonDist } = await import(pathToFileURL(join(scriptsDir, 'build.mjs')).href);
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-build-locked-'));
+    tempDirs.push(fixtureDir);
+    const buildId = 'locked-dist';
+    const distDir = join(fixtureDir, 'dist');
+    const backupDir = join(fixtureDir, `.dist.backup.${buildId}`);
+
+    mkdirSync(distDir, { recursive: true });
+    writeFileSync(join(distDir, 'index.js'), 'export const liveValue = true;\n', 'utf8');
+    writeFileSync(join(distDir, 'index.d.ts'), 'export declare const liveValue: boolean;\n', 'utf8');
+    writeFileSync(join(fixtureDir, 'package.json'), JSON.stringify({
+      name: '@happier-dev/cli-common-locked-fixture',
+      exports: {
+        '.': {
+          default: './dist/index.js',
+          types: './dist/index.d.ts',
+        },
+      },
+    }, null, 2), 'utf8');
+    writeFileSync(join(fixtureDir, 'tsconfig.json'), JSON.stringify({
+      extends: './tsconfig.base.json',
+      compilerOptions: {
+        outDir: 'dist',
+        tsBuildInfoFile: 'dist/.tsbuildinfo',
+      },
+    }, null, 2), 'utf8');
+
+    renameMock.mockImplementation(async (from, to) => {
+      if (from === distDir && to === backupDir) {
+        throw Object.assign(new Error('EPERM: live service holds dist'), { code: 'EPERM' });
+      }
+      return renameDelegate.current(from, to);
+    });
+
+    await expect(buildCliCommonDist({
+      packageDir: fixtureDir,
+      buildId,
+      lockPath: join(fixtureDir, 'build.lock'),
+      renameRetryOptions: {
+        maxAttempts: 3,
+        initialDelayMs: 0,
+        delayImpl: async () => {},
+      },
+      runCommandImpl: (_cmd, args) => {
+        const tsconfigPath = join(fixtureDir, `.tsconfig.build.${buildId}.json`);
+        const tsconfig = JSON.parse(readFileSync(tsconfigPath, 'utf8'));
+        const outDir = tsconfig.compilerOptions.outDir;
+        mkdirSync(outDir, { recursive: true });
+        writeFileSync(join(outDir, 'index.js'), 'export const stagedValue = true;\n', 'utf8');
+        writeFileSync(join(outDir, 'index.d.ts'), 'export declare const stagedValue: boolean;\n', 'utf8');
+        return { status: 0 };
+      },
+    })).rejects.toMatchObject({ code: 'EPERM' });
+
+    expect(renameMock).toHaveBeenCalledTimes(3);
+    expect(readFileSync(join(distDir, 'index.js'), 'utf8')).toContain('liveValue');
+  });
+
   it('copies staged dist into place when Windows blocks rename with EPERM', async () => {
     const { buildCliCommonDist } = await import(pathToFileURL(join(scriptsDir, 'build.mjs')).href);
     const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-build-win32-'));
@@ -77,6 +158,7 @@ describe('cli-common build Windows rename fallback', () => {
       packageDir: fixtureDir,
       buildId,
       lockPath: join(fixtureDir, 'build.lock'),
+      renameRetryOptions: { maxAttempts: 1 },
       runCommandImpl: (_cmd, args) => {
         const tsconfigPath = join(fixtureDir, `.tsconfig.build.${buildId}.json`);
         const tsconfig = JSON.parse(readFileSync(tsconfigPath, 'utf8'));

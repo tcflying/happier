@@ -16,6 +16,11 @@ import { extractUnifiedDiffForSingleFile } from '@/scm/diff/extractUnifiedDiffFo
 import type { DiffViewerProps } from '../diffViewerTypes';
 import { ensureHappierPierreThemeRegistered, resolveHappierPierreThemeIds } from './pierreThemeRegistry.web';
 import { getPierreDiffWorkerPool } from './pierreWorkerPool.web';
+import {
+    ensurePierreWorkerAssetsAvailable,
+    getPierreWorkerAssetAvailability,
+    subscribePierreWorkerAssetAvailability,
+} from './pierreWorkerAssetAvailability.web';
 import { buildPierreDiffOptionsBase } from './buildPierreDiffOptionsBase.web';
 import { resolvePierreLanguageOverride } from './resolvePierreLanguageOverride.web';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
@@ -380,6 +385,14 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     const containerRef = React.useRef<HTMLDivElement | null>(null);
     const typographyStyle = React.useMemo(() => resolvePierreTypographyStyle(), []);
     const selectionStyle = React.useMemo(() => resolvePierreSelectionStyle(theme), [theme]);
+    const pierreWorkerAssetAvailability = React.useSyncExternalStore(
+        subscribePierreWorkerAssetAvailability,
+        getPierreWorkerAssetAvailability,
+        () => 'unavailable',
+    );
+    React.useEffect(() => {
+        void ensurePierreWorkerAssetsAvailable();
+    }, []);
 
     const tokenizeMaxLineLengthSetting = useSetting('filesDiffTokenizationMaxLineLength');
     const intraLineDiffEnabledSetting = useSetting('filesDiffIntraLineWordDiffEnabled');
@@ -438,7 +451,9 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         return sanitizeUnifiedPatchForPierre(candidate);
     }, [patch, props.filePath, props.mode]);
 
-    const pool = getPierreDiffWorkerPool({ style: diffStyle, themeIds: pierreThemeIds });
+    const pool = pierreWorkerAssetAvailability === 'available'
+        ? getPierreDiffWorkerPool({ style: diffStyle, themeIds: pierreThemeIds })
+        : null;
 
     const parsedPatch = React.useMemo(() => {
         // Avoid calling Pierre's parser for known non-unified placeholders (binary diffs)

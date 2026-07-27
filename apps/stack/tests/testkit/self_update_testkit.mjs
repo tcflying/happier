@@ -11,10 +11,7 @@ function writeFakeNpmBin({
   installExitCode = 0,
   installStderr = '',
 }) {
-  return writeFakeBin({
-    root: tmp,
-    name: 'npm',
-    content: `#!/usr/bin/env node
+  const script = `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs');
 const logPath = process.env.NPM_ARGS_LOG;
 if (logPath) appendFileSync(logPath, process.argv.slice(2).join(' ') + "\\n", 'utf-8');
@@ -30,8 +27,26 @@ if (args[0] === 'install') {
   process.exit(Number.isFinite(exitCode) ? exitCode : 0);
 }
 process.exit(0);
-`,
+`;
+  if (process.platform !== 'win32') {
+    return writeFakeBin({
+      root: tmp,
+      name: 'npm',
+      content: script,
+    });
+  }
+
+  const jsBin = writeFakeBin({
+    root: tmp,
+    name: 'npm.js',
+    content: script,
   });
+  writeFakeBin({
+    root: tmp,
+    name: 'npm.cmd',
+    content: `@echo off\r\n"${process.execPath}" "%~dp0npm.js" %*\r\n`,
+  });
+  return jsBin;
 }
 
 export function createSelfUpdateHarness(
@@ -57,6 +72,7 @@ export function createSelfUpdateHarness(
   });
 
   return {
+    homeDir: join(harness.tmp, 'home'),
     readNpmArgsLog: harness.readLog,
     runSelfCommand(args, { extraEnv = {} } = {}) {
       return harness.runCommand(args, {

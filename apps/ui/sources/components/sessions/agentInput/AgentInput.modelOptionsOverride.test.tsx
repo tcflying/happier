@@ -56,8 +56,10 @@ installAgentInputCommonModuleMocks({
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({
-            translate: (key: string, params?: { name?: string }) => {
+            translate: (key: string, params?: { name?: string; model?: string }) => {
                 if (key === 'agentInput.mode.badgeA11y') return `Mode: ${params?.name ?? ''}`;
+                if (key === 'agentInput.model.requestedNextResume') return `Requested for next resume: ${params?.model ?? ''}`;
+                if (key === 'agentInput.model.lastConfirmed') return `Last confirmed model: ${params?.model ?? ''}`;
                 return key;
             },
         });
@@ -180,21 +182,11 @@ vi.mock('@/sync/domains/models/modelOptions', () => ({
         ];
     },
     supportsFreeformModelSelectionForSession: () => supportsFreeformModelSelectionState.value,
-}));
-
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: (params: {
-        selectedModelId?: string | null;
-        runtimeState?: 'active' | 'inactive' | 'unknown';
-        metadata?: any;
-    }) => ({
-        effectiveModelId: params.selectedModelId?.trim() || 'default',
-        requestedModelId: params.selectedModelId?.trim() || 'default',
-        lastConfirmedModelId: params.metadata?.sessionModelsV1?.currentModelId ?? null,
-        runtimeState: params.runtimeState ?? 'unknown',
-        applyScope: params.runtimeState === 'inactive' ? 'next_resume' : 'spawn_only',
-        notes: [],
-    }),
+    hasDynamicModelListForSession: (_agentId: string, metadata: any) =>
+        Array.isArray(metadata?.sessionModelsV1?.availableModels)
+        && metadata.sessionModelsV1.availableModels.length > 0,
+    getSelectableModelIdsForSession: (_agentId: string, metadata: any) =>
+        (metadata?.sessionModelsV1?.availableModels ?? []).map((model: any) => model.id),
 }));
 
 vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
@@ -385,8 +377,8 @@ describe('AgentInput (modelOptionsOverride)', () => {
         await screen.pressByTestIdAsync('agent-input-agent-chip');
 
         expect(lastModelPickerOverlayProps?.notes).toEqual([
-            'agentInput.model.requestedNextResume',
-            'agentInput.model.lastConfirmed',
+            'Requested for next resume: Requested Model',
+            'Last confirmed model: Last Confirmed Model',
         ]);
         expect(lastModelPickerOverlayProps?.notes.join(' ')).not.toMatch(/running/i);
     });

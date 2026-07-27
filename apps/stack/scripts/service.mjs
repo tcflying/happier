@@ -38,6 +38,13 @@ import {
 } from './utils/service/stack_autostart_resolution.mjs';
 import { buildServiceAuthGuidance } from './utils/service/auth_guidance.mjs';
 import { recordStackRuntimeStopRequest } from './utils/stack/runtime_state.mjs';
+import {
+  readWindowsStackSupervisorStatus,
+  requestWindowsStackSupervisorStop,
+  runWindowsStackSupervisorRuntime,
+  waitForWindowsStackSupervisorStop,
+} from './utils/service/windows_stack_supervisor_runtime.mjs';
+import { renderWindowsStackSupervisorStatusText } from './utils/service/windows_stack_supervisor_status.mjs';
 
 /**
  * Manage the autostart service installed by `hstack bootstrap -- --autostart`.
@@ -150,8 +157,11 @@ export async function resolveStackAutostartProgramArgs({ rootDir, mode, systemUs
     }
   }
 
-  if (shimPath) return [shimPath, 'start', '--restart'];
-  return [process.execPath, resolveInstalledPath(rootDir, 'bin/hstack.mjs'), 'start', '--restart'];
+  const serviceArgs = process.platform === 'win32'
+    ? ['service', 'supervise']
+    : ['start', '--restart'];
+  if (shimPath) return [shimPath, ...serviceArgs];
+  return [process.execPath, resolveInstalledPath(rootDir, 'bin/hstack.mjs'), ...serviceArgs];
 }
 
 export async function installService({ mode = 'user', systemUser = null } = {}) {
@@ -248,6 +258,13 @@ export async function uninstallService({ mode = 'user' } = {}) {
       : process.platform === 'darwin'
         ? resolveInstalledCliRoot(rootDir)
         : baseDir;
+
+  if (process.platform === 'win32') {
+    await stopWindowsSupervisorGracefully({
+      requestedBy: 'service uninstall',
+      reason: 'service uninstall requested',
+    }).catch(() => {});
+  }
 
   await uninstallManagedService({
     platform: process.platform,
@@ -603,6 +620,28 @@ async function waitForLaunchAgentStopped({ timeoutMs = 8000 } = {}) {
   return false;
 }
 
+async function stopWindowsSupervisorGracefully({
+  requestedBy = 'service stop',
+  reason = 'explicit service stop',
+  timeoutMs = 10_000,
+  stopSessions = true,
+  preserveDaemon = false,
+} = {}) {
+  const { baseDir } = getDefaultAutostartPaths();
+  const status = await readWindowsStackSupervisorStatus({ baseDir });
+  if (!status.running) {
+    return { stopped: true, supervisorPid: status.state?.supervisorPid ?? status.lock?.pid ?? null };
+  }
+  await requestWindowsStackSupervisorStop({
+    baseDir,
+    requestedBy,
+    reason,
+    stopSessions,
+    preserveDaemon,
+  });
+  return await waitForWindowsStackSupervisorStop({ baseDir, timeoutMs });
+}
+
 async function showStatus() {
   const { plistPath, stdoutPath, stderrPath, label } = getDefaultAutostartPaths();
   const internalUrl = getInternalServerUrl({ env: process.env, defaultPort: 3005 }).internalServerUrl;
@@ -736,6 +775,19 @@ async function main() {
     return;
   }
   switch (cmd) {
+    case 'supervise': {
+      if (process.platform !== 'win32') {
+        throw new Error('[service supervisor] the unified supervisor entry is only supported on Windows');
+      }
+      const result = await runWindowsStackSupervisorRuntime({ rootDir });
+      if (result.status === 'crash_budget_exhausted') {
+        throw new Error('[service supervisor] crash budget exhausted; inspect `hstack service status` and service logs');
+      }
+      if (result.status === 'stop_failed') {
+        throw new Error('[service supervisor] safe stop failed; inspect `hstack service status` and service logs');
+      }
+      return;
+    }
     case 'install':
       await installService({ mode, systemUser });
       if (json) printResult({ json, data: { ok: true, action: 'install' } });
@@ -757,7 +809,7 @@ async function main() {
         }
 
         if (process.platform === 'win32') {
-          const { label, stdoutPath, stderrPath } = getDefaultAutostartPaths();
+          const { label, stdoutPath, stderrPath, baseDir } = getDefaultAutostartPaths();
           const taskName = `Happier\\${label}`;
           let schtasksStatus = null;
           try {
@@ -765,7 +817,20 @@ async function main() {
           } catch (e) {
             schtasksStatus = e && typeof e === 'object' && 'out' in e ? e.out : null;
           }
-          printResult({ json, data: { label, taskName, stdoutPath, stderrPath, internalUrl, schtasksStatus, health } });
+          const supervisor = await readWindowsStackSupervisorStatus({ baseDir });
+          printResult({
+            json,
+            data: {
+              label,
+              taskName,
+              stdoutPath,
+              stderrPath,
+              internalUrl,
+              schtasksStatus,
+              health,
+              supervisor,
+            },
+          });
         } else if (process.platform === 'darwin') {
           const { plistPath, stdoutPath, stderrPath, label } = getDefaultAutostartPaths();
           let launchctlLine = null;
@@ -792,8 +857,15 @@ async function main() {
         }
       } else {
         if (process.platform === 'win32') {
-          const { label } = getDefaultAutostartPaths();
-          await run('schtasks', ['/Query', '/TN', `Happier\\${label}`]);
+          const { label, baseDir } = getDefaultAutostartPaths();
+          const taskStatus = await runCapture('schtasks', ['/Query', '/TN', `Happier\\${label}`, '/FO', 'LIST'])
+            .catch((error) => (error && typeof error === 'object' && 'out' in error ? String(error.out ?? '') : ''));
+          if (taskStatus.trim()) {
+            console.log(taskStatus.trimEnd());
+            console.log('');
+          }
+          const supervisor = await readWindowsStackSupervisorStatus({ baseDir });
+          console.log(renderWindowsStackSupervisorStatusText(supervisor));
           return;
         }
         if (process.platform === 'darwin') {
@@ -838,8 +910,12 @@ async function main() {
     case 'stop':
       if (process.platform === 'win32') {
         const { label } = getDefaultAutostartPaths();
+        const graceful = await stopWindowsSupervisorGracefully({
+          requestedBy: 'service stop',
+          reason: 'explicit service stop',
+        });
         await run('schtasks', ['/End', '/TN', `Happier\\${label}`]).catch(() => {});
-        if (json) printResult({ json, data: { ok: true, action: 'stop' } });
+        if (json) printResult({ json, data: { ok: graceful.stopped, action: 'stop', graceful } });
         return;
       }
       if (process.platform === 'darwin') {
@@ -857,10 +933,15 @@ async function main() {
     case 'restart':
       if (process.platform === 'win32') {
         const { label } = getDefaultAutostartPaths();
+        const graceful = await stopWindowsSupervisorGracefully({
+          requestedBy: 'service restart',
+          reason: 'explicit service restart',
+          stopSessions: false,
+        });
         await run('schtasks', ['/End', '/TN', `Happier\\${label}`]).catch(() => {});
         await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
         await postStartDiagnostics();
-        if (json) printResult({ json, data: { ok: true, action: 'restart' } });
+        if (json) printResult({ json, data: { ok: graceful.stopped, action: 'restart', graceful } });
         return;
       }
       if (process.platform === 'darwin') {
@@ -917,9 +998,13 @@ async function main() {
     case 'disable':
       if (process.platform === 'win32') {
         const { label } = getDefaultAutostartPaths();
+        const graceful = await stopWindowsSupervisorGracefully({
+          requestedBy: 'service disable',
+          reason: 'service disabled',
+        });
         await run('schtasks', ['/End', '/TN', `Happier\\${label}`]).catch(() => {});
         await run('schtasks', ['/Change', '/TN', `Happier\\${label}`, '/Disable']).catch(() => {});
-        if (json) printResult({ json, data: { ok: true, action: 'disable' } });
+        if (json) printResult({ json, data: { ok: graceful.stopped, action: 'disable', graceful } });
         return;
       }
       if (process.platform === 'darwin') {

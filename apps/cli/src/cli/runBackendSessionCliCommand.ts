@@ -29,7 +29,14 @@ import {
   type AcquireSessionRunnerLockResult,
   type SessionRunnerCleanupOutcome,
 } from '@/daemon/sessionRunnerLock';
-import { registerSessionRunnerCleanupLifecycle } from '@/daemon/sessionRunnerLifecycleRuntime';
+import {
+  registerSessionRunnerCleanupLifecycle,
+  type SessionRunnerLifecycleAttempt,
+} from '@/daemon/sessionRunnerLifecycleRuntime';
+import {
+  startSessionRunnerControlChallengeServer,
+  type SessionRunnerControlChallengeServer,
+} from '@/daemon/sessionRunnerControlChallenge';
 import { isInteractiveTerminal } from '@/terminal/prompts/promptInput';
 import { promptSecret } from '@/terminal/prompts/promptSecret';
 import { maybePassthroughProviderCliInfoRequest, passthroughProviderCliArgs } from '@/cli/providerCliPassthrough';
@@ -119,34 +126,90 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
   resolveExtraOptions?: (args: string[], parsed: ProviderSessionArgPartitionResult) => Extra;
 }): Promise<void> {
   let sessionRunnerLock: Extract<AcquireSessionRunnerLockResult, { ok: true }> | null = null;
+  let sessionRunnerControlChallengeServer: SessionRunnerControlChallengeServer | null = null;
   let sessionRunnerHeartbeatTimer: NodeJS.Timeout | null = null;
   let sessionRunnerCleanupStarted = false;
   let unregisterSessionRunnerCleanupLifecycle: (() => void) | null = null;
-  const beginSessionRunnerCleanup = async (budgetMs: number): Promise<void> => {
+  let sessionRunnerForceFinalizerConfirmed = false;
+  const isAttemptActive = (attempt?: SessionRunnerLifecycleAttempt): boolean =>
+    attempt?.isActive() !== false;
+  const beginSessionRunnerCleanup = async (
+    deadlineAtMs: number,
+    attempt?: SessionRunnerLifecycleAttempt,
+  ): Promise<void> => {
     const lock = sessionRunnerLock;
     if (!lock || sessionRunnerCleanupStarted) return;
+    if (!isAttemptActive(attempt)) throw new Error('Runner cleanup attempt is inactive');
+    const nowMs = Date.now();
+    const marked = await lock.markCleanup({
+      nowMs,
+      deadlineAtMs: Math.max(nowMs + 1, deadlineAtMs),
+      isAttemptActive: () => isAttemptActive(attempt),
+    });
+    if (!marked || !isAttemptActive(attempt)) {
+      throw new Error('Failed to mark cleanup for the owned runner generation');
+    }
     sessionRunnerCleanupStarted = true;
     if (sessionRunnerHeartbeatTimer) {
       clearInterval(sessionRunnerHeartbeatTimer);
       sessionRunnerHeartbeatTimer = null;
     }
-    const nowMs = Date.now();
-    await lock.markCleanup({ nowMs, deadlineAtMs: nowMs + Math.max(1, budgetMs) });
   };
-  const finishSessionRunnerLifecycle = async (outcome: SessionRunnerCleanupOutcome): Promise<void> => {
+  const finishSessionRunnerLifecycle = async (
+    outcome: SessionRunnerCleanupOutcome,
+    attempt?: SessionRunnerLifecycleAttempt,
+  ): Promise<void> => {
+    if (sessionRunnerCleanupStarted && !sessionRunnerForceFinalizerConfirmed) {
+      unregisterSessionRunnerCleanupLifecycle?.();
+      unregisterSessionRunnerCleanupLifecycle = null;
+      return;
+    }
+    await releaseSessionRunnerLifecycle(outcome, attempt);
+  };
+  const releaseSessionRunnerLifecycle = async (
+    outcome: SessionRunnerCleanupOutcome,
+    attempt?: SessionRunnerLifecycleAttempt,
+  ): Promise<void> => {
     const lock = sessionRunnerLock;
     if (!lock) return;
+    if (!isAttemptActive(attempt)) throw new Error('Runner release attempt is inactive');
+    if (!sessionRunnerCleanupStarted) {
+      const marked = await lock.markCleanup({
+        isAttemptActive: () => isAttemptActive(attempt),
+      }).catch(() => false);
+      if (!marked || !isAttemptActive(attempt)) {
+        throw new Error('Failed to mark cleanup before runner release');
+      }
+    }
+    const released = await lock.release(outcome, {
+      isAttemptActive: () => isAttemptActive(attempt),
+      tryCommitAttempt: () => attempt?.tryCommit() ?? true,
+    });
+    if (!released.ok) {
+      throw new Error(`Failed to release runner generation (${released.reason})`);
+    }
     sessionRunnerLock = null;
     if (sessionRunnerHeartbeatTimer) {
       clearInterval(sessionRunnerHeartbeatTimer);
       sessionRunnerHeartbeatTimer = null;
     }
-    if (!sessionRunnerCleanupStarted) {
-      await lock.markCleanup().catch(() => false);
-    }
-    await lock.release(outcome).catch(() => {});
     unregisterSessionRunnerCleanupLifecycle?.();
     unregisterSessionRunnerCleanupLifecycle = null;
+    const controlChallengeServer = sessionRunnerControlChallengeServer;
+    sessionRunnerControlChallengeServer = null;
+    await controlChallengeServer?.close().catch((error) => {
+      logger.debug('[session] Failed to close runner control challenge server after release', error);
+    });
+  };
+  const confirmSessionRunnerCleanupAndRelease = async (
+    outcome: SessionRunnerCleanupOutcome,
+    attempt?: SessionRunnerLifecycleAttempt,
+  ): Promise<void> => {
+    await releaseSessionRunnerLifecycle(outcome, attempt);
+    if (!isAttemptActive(attempt)) {
+      throw new Error('Runner release completed after its lifecycle attempt expired');
+    }
+    sessionRunnerForceFinalizerConfirmed = true;
   };
 
   try {
@@ -210,13 +273,21 @@ ${chalk.bold.cyan(`${agentId} CLI Options (from \`${providerHelpCommand}\`):`)}
         throw new Error(`Failed to acquire session runner lock for ${normalizedExistingSessionId} (${lock.reason}).`);
       }
       sessionRunnerLock = lock;
+      const controlChallengeServer = await startSessionRunnerControlChallengeServer({
+        sessionId: normalizedExistingSessionId,
+        generationId: lock.generationId,
+      });
+      sessionRunnerControlChallengeServer = controlChallengeServer;
+      if (!(await lock.setControlPort(controlChallengeServer.port))) {
+        throw new Error(`Failed to publish session runner control endpoint for ${normalizedExistingSessionId}.`);
+      }
       sessionRunnerHeartbeatTimer = setInterval(() => {
         void lock.heartbeat().catch(() => false);
       }, 5_000);
       sessionRunnerHeartbeatTimer.unref?.();
       unregisterSessionRunnerCleanupLifecycle = registerSessionRunnerCleanupLifecycle({
         begin: beginSessionRunnerCleanup,
-        finish: finishSessionRunnerLifecycle,
+        finish: confirmSessionRunnerCleanupAndRelease,
       });
     }
 

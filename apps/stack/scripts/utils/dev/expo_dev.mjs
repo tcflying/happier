@@ -204,6 +204,7 @@ export function buildExpoDevEnv({
 } = {}) {
   const env = { ...(baseEnv || process.env) };
   delete env.CI;
+  env.HAPPIER_UI_METRO_MODE = 'development';
 
   // Expo app config: this is what both web + native app use to reach the Happy server.
   // When dev-client is enabled, `localhost` / `*.localhost` are not reachable from the phone,

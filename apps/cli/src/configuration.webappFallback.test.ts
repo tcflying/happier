@@ -313,8 +313,52 @@ describe('configuration env url fallback', () => {
     configMod.reloadConfiguration();
     expect(configMod.configuration.activeServerId).toBe('android-keyboard-qa');
     expect(configMod.configuration.activeServerDir).toBe(join(homeDir, 'servers', 'android-keyboard-qa'));
-    expect(configMod.configuration.serverUrl).toBe('http://127.0.0.1:52753');
-    expect(configMod.configuration.webappUrl).toBe('http://localhost:52753');
+    expect(configMod.configuration.serverUrl).toBe('http://10.0.2.2:52753');
+    expect(configMod.configuration.apiServerUrl).toBe('http://127.0.0.1:52753');
+    expect(configMod.configuration.webappUrl).toBe('http://10.0.2.2:52753');
+  });
+
+  it('resolves the exact persisted profile by HAPPIER_ACTIVE_SERVER_ID instead of stale URLs', async () => {
+    const homeDir = createTempDirSync('happier-cli-config-explicit-server-id-');
+    tempDirs.push(homeDir);
+    const settingsFile = join(homeDir, 'settings.json');
+    writeFileSync(
+      settingsFile,
+      JSON.stringify(
+        {
+          schemaVersion: 5,
+          activeServerId: 'stack-a',
+          servers: {
+            'stack-a': {
+              id: 'stack-a',
+              serverUrl: 'http://127.0.0.1:52211',
+              webappUrl: 'http://127.0.0.1:18287',
+            },
+            'stack-b': {
+              id: 'stack-b',
+              serverUrl: 'http://127.0.0.1:53211',
+              webappUrl: 'http://127.0.0.1:19287',
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    process.env.HAPPIER_HOME_DIR = homeDir;
+    process.env.HAPPIER_ACTIVE_SERVER_ID = 'stack-b';
+    process.env.HAPPIER_PUBLIC_SERVER_URL = 'http://127.0.0.1:52211';
+    process.env.HAPPIER_SERVER_URL = 'http://127.0.0.1:52211';
+    process.env.HAPPIER_WEBAPP_URL = 'http://127.0.0.1:18287';
+
+    const configMod = await import('./configuration');
+    configMod.reloadConfiguration();
+    expect(configMod.configuration.activeServerId).toBe('stack-b');
+    expect(configMod.configuration.serverUrl).toBe('http://127.0.0.1:53211');
+    expect(configMod.configuration.apiServerUrl).toBe('http://127.0.0.1:53211');
+    expect(configMod.configuration.webappUrl).toBe('http://127.0.0.1:19287');
   });
 
   it('reads execution-run and ephemeral-task budget env vars', async () => {

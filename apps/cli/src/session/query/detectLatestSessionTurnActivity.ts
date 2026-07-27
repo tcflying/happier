@@ -5,7 +5,7 @@ import {
 } from '@/session/query/detectSessionTurnInFlight';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 
-export async function detectLatestSessionTurnActivity(params: Readonly<{
+type DetectLatestSessionTurnActivityParams = Readonly<{
     token: string;
     sessionId: string;
     encryptionMode: 'e2ee' | 'plain';
@@ -13,16 +13,27 @@ export async function detectLatestSessionTurnActivity(params: Readonly<{
     encryptionVariant: 'legacy' | 'dataKey';
     afterSeqExclusive?: number;
     transcriptFetchTimeoutMs?: number;
-}>): Promise<SessionTurnActivity> {
+}>;
+
+export interface LatestSessionTurnActivitySnapshot {
+    readonly activity: SessionTurnActivity;
+    readonly sessionProjection: unknown;
+}
+
+export async function detectLatestSessionTurnActivitySnapshot(
+    params: DetectLatestSessionTurnActivityParams,
+): Promise<LatestSessionTurnActivitySnapshot> {
     let projectedActivity: SessionTurnActivity | null = null;
+    let sessionProjection: unknown = null;
     try {
         const refreshedSession = await fetchSessionById({
             token: params.token,
             sessionId: params.sessionId,
         });
+        sessionProjection = refreshedSession;
         projectedActivity = detectSessionTurnActivityFromProjection(refreshedSession);
         if (projectedActivity?.turnInFlight) {
-            return projectedActivity;
+            return { activity: projectedActivity, sessionProjection };
         }
     } catch {
         // Fall back to legacy transcript activity detection below.
@@ -41,8 +52,17 @@ export async function detectLatestSessionTurnActivity(params: Readonly<{
     });
 
     if (transcriptActivity.turnInFlight) {
-        return transcriptActivity;
+        return { activity: transcriptActivity, sessionProjection };
     }
 
-    return projectedActivity ?? transcriptActivity;
+    return {
+        activity: projectedActivity ?? transcriptActivity,
+        sessionProjection,
+    };
+}
+
+export async function detectLatestSessionTurnActivity(
+    params: DetectLatestSessionTurnActivityParams,
+): Promise<SessionTurnActivity> {
+    return (await detectLatestSessionTurnActivitySnapshot(params)).activity;
 }

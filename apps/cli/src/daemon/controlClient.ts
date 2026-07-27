@@ -19,6 +19,7 @@ import {
 } from '@/backends/codex/connectedServices/codexChatGptAuthTokensRefreshBridgeContract';
 import { resolveComparableCliVersion } from './resolveComparableCliVersion';
 import type { ConnectedServiceBindingsV1, ConnectedServiceId } from '@happier-dev/protocol';
+import type { OldSessionRunnerMigrationResult } from './processSupervision/migrateOldSessionRunners';
 
 export type DaemonControlRequestOptions = {
   timeoutMs?: number;
@@ -431,6 +432,26 @@ export async function refreshDaemonOpenAiCodexChatGptAuthTokensForBridge(
 export async function listDaemonSessions(): Promise<any[]> {
   const result = await daemonPost('/list');
   return result.children || [];
+}
+
+export async function requestDaemonSessionRunnerMigration(): Promise<OldSessionRunnerMigrationResult> {
+  const result = await daemonPost('/migrate-sessions');
+  if (result?.error) {
+    throw new Error(String(result.error));
+  }
+  if (
+    !result
+    || typeof result !== 'object'
+    || !Number.isFinite(result.inspected)
+    || !Number.isFinite(result.migrationRequested)
+    || !Number.isFinite(result.migrationFailed)
+    || !Number.isFinite(result.current)
+    || !Number.isFinite(result.skipped)
+    || !Array.isArray(result.sessions)
+  ) {
+    throw new Error('Invalid daemon session-runner migration response');
+  }
+  return result as OldSessionRunnerMigrationResult;
 }
 
 export async function stopDaemonSession(sessionId: string): Promise<boolean> {

@@ -4,6 +4,7 @@ export function buildStackWebExportEnv({ baseEnv } = {}) {
   // This is a stack-built bundle (served by the stack server), so ensure the app
   // behaves like stack context at runtime (no Cloud seeding/locking).
   env.NODE_ENV = 'production';
+  env.HAPPIER_UI_METRO_MODE = 'build';
   env.EXPO_PUBLIC_DEBUG = '0';
   env.EXPO_PUBLIC_HAPPY_SERVER_CONTEXT = 'stack';
 
@@ -19,6 +20,7 @@ export function buildStackTauriExportEnv({ baseEnv, tauriServerUrl } = {}) {
   const env = { ...(baseEnv || process.env) };
 
   env.NODE_ENV = 'production';
+  env.HAPPIER_UI_METRO_MODE = 'build';
   env.EXPO_PUBLIC_DEBUG = '0';
   env.EXPO_PUBLIC_HAPPY_SERVER_CONTEXT = 'stack';
 

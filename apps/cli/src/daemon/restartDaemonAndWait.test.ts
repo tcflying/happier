@@ -17,6 +17,14 @@ const inspectDaemonRunningStateMock = vi.fn<() => Promise<DaemonRunningInspectio
 }));
 const spawnDetachedDaemonStartSyncMock = vi.fn(async () => ({ unref: vi.fn() }));
 const waitForDaemonRunningWithinBudgetMock = vi.fn(async () => true);
+const requestDaemonSessionRunnerMigrationMock = vi.fn(async () => ({
+  inspected: 1,
+  migrationRequested: 1,
+  migrationFailed: 0,
+  current: 0,
+  skipped: 0,
+  sessions: [],
+}));
 
 describe('restartDaemonAndWait', () => {
   afterEach(() => {
@@ -25,6 +33,7 @@ describe('restartDaemonAndWait', () => {
     inspectDaemonRunningStateMock.mockReset();
     spawnDetachedDaemonStartSyncMock.mockReset();
     waitForDaemonRunningWithinBudgetMock.mockReset();
+    requestDaemonSessionRunnerMigrationMock.mockReset();
     vi.restoreAllMocks();
     vi.resetModules();
     delete process.env.HAPPIER_DAEMON_RESTART_STABILITY_TIMEOUT_MS;
@@ -38,6 +47,7 @@ describe('restartDaemonAndWait', () => {
         stopDaemon: stopDaemonMock,
         checkIfDaemonRunningAndCleanupStaleState: checkIfDaemonRunningMock,
         inspectDaemonRunningStateAndCleanupStaleState: inspectDaemonRunningStateMock,
+        requestDaemonSessionRunnerMigration: requestDaemonSessionRunnerMigrationMock,
       };
     });
     vi.doMock('@/daemon/runtime/spawnDetachedDaemonStartSync', () => ({
@@ -75,6 +85,14 @@ describe('restartDaemonAndWait', () => {
     }));
     spawnDetachedDaemonStartSyncMock.mockImplementation(async () => ({ unref: vi.fn() }));
     waitForDaemonRunningWithinBudgetMock.mockImplementation(async () => true);
+    requestDaemonSessionRunnerMigrationMock.mockImplementation(async () => ({
+      inspected: 1,
+      migrationRequested: 1,
+      migrationFailed: 0,
+      current: 0,
+      skipped: 0,
+      sessions: [],
+    }));
     process.env.HAPPIER_DAEMON_RESTART_STABILITY_TIMEOUT_MS = '1';
 
     return await import('./restartDaemonAndWait');
@@ -93,6 +111,7 @@ describe('restartDaemonAndWait', () => {
       }),
     }));
     expect(waitForDaemonRunningWithinBudgetMock).toHaveBeenCalledTimes(1);
+    expect(requestDaemonSessionRunnerMigrationMock).not.toHaveBeenCalled();
   });
 
   it('omits takeover only when explicitly disabled', async () => {
@@ -106,6 +125,14 @@ describe('restartDaemonAndWait', () => {
     expect(spawnDetachedDaemonStartSyncMock).toHaveBeenCalledWith(expect.not.objectContaining({
       env: expect.anything(),
     }));
+  });
+
+  it('requests old-runner migration only when the restart flag opts in', async () => {
+    const { restartDaemonAndWait } = await importSubject();
+
+    await expect(restartDaemonAndWait({ migrateSessions: true } as any)).resolves.toBe(true);
+
+    expect(requestDaemonSessionRunnerMigrationMock).toHaveBeenCalledOnce();
   });
 
   it('does not report success when stopping the old daemon fails', async () => {

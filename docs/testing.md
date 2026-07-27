@@ -27,6 +27,13 @@ Use the smallest relevant subset during RED/GREEN loops. Before handoff, run the
 
 Treat `test` and `test:unit` as fast lanes. Put Dockerized dependencies, multiprocess setups, external services, real network calls, or other heavy orchestration into integration/e2e/provider lanes.
 
+## CLI focused tests while a development service is live
+
+Run an explicit CLI test file with `yarn --cwd apps/cli test:focused src/example.test.ts`.
+This lane uses existing bundled workspace artifacts, gives Vitest a unique cache/report/temp directory, and never rebuilds the live CLI or shared `dist` directories. If the required bundled artifacts are missing, build them before starting the service; the focused lane fails with the missing paths instead of attempting a build.
+
+The standard `yarn workspace @happier-dev/cli test:unit` lane is also read-only with respect to `packages/cli-common/dist`: global setup validates existing artifacts, and the unit wrapper hashes that directory before and after the run and fails if any file changes. CI builds shared artifacts once in an explicit pre-test step, then runs the same guarded unit command. A passing unit or focused run is test evidence only; it is not a live daemon/provider E2E.
+
 When introducing or moving a lane/pattern, update all relevant places in the same change:
 
 1. package-level scripts/config,

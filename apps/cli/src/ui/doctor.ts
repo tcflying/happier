@@ -26,6 +26,7 @@ import {
     renderDoctorCleanupOwnershipSummary,
     type DoctorCleanupOwnershipSummary,
 } from '@/ui/doctorCleanupOwnershipSummary'
+import { formatDoctorRuntimeDiagnosticLines } from '@/ui/doctorRuntimeDiagnosticLines'
 import { getReleaseRingCatalogEntry } from '@happier-dev/release-runtime/releaseRings'
 import { resolveDaemonStartupSourceServiceManagedState } from '@/daemon/ownership/daemonOwnershipMetadata'
 
@@ -273,6 +274,7 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
             })) {
                 console.log(line);
             }
+
         }
 
         // Settings
@@ -299,6 +301,16 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
             }
         } catch (error) {
             console.log(chalk.red('❌ Error reading credentials'));
+        }
+    }
+
+    const runtimeDiagnosticLines = formatDoctorRuntimeDiagnosticLines(
+        snapshot?.runtimeDiagnostics ?? [],
+    );
+    if (runtimeDiagnosticLines.length > 0) {
+        console.log(chalk.bold(`\n🚨 ${runtimeDiagnosticLines[0]}`));
+        for (const line of runtimeDiagnosticLines.slice(1)) {
+            console.log(line);
         }
     }
 

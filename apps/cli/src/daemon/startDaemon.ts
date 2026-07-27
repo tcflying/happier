@@ -100,6 +100,9 @@ import { resolveSpawnWebhookResult } from './sessions/resolveSpawnWebhookResult'
 import { isSessionRunnerActive as isSessionRunnerActiveInDaemon } from './sessions/isSessionRunnerActive';
 import { startDaemonHeartbeatLoop } from './lifecycle/heartbeat';
 import { createSessionRunnerRespawnManager } from './processSupervision/sessionRunnerRespawn';
+import { migrateOldSessionRunners } from './processSupervision/migrateOldSessionRunners';
+import { readSessionRunnerLockStatus } from './sessionRunnerLock';
+import { resolveSessionRunnerBuildId } from './sessionRunnerBuildId';
 import { buildTrackedSessionRespawnEnvironmentVariables } from './processSupervision/sessionRunnerRespawnDescriptor';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
 import { publishShutdownStateBestEffort } from './lifecycle/publishShutdownState';
@@ -1255,6 +1258,7 @@ async function applyAlreadyRunningExistingSessionRuntimeSnapshot(params: Readonl
       ? params.incomingOptions.backendTarget.agentId
       : 'customAcp',
     credentials: effectiveCredentials,
+    explicitVendorResumeId: params.incomingOptions.resume,
   });
 
   if (!attachContext.ok) {
@@ -1580,6 +1584,12 @@ function mapExistingSessionAttachFailureToSpawnError(reason: import('./sessionEn
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.RESUME_MISSING_ENCRYPTION_KEY,
         errorMessage: 'Failed to open session encryption key for resume.',
+      };
+    case 'nativeResumeIdMissing':
+      return {
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.RESUME_NOT_SUPPORTED,
+        errorMessage: 'Historical native session cannot be resumed without its provider resume id.',
       };
   }
 }
@@ -2180,6 +2190,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         });
 
         const connectedServicesRestartRequestedPids = new Set<number>();
+        const oldRunnerMigrationRequestedPids = new Set<number>();
+        const isIntentionalRunnerRestartRequested = (pid: number): boolean =>
+          connectedServicesRestartRequestedPids.has(pid) || oldRunnerMigrationRequestedPids.has(pid);
 
         // Handle webhook from happy session reporting itself
         const onHappySessionWebhook = createOnHappySessionWebhook({
@@ -2393,6 +2406,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     sessionId: normalizedExistingSessionId,
                     agent: backendTarget?.kind === 'builtInAgent' ? backendTarget.agentId : 'customAcp',
                     credentials: effectiveCredentials,
+                    explicitVendorResumeId: effectiveResume,
                   });
 
                   if (!attachContext.ok) {
@@ -3626,6 +3640,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           }),
           onRespawnSuccess: ({ sessionId, previousPid }) => {
             connectedServicesRestartRequestedPids.delete(previousPid);
+            oldRunnerMigrationRequestedPids.delete(previousPid);
             clearConnectedServiceRestartIntentForPid(
               previousPid,
               '[DAEMON RUN] Failed to clear connected-service restart intent after respawn success',
@@ -3636,6 +3651,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           },
           onRespawnTerminal: ({ sessionId, previousPid, reason }) => {
             connectedServicesRestartRequestedPids.delete(previousPid);
+            oldRunnerMigrationRequestedPids.delete(previousPid);
             clearConnectedServiceRestartIntentForPid(
               previousPid,
               '[DAEMON RUN] Failed to clear connected-service restart intent after terminal respawn suppression',
@@ -4133,7 +4149,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               sessionAttachCleanupByPid,
               getApiMachineForSessions: () => apiMachineForSessions,
           onSessionRuntimeEnded: (sessionId, trackedSession, _exit, lifecycle) => {
-            if (connectedServicesRestartRequestedPids.has(trackedSession.pid)) return;
+            if (isIntentionalRunnerRestartRequested(trackedSession.pid)) return;
             if (lifecycle.respawnPending) return;
             void apiMachineForSessions?.releaseDirectSessionRuntimeOwnership(sessionId).catch((error) => {
               logger.debug('[DAEMON RUN] Failed to release direct-session runtime ownership after runner exit', error);
@@ -4141,11 +4157,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           },
           onUnexpectedExit: (tracked, exit) => {
             return sessionRunnerRespawnManager.handleUnexpectedExit(tracked, exit, {
-              forceRestart: connectedServicesRestartRequestedPids.has(tracked.pid),
+              forceRestart: isIntentionalRunnerRestartRequested(tracked.pid),
             });
           },
           isExitUnexpectedOverride: (tracked, _exit) => {
-            if (!connectedServicesRestartRequestedPids.has(tracked.pid)) return null;
+            if (!isIntentionalRunnerRestartRequested(tracked.pid)) return null;
             return true;
           },
           onPidPromoted: ({ fromPid, toPid }) => {
@@ -4154,16 +4170,19 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             if (connectedServicesRestartRequestedPids.delete(fromPid)) {
               connectedServicesRestartRequestedPids.add(toPid);
             }
+            if (oldRunnerMigrationRequestedPids.delete(fromPid)) {
+              oldRunnerMigrationRequestedPids.add(toPid);
+            }
             if (daemonStopSessionMarkerPreservePids.delete(fromPid)) {
               daemonStopSessionMarkerPreservePids.add(toPid);
             }
           },
           shouldPreserveSessionMarkerOnExit: ({ pid }) =>
-            connectedServicesRestartRequestedPids.has(pid) || daemonStopSessionMarkerPreservePids.has(pid),
+            isIntentionalRunnerRestartRequested(pid) || daemonStopSessionMarkerPreservePids.has(pid),
             });
         const onChildExited = (pid: number, exit: { reason: string; code: number | null; signal: string | null }) => {
           const trackedBeforeExit = pidToTrackedSession.get(pid) ?? null;
-          const wasConnectedServicesRestartRequested = connectedServicesRestartRequestedPids.has(pid);
+          const wasIntentionalRunnerRestartRequested = isIntentionalRunnerRestartRequested(pid);
           onChildExitedBase(pid, exit);
           daemonStopSessionMarkerPreservePids.delete(pid);
           if (!pidToTrackedSession.has(pid)) {
@@ -4173,14 +4192,14 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           if (trackedBeforeExit?.happySessionId) {
             const stillLive = getCurrentChildren().some((child) => child.happySessionId === trackedBeforeExit.happySessionId);
             if (!stillLive) {
-              // A connected-service forced restart respawns the session — treat the deferred switch as
-              // applied-via-restart (settle, no misleading "Account switch cancelled"), not terminated.
+              // An intentional forced restart respawns the same session; do not project
+              // a terminal cancellation while that replacement is pending.
               connectedServiceTurnDeferralQueue.cancelSession(
                 trackedBeforeExit.happySessionId,
-                wasConnectedServicesRestartRequested ? 'session_restarting' : 'session_terminated',
+                wasIntentionalRunnerRestartRequested ? 'session_restarting' : 'session_terminated',
               );
             }
-            if (!stillLive && !wasConnectedServicesRestartRequested) {
+            if (!stillLive && !wasIntentionalRunnerRestartRequested) {
               connectedServiceRuntimeAuthSwitchAttempts.clearSession(trackedBeforeExit.happySessionId);
               connectedServiceSessionAuthSwitchCore.clearSession(trackedBeforeExit.happySessionId);
             }
@@ -4221,6 +4240,52 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           connectedServiceRefreshCoordinator?.unregisterPid(tracked.pid);
           connectedServiceQuotasCoordinator?.unregisterPid(tracked.pid);
           sessionRunnerRespawnManager.handleUnexpectedExit(tracked, exit, { forceRestart: true });
+        };
+
+        const requestOldRunnerMigrationRestart = async (tracked: TrackedSession): Promise<boolean> => {
+          const sessionId = typeof tracked.happySessionId === 'string' ? tracked.happySessionId.trim() : '';
+          if (!sessionId) return false;
+          if (isIntentionalRunnerRestartRequested(tracked.pid)) return true;
+
+          oldRunnerMigrationRequestedPids.add(tracked.pid);
+          let processAlreadyMissingObserved = false;
+          try {
+            const signalResult = await requestConnectedServiceSessionRestartSignal({
+              pid: tracked.pid,
+              processGroupPid: resolveConnectedServiceRestartProcessGroupPid(tracked),
+              delayMs: 0,
+              shouldSignal: () => pidToTrackedSession.get(tracked.pid) === tracked,
+              restartDiagnostic: {
+                trigger: 'cli_version_migration',
+                sessionId,
+                reason: 'explicit_daemon_restart_migrate_sessions',
+              },
+              recordRestartDiagnostic: recordConnectedServiceRestartDiagnostic,
+              onSignalFailure: (error) => {
+                oldRunnerMigrationRequestedPids.delete(tracked.pid);
+                logger.warn('[DAEMON RUN] Failed to signal old session runner for CLI migration', {
+                  sessionId,
+                  pid: tracked.pid,
+                  error: serializeAxiosErrorForLog(error),
+                });
+              },
+              onProcessAlreadyMissing: () => {
+                processAlreadyMissingObserved = true;
+                observeConnectedServiceRestartProcessMissing?.(tracked);
+              },
+            });
+            if (signalResult.status === 'skipped_stale_owner') {
+              oldRunnerMigrationRequestedPids.delete(tracked.pid);
+              return false;
+            }
+            if (signalResult.status === 'process_already_missing' && !processAlreadyMissingObserved) {
+              observeConnectedServiceRestartProcessMissing?.(tracked);
+            }
+            return true;
+          } catch {
+            oldRunnerMigrationRequestedPids.delete(tracked.pid);
+            return false;
+          }
         };
 
         const stopSession = async (sessionId: string): Promise<boolean> => {
@@ -4782,6 +4847,13 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       onHappySessionWebhook,
       controlToken,
       isShuttingDown: () => shutdownInitiated || connectedServiceQuotaProducersQuiesced,
+      handleMigrateOldSessionRunners: async () => await migrateOldSessionRunners({
+        trackedSessions: getCurrentChildren(),
+        currentCliVersion: packageJson.version,
+        currentRunnerBuildId: await resolveSessionRunnerBuildId(),
+        readSessionRunnerLockStatus,
+        requestRestart: requestOldRunnerMigrationRestart,
+      }),
       handleConnectedServiceUsageLimitWaitResumeCancel: cancelConnectedServiceUsageLimitWaitResumeForSession,
       handleSessionConnectedServiceAuthSwitch: async (input) => {
         let diagnostics: SessionConnectedServiceAuthSwitchDiagnostics | undefined;

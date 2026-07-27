@@ -10,7 +10,7 @@ import * as serviceModule from './service.mjs';
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = scriptsDir;
 
-test('resolveStackAutostartProgramArgs uses the stable hstack shim with --restart', async (t) => {
+test('resolveStackAutostartProgramArgs uses the stable hstack shim with the Windows supervisor entry', async (t) => {
   assert.equal(typeof serviceModule.resolveStackAutostartProgramArgs, 'function');
 
   const tmp = await mkdtemp(join(tmpdir(), 'stack-service-program-args-'));
@@ -28,5 +28,10 @@ test('resolveStackAutostartProgramArgs uses the stable hstack shim with --restar
   });
 
   const programArgs = await serviceModule.resolveStackAutostartProgramArgs({ rootDir, mode: 'user', systemUser: null });
-  assert.deepEqual(programArgs, [shimPath, 'start', '--restart']);
+  assert.deepEqual(
+    programArgs,
+    process.platform === 'win32'
+      ? [shimPath, 'service', 'supervise']
+      : [shimPath, 'start', '--restart'],
+  );
 });

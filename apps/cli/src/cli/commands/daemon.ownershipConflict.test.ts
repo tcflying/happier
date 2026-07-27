@@ -159,7 +159,6 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
                 } finally {
                     startOutput.restore();
                 }
-
                 expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
                 expect(startOutput.text()).toContain('background service');
                 expect(startOutput.text()).toContain('selected relay');
@@ -177,7 +176,6 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
                 } finally {
                     stopOutput.restore();
                 }
-
                 expect(stopDaemonMock).not.toHaveBeenCalled();
                 expect(stopOutput.text()).toContain('background service');
                 expect(stopOutput.text()).toContain('happier service stop');
@@ -194,7 +192,6 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
                 } finally {
                     restartOutput.restore();
                 }
-
                 expect(restartOutput.text()).toContain('background service');
                 expect(restartOutput.text()).toContain('happier doctor repair');
                 expect(restartOutput.text()).not.toContain('happier service stop');
@@ -562,6 +559,39 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
 
             expect(restartDaemonAndWaitMock).toHaveBeenCalledWith({ stopSessions: false, takeover: true });
             expect(output.text()).toContain('Taking over the current manual daemon');
+        });
+    });
+
+    it('forwards --migrate-sessions as an explicit restart opt-in', async () => {
+        await withTempDir('happier-daemon-restart-migrate-', async (homeDir) => {
+            envScope.patch({
+                HAPPIER_HOME_DIR: homeDir,
+                HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+            });
+            vi.resetModules();
+            const { handleDaemonCliCommand } = await import('./daemon');
+            const output = captureConsoleText();
+            const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+                throw new Error(`exit:${code ?? ''}`);
+            }) as never);
+
+            try {
+                await expect(handleDaemonCliCommand({
+                    args: ['daemon', 'restart', '--migrate-sessions'],
+                    rawArgv: ['node', 'happier', 'daemon', 'restart', '--migrate-sessions'],
+                    terminalRuntime: null,
+                })).rejects.toThrow(/exit:0/);
+            } finally {
+                output.restore();
+                exitSpy.mockRestore();
+            }
+
+            expect(restartDaemonAndWaitMock).toHaveBeenCalledWith({
+                stopSessions: false,
+                takeover: false,
+                migrateSessions: true,
+            });
         });
     });
 

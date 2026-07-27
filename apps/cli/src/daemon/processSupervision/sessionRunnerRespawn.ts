@@ -71,10 +71,10 @@ function toTerminationEvent(exit: DaemonChildExit): TerminationEvent {
   return { type: 'exited', code: 1 };
 }
 
-const connectedServiceRestartRequestedTerminationEvent: TerminationEvent = {
+const intentionalRestartRequestedTerminationEvent: TerminationEvent = {
   type: 'spawn_error',
-  errorName: 'ConnectedServiceRestartRequested',
-  errorMessage: 'connected_service_auth_group_restart_requested',
+  errorName: 'SessionRunnerRestartRequested',
+  errorMessage: 'session_runner_restart_requested',
 };
 
 function buildRespawnOptions(params: Readonly<{
@@ -350,7 +350,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       if (!sessionId) return false;
       const forceRestart = options?.forceRestart === true;
       if (forceRestart) {
-        // A connected-service-initiated forced restart explicitly supersedes any prior stop request
+        // An intentional forced restart explicitly supersedes any prior stop request
         // (e.g. a stale flag left by an earlier manual stop that the resume path never cleared --
         // `clearStopRequested` has no production caller). Without this, the forced kill's respawn is
         // silently vetoed and the session dies, surfaced to the user as an exit-143 crash. Clearing
@@ -372,7 +372,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
 
       const vendorResumeId = normalizeOptionalString(trackedSession.vendorResumeId);
       const controller = getOrCreateController(sessionId);
-      const event = forceRestart ? connectedServiceRestartRequestedTerminationEvent : toTerminationEvent(exit);
+      const event = forceRestart ? intentionalRestartRequestedTerminationEvent : toTerminationEvent(exit);
       const decision = controller.nextDecisionForTermination(event);
       if (decision.type === 'no_restart') {
         if (decision.reason.startsWith('max_restarts_exceeded')) {

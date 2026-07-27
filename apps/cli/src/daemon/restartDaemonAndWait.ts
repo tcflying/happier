@@ -1,6 +1,7 @@
 import {
   checkIfDaemonRunningAndCleanupStaleState,
   inspectDaemonRunningStateAndCleanupStaleState,
+  requestDaemonSessionRunnerMigration,
   stopDaemon,
 } from '@/daemon/controlClient';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
@@ -27,7 +28,11 @@ function resolveDaemonIdentityFingerprint(
   ].join('|');
 }
 
-export async function restartDaemonAndWait(params: Readonly<{ stopSessions?: boolean; takeover?: boolean }> = {}): Promise<boolean> {
+export async function restartDaemonAndWait(params: Readonly<{
+  stopSessions?: boolean;
+  takeover?: boolean;
+  migrateSessions?: boolean;
+}> = {}): Promise<boolean> {
   const previousDaemon = await inspectDaemonRunningStateAndCleanupStaleState();
   const previousIdentityFingerprint = resolveDaemonIdentityFingerprint(previousDaemon);
 
@@ -82,6 +87,15 @@ export async function restartDaemonAndWait(params: Readonly<{ stopSessions?: boo
       return false;
     }
     if (currentIdentityFingerprint === previousIdentityFingerprint) {
+      return false;
+    }
+  }
+
+  if (params.migrateSessions) {
+    try {
+      const migration = await requestDaemonSessionRunnerMigration();
+      if (migration.migrationFailed > 0) return false;
+    } catch {
       return false;
     }
   }

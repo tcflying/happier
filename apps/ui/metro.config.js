@@ -163,20 +163,21 @@ config.serializer = {
 // - the native `find` path can exceed Node's max string length and crash
 //
 // In CI/e2e and stack builds, prefer Metro's Node filesystem crawler (slower but deterministic).
+// Stack development marks itself explicitly so it can keep a live watcher without inheriting the
+// non-interactive build policy merely because HAPPIER_STACK_STACK is set.
 const isStackRun = Boolean((process.env.HAPPIER_STACK_STACK ?? '').toString().trim());
+const metroMode = (process.env.HAPPIER_UI_METRO_MODE ?? '').toString().trim().toLowerCase();
+const isInteractiveMetroDevelopment = metroMode === 'development';
 const isWatchmanDisabledForLocalRun = /^(1|true|yes|on)$/i.test(
   (process.env.HAPPIER_UI_METRO_DISABLE_WATCHMAN ?? '').toString().trim(),
 );
+const isNonInteractiveMetroBuild =
+  metroMode === 'build'
+  || Boolean(process.env.CI)
+  || (isStackRun && !isInteractiveMetroDevelopment);
 
-if (process.env.CI || isStackRun || isWatchmanDisabledForLocalRun) {
+if (isNonInteractiveMetroBuild || isWatchmanDisabledForLocalRun) {
   config.resolver.useWatchman = false;
-  // `metro-file-map`'s watcher selection is driven by `watcher.useWatchman`, not
-  // `resolver.useWatchman`. Set both to avoid "Failed to start watch mode"
-  // timeouts in large monorepos where Watchman can be slow to initialize.
-  config.watcher = {
-    ...(config.watcher || {}),
-    useWatchman: false,
-  };
 }
 
 // Add support for .wasm files (required by Skia for all platforms)
@@ -217,7 +218,13 @@ const existingWatchFolders = Array.isArray(config.watchFolders) ? config.watchFo
 config.watchFolders = existingWatchFolders.filter(
   (folder, index, all) => typeof folder === 'string' && folder.length > 0 && all.indexOf(folder) === index,
 );
+const hmrSoakRoot = (process.env.HAPPIER_UI_HMR_SOAK_ROOT ?? '').toString().trim();
+const hmrSoakWatchRoot = hmrSoakRoot ? path.resolve(hmrSoakRoot) : null;
+if (hmrSoakWatchRoot && !config.watchFolders.includes(hmrSoakWatchRoot)) {
+  config.watchFolders.push(hmrSoakWatchRoot);
+}
 
+const repoRoot = path.resolve(__dirname, "../..");
 const rootNodeModules = path.resolve(__dirname, "../../node_modules");
 const appNodeModules = path.resolve(__dirname, "node_modules");
 const generatedWorkletsWatchFolders = resolveGeneratedWorkletsWatchFolders() || [];
@@ -259,6 +266,88 @@ const docsWorkspaceRoot = path.resolve(__dirname, "../docs");
 const websiteWorkspaceRoot = path.resolve(__dirname, "../website");
 config.watchFolders = config.watchFolders.filter((folder) => folder !== docsWorkspaceRoot && folder !== websiteWorkspaceRoot);
 
+function resolveRealPathOrAbsolute(folder) {
+  const absolute = path.resolve(folder);
+  try {
+    return fs.realpathSync.native(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
+function normalizedPathKey(folder) {
+  const resolved = path.normalize(resolveRealPathOrAbsolute(folder));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isSameOrNestedPath(candidate, parent) {
+  const relativePath = path.relative(parent, candidate);
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function resolveWorkspacePackageName(folder) {
+  const relativePath = path.relative(repoRoot, path.resolve(folder));
+  const segments = relativePath.split(path.sep);
+  if (segments.length !== 2 || (segments[0] !== 'apps' && segments[0] !== 'packages')) {
+    return null;
+  }
+
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(folder, 'package.json'), 'utf8'));
+    return typeof packageJson.name === 'string' ? packageJson.name : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveUiInternalWorkspaceDependencies() {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+    return new Set(
+      Object.keys({
+        ...(packageJson.dependencies || {}),
+        ...(packageJson.devDependencies || {}),
+      }).filter((name) => name.startsWith('@happier-dev/')),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function compactMetroWatchFolders(folders) {
+  const projectRoot = resolveRealPathOrAbsolute(__dirname);
+  const directWorkspaceDependencies = resolveUiInternalWorkspaceDependencies();
+  const unique = new Map();
+
+  for (const folder of folders) {
+    if (typeof folder !== 'string' || !folder.trim()) continue;
+    const absolute = path.resolve(folder);
+    const realPath = resolveRealPathOrAbsolute(absolute);
+    if (isSameOrNestedPath(realPath, projectRoot)) continue;
+
+    const workspacePackageName = resolveWorkspacePackageName(absolute);
+    if (workspacePackageName && !directWorkspaceDependencies.has(workspacePackageName)) continue;
+
+    const key = normalizedPathKey(realPath);
+    if (!unique.has(key)) {
+      unique.set(key, { absolute, realPath });
+    }
+  }
+
+  const entries = [...unique.values()];
+  return entries
+    .filter((entry, index) =>
+      !entries.some((candidate, candidateIndex) =>
+        candidateIndex !== index
+        && entry.realPath !== candidate.realPath
+        && isSameOrNestedPath(entry.realPath, candidate.realPath),
+      ),
+    )
+    .map((entry) => entry.absolute);
+}
+
+config.watchFolders = compactMetroWatchFolders(config.watchFolders);
+
 // Kokoro (kokoro-js) ships a `.web.js` prebundle that Metro cannot transform (it contains non-literal dynamic imports).
 // For Expo web, force Metro to resolve the package to its ESM entry and shim Node builtins that the ESM file imports
 // but never uses in browser mode.
@@ -276,6 +365,10 @@ const reactNativeWebShim = path.resolve(__dirname, "sources/platform/shims/react
 const expoSystemUiWebStub = path.resolve(__dirname, "sources/platform/stubs/expoSystemUiWebStub.ts");
 const expoAsyncRequireSetupShim = path.resolve(__dirname, "sources/dev/webHmrOptOut/expoAsyncRequireSetupShim.ts");
 const expoMessageSocketShim = path.resolve(__dirname, "sources/dev/webHmrOptOut/expoMessageSocketShim.ts");
+const defaultHmrSoakMarker = path.resolve(__dirname, "sources/dev/hmrSoakMarker.ts");
+const hmrSoakMarker = hmrSoakWatchRoot
+  ? path.resolve(hmrSoakWatchRoot, "hmrSoakMarker.ts")
+  : defaultHmrSoakMarker;
 const workspaceEntryPoint = path.resolve(__dirname, "index.ts");
 
 function isExpoModuleOrigin(originModulePath, suffixes) {
@@ -294,18 +387,28 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   const generatedWorkletResolution = resolveGeneratedWorkletModule(moduleName);
   if (generatedWorkletResolution) return generatedWorkletResolution;
 
+  if (moduleName === "happier-hmr-soak-marker") {
+    return { type: "sourceFile", filePath: hmrSoakMarker };
+  }
+
+  if (
+    parseBooleanEnv("HAPPIER_UI_METRO_RESOLUTION_TRACE", false)
+    && (
+      String(moduleName ?? "").includes("@noble/hashes")
+      || String(context?.originModulePath ?? "").includes("@noble/hashes")
+    )
+  ) {
+    console.warn(`[metro:resolve] ${JSON.stringify({
+      specifier: moduleName,
+      origin: context?.originModulePath ?? null,
+      platform: platform ?? null,
+    })}`);
+  }
+
   // Fix event-target-shim/index import - exports define "." not "./index"
   let resolvedModuleName = moduleName;
   if (moduleName === "event-target-shim/index") {
     resolvedModuleName = "event-target-shim";
-  }
-  // Some upstream packages import `@noble/hashes/crypto.js`, but noble-hashes only exports `./crypto`.
-  // Metro can crash when resolution throws inside a large monorepo watch crawl; normalize to the exported subpath.
-  if (moduleName === "@noble/hashes/crypto.js") {
-    resolvedModuleName = "@noble/hashes/crypto";
-  }
-  if (path.normalize(String(moduleName)) === path.resolve(rootNodeModules, "@noble/hashes/crypto.js")) {
-    resolvedModuleName = "@noble/hashes/crypto";
   }
 
   // Per-tab web QA opt-out: allow disabling Fast Refresh/HMR on specific browser tabs (via sessionStorage),

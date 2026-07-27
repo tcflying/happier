@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runCaptureResult, spawnProc } from './proc.mjs';
+import { resolveRuntimeTeePath, runCaptureResult, spawnProc } from './proc.mjs';
 import { resolveDefaultShellForCommand } from './proc.mjs';
 
 async function withTempRoot(t) {
@@ -26,6 +26,7 @@ test('runCaptureResult captures stdout/stderr', async () => {
 });
 
 test('runCaptureResult streams output when streamLabel is set (without affecting captured output)', async (t) => {
+  const root = await withTempRoot(t);
   const stdoutWrites = [];
   const stderrWrites = [];
   t.mock.method(process.stdout, 'write', (chunk) => {
@@ -38,7 +39,7 @@ test('runCaptureResult streams output when streamLabel is set (without affecting
   });
 
   const res = await runCaptureResult(process.execPath, ['-e', 'console.log("hello"); console.error("oops")'], {
-    env: process.env,
+    env: { ...process.env, HAPPIER_STACK_LOG_TEE_DIR: root },
     streamLabel: 'proc-test',
   });
   assert.equal(res.ok, true);
@@ -56,7 +57,7 @@ test('runCaptureResult can tee streamed output to a file', async (t) => {
   const root = await withTempRoot(t);
   const teeFile = join(root, 'tee.log');
   const res = await runCaptureResult(process.execPath, ['-e', 'console.log("hello"); console.error("oops")'], {
-    env: process.env,
+    env: { ...process.env, HAPPIER_STACK_LOG_TEE_DIR: root },
     teeFile,
     teeLabel: 'tee-test',
   });
@@ -66,6 +67,21 @@ test('runCaptureResult can tee streamed output to a file', async (t) => {
   assert.match(raw, /\[tee-test\] oops/);
 });
 
+test('runCaptureResult preserves an explicit structured artifact path', async (t) => {
+  const root = await withTempRoot(t);
+  const teeFile = join(root, 'review-run', 'raw', 'review.log');
+  const res = await runCaptureResult(process.execPath, ['-e', 'console.log("review")'], {
+    env: {
+      ...process.env,
+      HAPPIER_STACK_LOG_TEE_DIR: join(root, 'central-runtime-logs'),
+    },
+    teeFile,
+    teeLabel: 'review',
+  });
+  assert.equal(res.ok, true);
+  assert.match(await readFile(teeFile, 'utf8'), /\[review\] review/);
+});
+
 test('runCaptureResult emits periodic keepalive logs while process is running', async (t) => {
   const root = await withTempRoot(t);
   const teeFile = join(root, 'keepalive.log');
@@ -73,7 +89,8 @@ test('runCaptureResult emits periodic keepalive logs while process is running', 
     process.execPath,
     ['-e', 'setTimeout(() => { process.exit(0); }, 220);'],
     {
-      env: process.env,
+      env: { ...process.env, HAPPIER_STACK_LOG_TEE_DIR: root },
+      cwd: root,
       teeFile,
       teeLabel: 'keepalive-test',
       heartbeatMs: 50,
@@ -100,7 +117,8 @@ test('spawnProc can tee output to an env-scoped tee dir when no explicit teeFile
   assert.match(raw, /\[server\] oops/);
 });
 
-test('spawnProc reports complete stdout and stderr lines to onLine', async () => {
+test('spawnProc reports complete stdout and stderr lines to onLine', async (t) => {
+  const root = await withTempRoot(t);
   const observed = [];
   const child = spawnProc(
     'line-test',
@@ -112,7 +130,7 @@ test('spawnProc reports complete stdout and stderr lines to onLine', async () =>
         "setTimeout(() => { process.stdout.write('rt\\n'); process.stderr.write('err\\n'); }, 25);",
       ].join(''),
     ],
-    process.env,
+    { ...process.env, HAPPIER_STACK_LOG_TEE_DIR: root },
     {
       silent: true,
       onLine: (event) => observed.push(event),
@@ -129,6 +147,33 @@ test('spawnProc reports complete stdout and stderr lines to onLine', async () =>
     { stream: 'stdout', line: 'part' },
     { stream: 'stderr', line: 'err' },
   ]);
+});
+
+test('resolveRuntimeTeePath relocates repo-root logs into a trusted project log directory', async (t) => {
+  const root = await withTempRoot(t);
+  const requested = join(root, 'happier-runtime.log');
+  const actual = resolveRuntimeTeePath({
+    label: 'runtime',
+    teeFile: requested,
+    env: {},
+    cwd: root,
+  });
+
+  assert.equal(actual, join(root, '.project', 'logs', 'happier-runtime.log'));
+});
+
+test('resolveRuntimeTeePath preserves paths inside an explicit trusted log directory', async (t) => {
+  const root = await withTempRoot(t);
+  const logRoot = join(root, 'central-logs');
+  const requested = join(logRoot, 'runtime.log');
+  const actual = resolveRuntimeTeePath({
+    label: 'runtime',
+    teeFile: requested,
+    env: { HAPPIER_STACK_LOG_TEE_DIR: logRoot },
+    cwd: root,
+  });
+
+  assert.equal(actual, requested);
 });
 
 test('resolveDefaultShellForCommand enables a shell for Yarn shims on Windows', () => {

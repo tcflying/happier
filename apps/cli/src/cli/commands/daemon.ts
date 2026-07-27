@@ -82,6 +82,7 @@ ${chalk.bold('Usage:')}
   happier daemon stop --all         Stop daemons for all configured relays
   happier daemon restart [--takeover]  Restart the daemon
   happier daemon restart --kill-sessions  Restart the daemon and its tracked sessions
+  happier daemon restart --migrate-sessions  Restart, then respawn CLI-version-drifted runners
   happier daemon start-sync [--takeover]  Start the daemon synchronously
   happier daemon status             Show daemon status
   happier daemon status --all       Show daemon status for all configured relays
@@ -486,7 +487,12 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
     }
 
     const stopSessions = args.includes('--kill-sessions');
-    const started = await restartDaemonAndWait({ stopSessions, takeover: takeoverRequested });
+    const migrateSessions = args.includes('--migrate-sessions');
+    const started = await restartDaemonAndWait({
+      stopSessions,
+      takeover: takeoverRequested,
+      ...(migrateSessions ? { migrateSessions: true } : {}),
+    });
 
     if (started) {
       if (jsonRequested) {

@@ -5,6 +5,7 @@ import {
   type SessionRunnerLifecycleState,
 } from '@/daemon/sessionRunnerLifecycleState';
 import type { SessionRunnerLockPayload } from '@/daemon/sessionRunnerLock';
+import { inspectServerProfileUrlRoles } from '@/server/serverProfileUrlRoles';
 
 export type RunnerDoctorDiagnostic = DoctorRuntimeDiagnostic;
 
@@ -13,11 +14,16 @@ export type RunnerDoctorDiagnosticInput = Readonly<{
   heartbeatTimeoutMs: number;
   currentCliVersion: string;
   currentRunnerBuildId: string | null;
+  machineId?: string | null;
   runners: readonly Readonly<{
     sessionActive: boolean | null;
     processState: ProcessRunState;
     lock: SessionRunnerLockPayload;
     lifecycle: SessionRunnerLifecycleState | null;
+    log?: Readonly<{
+      fileName: string;
+      lastWriteAtMs: number;
+    }> | null;
   }>[];
   mutationDeadLetters: readonly Readonly<{
     fileName: string;
@@ -29,9 +35,36 @@ export type RunnerDoctorDiagnosticInput = Readonly<{
     resolvedServerUrl: string;
     resolvedWebappUrl: string;
     profileServerUrl: string;
+    profileLocalServerUrl?: string | null;
     profileWebappUrl: string;
   }> | null;
 }>;
+
+type RunnerInput = RunnerDoctorDiagnosticInput['runners'][number];
+
+const RUNNER_RECOVERY_RECOMMENDATION =
+  'Restart the Happier daemon, then resume the session so a fresh runner generation can take ownership; do not delete the lock manually.';
+const VERSION_RECOVERY_RECOMMENDATION =
+  'Restart the Happier daemon and resume the session so the runner uses the current CLI build.';
+const DEAD_LETTER_RECOVERY_RECOMMENDATION =
+  'Inspect and preserve the mutation dead-letter, restore relay connectivity, then replay or explicitly isolate the failed mutations.';
+
+function buildRunnerRecoveryContext(
+  input: RunnerDoctorDiagnosticInput,
+  runner: RunnerInput,
+  recoveryRecommendation: string,
+) {
+  return {
+    machineId: String(input.machineId ?? '').trim() || null,
+    sessionId: runner.lock.sessionId,
+    pid: runner.lock.pid,
+    generationId: runner.lock.generationId ?? null,
+    processState: runner.processState,
+    lastHeartbeatAtMs: runner.lifecycle?.heartbeatAtMs ?? null,
+    cleanupPhase: runner.lifecycle?.phase ?? 'unknown',
+    recoveryRecommendation,
+  } as const;
+}
 
 function comparableUrl(raw: string): string {
   try {
@@ -84,9 +117,7 @@ export function buildRunnerDoctorDiagnostics(
         code: 'inactive_session_runner_lock',
         severity: 'warning',
         data: {
-          sessionId: runner.lock.sessionId,
-          pid: runner.lock.pid,
-          generationId: runner.lock.generationId ?? null,
+          ...buildRunnerRecoveryContext(input, runner, RUNNER_RECOVERY_RECOMMENDATION),
           lockState,
         },
       });
@@ -101,8 +132,7 @@ export function buildRunnerDoctorDiagnostics(
         code: 'runner_cleanup_overdue',
         severity: 'warning',
         data: {
-          sessionId: runner.lock.sessionId,
-          pid: runner.lock.pid,
+          ...buildRunnerRecoveryContext(input, runner, RUNNER_RECOVERY_RECOMMENDATION),
           deadlineAtMs: runner.lifecycle.cleanupDeadlineAtMs,
           overdueByMs: input.nowMs - runner.lifecycle.cleanupDeadlineAtMs,
         },
@@ -114,8 +144,7 @@ export function buildRunnerDoctorDiagnostics(
         code: 'runner_heartbeat_stale',
         severity: 'warning',
         data: {
-          sessionId: runner.lock.sessionId,
-          pid: runner.lock.pid,
+          ...buildRunnerRecoveryContext(input, runner, RUNNER_RECOVERY_RECOMMENDATION),
           heartbeatState: 'missing',
           heartbeatAgeMs: null,
         },
@@ -128,12 +157,36 @@ export function buildRunnerDoctorDiagnostics(
         code: 'runner_heartbeat_stale',
         severity: 'warning',
         data: {
-          sessionId: runner.lock.sessionId,
-          pid: runner.lock.pid,
+          ...buildRunnerRecoveryContext(input, runner, RUNNER_RECOVERY_RECOMMENDATION),
           heartbeatState: 'stale',
           heartbeatAgeMs: input.nowMs - runner.lifecycle.heartbeatAtMs,
         },
       });
+    }
+
+    if (runner.sessionActive === false && runner.log !== undefined) {
+      const lastWriteAtMs = runner.log?.lastWriteAtMs ?? null;
+      const logAgeMs = lastWriteAtMs === null
+        ? null
+        : Math.max(0, input.nowMs - lastWriteAtMs);
+      const logState = runner.log === null
+        ? 'missing'
+        : logAgeMs !== null && logAgeMs > input.heartbeatTimeoutMs
+          ? 'stale'
+          : 'fresh';
+      if (logState !== 'fresh') {
+        findings.push({
+          code: 'runner_log_stale',
+          severity: 'warning',
+          data: {
+            ...buildRunnerRecoveryContext(input, runner, RUNNER_RECOVERY_RECOMMENDATION),
+            logState,
+            fileName: runner.log?.fileName ?? null,
+            lastLogWriteAtMs: lastWriteAtMs,
+            logAgeMs,
+          },
+        });
+      }
     }
 
     if (runner.lifecycle) {
@@ -148,8 +201,7 @@ export function buildRunnerDoctorDiagnostics(
           code: 'runner_cli_build_drift',
           severity: 'warning',
           data: {
-            sessionId: runner.lock.sessionId,
-            pid: runner.lock.pid,
+            ...buildRunnerRecoveryContext(input, runner, VERSION_RECOVERY_RECOMMENDATION),
             runnerCliVersion: runner.lifecycle.cliVersion,
             currentCliVersion: input.currentCliVersion,
             runnerBuildId: runner.lifecycle.runnerBuildId ?? null,
@@ -166,16 +218,25 @@ export function buildRunnerDoctorDiagnostics(
       code: 'session_mutation_dead_letter',
       severity: 'warning',
       data: {
+        machineId: String(input.machineId ?? '').trim() || null,
         fileName: deadLetter.fileName,
         sessionIds: [...deadLetter.sessionIds],
         entryCount: deadLetter.entryCount,
+        recoveryRecommendation: DEAD_LETTER_RECOVERY_RECOMMENDATION,
       },
     });
   }
 
   if (input.serverRoles) {
     const roles = input.serverRoles;
-    const driftKinds: ('role' | 'port')[] = [];
+    const driftKinds: ('role' | 'port' | 'same_endpoint')[] = [];
+    const roleConflict = inspectServerProfileUrlRoles({
+      serverUrl: roles.profileServerUrl,
+      localServerUrl: roles.profileLocalServerUrl,
+      webappUrl: roles.profileWebappUrl,
+    });
+    if (roleConflict) driftKinds.push('same_endpoint');
+
     const rolesSwapped = comparableUrl(roles.resolvedServerUrl) === comparableUrl(roles.profileWebappUrl)
       && comparableUrl(roles.resolvedWebappUrl) === comparableUrl(roles.profileServerUrl)
       && comparableUrl(roles.profileServerUrl) !== comparableUrl(roles.profileWebappUrl);
@@ -190,10 +251,13 @@ export function buildRunnerDoctorDiagnostics(
     if (driftKinds.length > 0) {
       findings.push({
         code: 'server_webapp_role_port_drift',
-        severity: 'warning',
+        severity: roleConflict || rolesSwapped ? 'error' : 'warning',
         data: {
           ...roles,
+          profileLocalServerUrl: roles.profileLocalServerUrl ?? null,
           driftKinds,
+          recoveryRecommendation:
+            `Set distinct relay and web app URLs for server profile ${roles.serverId}, then reselect that server profile.`,
         },
       });
     }

@@ -44,6 +44,9 @@ apps/stack/resume-invocations.log
 apps/stack/*.tgz
 packages/relay-server/*.tgz
 apps/server/output/
+/happier-*.log
+/happier-*.err.log
+/happier-*.out.log
 
 # macOS
 .DS_Store

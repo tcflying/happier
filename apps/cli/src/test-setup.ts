@@ -14,10 +14,11 @@ import { createHash } from 'node:crypto'
 import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs'
 import { ensureBuildArtifactsReadyOnce } from './testSetupBuildCoordinator'
 
-export type CliTestBuildMode = 'shared-only' | 'full'
+export type CliTestBuildMode = 'existing-only' | 'shared-only' | 'full'
 
 type CliTestSetupDependencies = {
   resolveProjectRoot: () => string
+  assertSharedDepsAvailable: (projectRoot: string) => void
   ensureSharedDepsBuiltOnce: (projectRoot: string) => Promise<void>
   ensureDistBuiltOnce: (projectRoot: string) => Promise<void>
 }
@@ -91,6 +92,19 @@ function resolveBundledProtocolReadyMarkers(projectRoot: string): string[] {
     join(protocolDistDir, 'features', 'payload', 'isRecord.js'),
     ...runtimeDependencyMarkers,
   ]
+}
+
+function assertSharedDepsAvailable(projectRoot: string): void {
+  const missingMarkers = resolveBundledProtocolReadyMarkers(projectRoot).filter((markerPath) => !existsSync(markerPath))
+  if (missingMarkers.length === 0) return
+
+  throw new Error(
+    [
+      'Read-only CLI test lanes use existing bundled artifacts and never rebuild shared dist directories.',
+      'Build the shared dependencies before starting the live service, then retry the test.',
+      `Missing artifacts:\n${missingMarkers.map((markerPath) => `- ${markerPath}`).join('\n')}`,
+    ].join('\n'),
+  )
 }
 
 function spawnYarnSync(args: readonly string[], cwd: string) {
@@ -177,20 +191,26 @@ export async function setup(options: CliTestSetupOptions = {}) {
   // Extend test timeout for integration tests
   process.env.VITEST_POOL_TIMEOUT = '60000'
 
+  const buildMode = options.buildMode ?? 'full'
   const skipBuild = readSkipBuildOverride()
 
   // Allow global opt-out for low-level setup tests and targeted local debugging.
-  if (skipBuild) return
+  if (skipBuild && buildMode !== 'existing-only') return
 
   const dependencies: CliTestSetupDependencies = {
     resolveProjectRoot: resolveCliProjectRoot,
+    assertSharedDepsAvailable,
     ensureSharedDepsBuiltOnce,
     ensureDistBuiltOnce,
     ...options.dependencies,
   }
 
-  const buildMode = options.buildMode ?? 'full'
   const projectRoot = dependencies.resolveProjectRoot()
+
+  if (buildMode === 'existing-only') {
+    dependencies.assertSharedDepsAvailable(projectRoot)
+    return
+  }
 
   await dependencies.ensureSharedDepsBuiltOnce(projectRoot)
 

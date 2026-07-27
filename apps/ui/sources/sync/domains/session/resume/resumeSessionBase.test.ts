@@ -92,7 +92,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
         setCanonicalSessionTarget('m1', '/tmp');
         const base = buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
-            session: { metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude' } } as any,
+            session: { seq: 0, metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude' } } as any,
             resumeCapabilityOptions: { accountSettings: {} },
         });
         expect(base).toMatchObject({
@@ -102,6 +102,38 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
             backendTarget: { kind: 'builtInAgent' },
         });
         expect(base).not.toHaveProperty('resume');
+    });
+
+    it('fails closed for historical Codex, Claude, and OpenCode threads when the native resume id is missing', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
+
+        for (const fixture of [
+            {
+                flavor: 'openai',
+                resumeCapabilityOptions: { accountSettings: { codexBackendMode: 'acp' as const } },
+            },
+            {
+                flavor: 'claude',
+                resumeCapabilityOptions: { accountSettings: {} },
+            },
+            {
+                flavor: 'opencode',
+                resumeCapabilityOptions: { accountSettings: {} },
+            },
+        ]) {
+            expect(buildResumeSessionBaseOptionsFromSession({
+                sessionId: 's1',
+                session: {
+                    seq: 12,
+                    metadata: {
+                        machineId: 'm1',
+                        path: '/tmp',
+                        flavor: fixture.flavor,
+                    },
+                } as any,
+                resumeCapabilityOptions: fixture.resumeCapabilityOptions,
+            })).toBeNull();
+        }
     });
 
     it('does not use raw metadata as a live resume target when canonical reachability is unavailable', () => {

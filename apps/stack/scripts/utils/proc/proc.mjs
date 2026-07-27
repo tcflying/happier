@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
-import { createWriteStream, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+
+import { createRuntimeLogSink } from './rotating_log_sink.mjs';
 
 export function resolveDefaultShellForCommand(cmd, { platform = process.platform } = {}) {
   if (platform !== 'win32') return false;
@@ -70,6 +72,48 @@ function sanitizeLogFileToken(raw) {
   return cleaned || 'proc';
 }
 
+function isWithinPath(root, candidate) {
+  const relation = relative(resolve(root), resolve(candidate));
+  return relation === '' || (!relation.startsWith('..') && !isAbsolute(relation));
+}
+
+export function resolveRuntimeTeePath({
+  label,
+  teeFile,
+  env = process.env,
+  cwd = process.cwd(),
+} = {}) {
+  const trustedRoots = [];
+  const addTrustedRoot = (value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return;
+    const canonical = resolve(raw);
+    if (!trustedRoots.includes(canonical)) trustedRoots.push(canonical);
+  };
+
+  addTrustedRoot(env?.HAPPIER_STACK_LOG_TEE_DIR);
+  const cliHomeDir = String(
+    env?.HAPPIER_HOME_DIR ?? env?.HAPPIER_STACK_CLI_HOME_DIR ?? ''
+  ).trim();
+  if (cliHomeDir) addTrustedRoot(join(dirname(resolve(cliHomeDir)), 'logs'));
+  addTrustedRoot(join(resolve(cwd), '.project', 'logs'));
+
+  const primaryRoot = trustedRoots[0];
+  const requested = String(teeFile ?? '').trim();
+  if (requested) {
+    const canonicalRequested = resolve(requested);
+    if (trustedRoots.some((root) => isWithinPath(root, canonicalRequested))) {
+      return canonicalRequested;
+    }
+    const relocatedName = basename(canonicalRequested) || `${sanitizeLogFileToken(label)}.log`;
+    return join(primaryRoot, relocatedName);
+  }
+
+  const canonicalLabel = String(label ?? '').trim();
+  if (!canonicalLabel) return '';
+  return join(primaryRoot, `${sanitizeLogFileToken(canonicalLabel)}.log`);
+}
+
 export function spawnProc(label, cmd, args, env, options = {}) {
   const {
     silent = false,
@@ -87,19 +131,18 @@ export function spawnProc(label, cmd, args, env, options = {}) {
   const outPrefix = `[${label}] `;
   const errPrefix = `[${label}] `;
 
-  let teePath = typeof teeFile === 'string' && teeFile.trim() ? teeFile.trim() : '';
-  if (!teePath) {
-    const teeDir = String(env?.HAPPIER_STACK_LOG_TEE_DIR ?? '').trim();
-    if (teeDir) {
-      try {
-        mkdirSync(teeDir, { recursive: true });
-      } catch {
-        // ignore
-      }
-      teePath = join(teeDir, `${sanitizeLogFileToken(label)}.log`);
-    }
+  const teePath = resolveRuntimeTeePath({
+    label: typeof teeLabel === 'string' && teeLabel.trim() ? teeLabel : label,
+    teeFile,
+    env,
+    cwd: spawnOptionsRest.cwd ?? process.cwd(),
+  });
+  try {
+    mkdirSync(dirname(teePath), { recursive: true });
+  } catch {
+    // ignore
   }
-  const teeStream = teePath ? createWriteStream(teePath, { flags: 'a' }) : null;
+  const teeStream = createRuntimeLogSink(teePath, env);
   const teePrefix = (() => {
     const t = typeof teeLabel === 'string' ? teeLabel.trim() : '';
     if (t) return `[${t}] `;
@@ -305,7 +348,17 @@ export async function runCaptureResult(cmd, args, options = {}) {
     const errState = { buf: '' };
     const prefix = shouldStream ? `[${label}] ` : '';
 
-    const teePath = String(teeFile ?? '').trim();
+    // runCaptureResult also backs structured review artifacts whose explicit paths are part of
+    // their durable contract. Preserve an explicit artifact path; only implicit runtime output
+    // is centralized into the trusted log directory.
+    const explicitTeePath = String(teeFile ?? '').trim();
+    const teePath = explicitTeePath
+      ? resolve(explicitTeePath)
+      : resolveRuntimeTeePath({
+          label: String(teeLabel ?? streamLabel ?? '').trim(),
+          env: spawnOptions?.env ?? process.env,
+          cwd: spawnOptions?.cwd ?? process.cwd(),
+        });
     const shouldTee = Boolean(teePath);
     const teeOutState = { buf: '' };
     const teeErrState = { buf: '' };
@@ -315,7 +368,14 @@ export async function runCaptureResult(cmd, args, options = {}) {
       if (label) return `[${label}] `;
       return '';
     })();
-    const teeStream = shouldTee ? createWriteStream(teePath, { flags: 'a' }) : null;
+    if (shouldTee) {
+      try {
+        mkdirSync(dirname(teePath), { recursive: true });
+      } catch {
+        // ignore
+      }
+    }
+    const teeStream = shouldTee ? createRuntimeLogSink(teePath, spawnOptions?.env ?? process.env) : null;
     const keepaliveEveryMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : 0;
 
     function writeKeepaliveLine(line) {

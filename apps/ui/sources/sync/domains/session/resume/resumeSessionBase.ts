@@ -32,6 +32,12 @@ function parsePersistedConnectedServicesUpdatedAt(value: unknown): number | unde
     return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function requiresStrictNativeThreadResume(agentId: string, session: Session, resumeId: string | null): boolean {
+    if (resumeId) return false;
+    if (agentId !== 'codex' && agentId !== 'claude' && agentId !== 'opencode') return false;
+    return Number.isInteger(session.seq) && session.seq > 0;
+}
+
 export function buildResumeSessionBaseOptionsFromSession(opts: {
     sessionId: string;
     session: Session;
@@ -84,6 +90,7 @@ export function buildResumeSessionBaseOptionsFromSession(opts: {
     if (!agentId) return null;
 
     const resume = getAgentVendorResumeId(session.metadata, agentId, resumeCapabilityOptions);
+    if (requiresStrictNativeThreadResume(agentId, session, resume)) return null;
     const connectedServices = parsePersistedConnectedServices(session.metadata?.connectedServices);
     const connectedServicesUpdatedAt = parsePersistedConnectedServicesUpdatedAt(session.metadata?.connectedServicesUpdatedAt);
 

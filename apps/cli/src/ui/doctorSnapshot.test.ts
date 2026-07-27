@@ -31,9 +31,11 @@ const { collectRunnerDoctorDiagnosticsMock } = vi.hoisted(() => ({
     code: 'session_mutation_dead_letter' as const,
     severity: 'warning' as const,
     data: {
+      machineId: 'machine_local',
       fileName: 'session-s1.dead-letter.json',
       sessionIds: ['s1'],
       entryCount: 1,
+      recoveryRecommendation: 'Inspect and preserve the dead-letter before replay.',
     },
   }])),
 }));

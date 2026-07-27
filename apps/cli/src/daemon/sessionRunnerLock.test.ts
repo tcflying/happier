@@ -1,17 +1,26 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   acquireSessionRunnerLock,
+  quarantineSessionRunnerGeneration,
   readSessionRunnerLockStatus,
   releaseSessionRunnerLock,
+  sessionRunnerLifecyclePathForGeneration,
   sessionRunnerLockPathForSessionId,
 } from './sessionRunnerLock';
 
+const stableRunnerStartTime = async (pid: number) =>
+  pid === 999 ? 1_000 : 2_000;
+
 describe('sessionRunnerLock', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('acquires and releases a new lock', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
 
@@ -21,6 +30,7 @@ describe('sessionRunnerLock', () => {
       pid: 123,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: async () => 9_000,
       readProcessRunState: async () => 'servable',
     });
 
@@ -40,6 +50,7 @@ describe('sessionRunnerLock', () => {
         acquiredAtMs: 10_000,
         generationId: expect.any(String),
         processCommandHash: 'a'.repeat(64),
+        processStartTimeMs: 9_000,
       }),
     );
 
@@ -50,6 +61,129 @@ describe('sessionRunnerLock', () => {
       generationId: res.generationId,
       phase: 'finished',
       cleanupOutcome: 'completed',
+    }));
+  });
+
+  it('restores the real lock file when a release attempt expires immediately after claiming it', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const acquired = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_release_claim_fence',
+      pid: 123,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: async () => 9_000,
+      readProcessRunState: async () => 'servable',
+    });
+    expect(acquired.ok).toBe(true);
+    if (!acquired.ok) return;
+
+    let checks = 0;
+    const released = await acquired.release('completed', {
+      isAttemptActive: () => {
+        checks += 1;
+        return checks < 4;
+      },
+    });
+
+    expect(released).toEqual({ ok: false, reason: 'attempt_inactive' });
+    const status = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: 'sess_release_claim_fence',
+    });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({
+        generationId: acquired.generationId,
+        pid: 123,
+      }),
+      lifecycle: expect.objectContaining({
+        phase: 'running',
+        generationId: acquired.generationId,
+      }),
+    }));
+  });
+
+  it('restores lock and lifecycle state when a release attempt expires before unlink', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const acquired = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_release_unlink_fence',
+      pid: 123,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: async () => 9_000,
+      readProcessRunState: async () => 'servable',
+    });
+    expect(acquired.ok).toBe(true);
+    if (!acquired.ok) return;
+
+    let checks = 0;
+    const released = await acquired.release('completed', {
+      isAttemptActive: () => {
+        checks += 1;
+        return checks < 7;
+      },
+    });
+
+    expect(released).toEqual({ ok: false, reason: 'attempt_inactive' });
+    const status = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: 'sess_release_unlink_fence',
+    });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({
+        generationId: acquired.generationId,
+        pid: 123,
+      }),
+      lifecycle: expect.objectContaining({
+        phase: 'running',
+        generationId: acquired.generationId,
+      }),
+    }));
+  });
+
+  it('does not confirm release when the owned generation lifecycle cannot persist its outcome', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const acquired = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_release_missing_lifecycle',
+      pid: 123,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: async () => 9_000,
+      readProcessRunState: async () => 'servable',
+    });
+    expect(acquired.ok).toBe(true);
+    if (!acquired.ok) return;
+
+    const lifecyclePath = sessionRunnerLifecyclePathForGeneration({
+      happyHomeDir,
+      sessionId: acquired.sessionId,
+      generationId: acquired.generationId,
+    });
+    expect(lifecyclePath).not.toBeNull();
+    if (!lifecyclePath) return;
+    await unlink(lifecyclePath);
+
+    const released = await acquired.release('completed');
+
+    expect(released).toEqual({
+      ok: false,
+      reason: 'io_error',
+      errorMessage: 'Runner lifecycle state unavailable; cleanup outcome was not confirmed',
+    });
+    const status = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: acquired.sessionId,
+    });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({
+        generationId: acquired.generationId,
+        pid: acquired.pid,
+      }),
     }));
   });
 
@@ -68,6 +202,7 @@ describe('sessionRunnerLock', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
+    await expect((res as any).setControlPort(43_210)).resolves.toBe(true);
     await expect(res.heartbeat(11_000)).resolves.toBe(true);
     await expect(res.markCleanup({ nowMs: 12_000, deadlineAtMs: 13_000 })).resolves.toBe(true);
 
@@ -83,8 +218,58 @@ describe('sessionRunnerLock', () => {
         cleanupDeadlineAtMs: 13_000,
         cliVersion: '1.2.3',
         runnerBuildId: 'build-a',
+        controlPort: 43_210,
       }),
     });
+  });
+
+  it('quarantines the expected stale generation and releases its canonical lock', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    try {
+      const killedPids: number[] = [];
+      const acquired = await acquireSessionRunnerLock({
+        happyHomeDir,
+        sessionId: 'sess_control_failed',
+        pid: 999,
+        nowMs: 10_000,
+        getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+        getCurrentProcessStartTimeMs: stableRunnerStartTime,
+        readProcessRunState: async (pid) => (killedPids.includes(pid) ? 'dead' : 'servable'),
+      });
+      expect(acquired.ok).toBe(true);
+      if (!acquired.ok) return;
+
+      const quarantined = await quarantineSessionRunnerGeneration({
+        happyHomeDir,
+        sessionId: acquired.sessionId,
+        expectedGenerationId: acquired.generationId,
+        reason: 'control_challenge_failed',
+        nowMs: 11_000,
+        getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+        getCurrentProcessStartTimeMs: stableRunnerStartTime,
+        readProcessRunState: async (pid) => (killedPids.includes(pid) ? 'dead' : 'servable'),
+        killRunnerPid: async (pid) => {
+          killedPids.push(pid);
+        },
+        sleep: async () => {},
+      });
+
+      expect(quarantined).toEqual(expect.objectContaining({
+        ok: true,
+        generationId: acquired.generationId,
+        quarantinePath: expect.stringContaining('.quarantined'),
+      }));
+      expect(killedPids).toEqual([999]);
+      await expect(readSessionRunnerLockStatus({
+        happyHomeDir,
+        sessionId: acquired.sessionId,
+      })).resolves.toEqual({ ok: false, reason: 'not_found' });
+      if (quarantined.ok) {
+        await expect(readFile(quarantined.quarantinePath, 'utf8')).resolves.toContain(acquired.generationId);
+      }
+    } finally {
+      await rm(happyHomeDir, { recursive: true, force: true });
+    }
   });
 
   it('recovers a live matching runner after its authoritative cleanup deadline', async () => {
@@ -96,6 +281,7 @@ describe('sessionRunnerLock', () => {
       pid: 999,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async (pid) => (pid === 999 && killedPids.includes(pid) ? 'dead' : 'servable'),
     });
     expect(first.ok).toBe(true);
@@ -108,6 +294,7 @@ describe('sessionRunnerLock', () => {
       pid: 123,
       nowMs: 12_001,
       getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async (pid) => (pid === 999 && killedPids.includes(pid) ? 'dead' : 'servable'),
       killWedgedPid: (pid) => {
         killedPids.push(pid);
@@ -121,6 +308,60 @@ describe('sessionRunnerLock', () => {
     await expect(first.heartbeat(12_002)).resolves.toBe(false);
   });
 
+  it('rechecks the exact process start identity immediately before signaling a stale holder', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    let holderStartReads = 0;
+    const getCurrentProcessStartTimeMs = vi.fn(async (pid: number) => {
+      if (pid === 123) return 2_000;
+      holderStartReads += 1;
+      return holderStartReads <= 2 ? 1_000 : 9_900;
+    });
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_start_identity_toctou',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs,
+      readProcessRunState: async () => 'servable',
+    } as any);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await first.markCleanup({ nowMs: 11_000, deadlineAtMs: 12_000 });
+
+    const killedPids: number[] = [];
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_start_identity_toctou',
+      pid: 123,
+      nowMs: 12_001,
+      getCurrentProcessCommandHash: async (pid: number) => (
+        pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)
+      ),
+      getCurrentProcessStartTimeMs,
+      readProcessRunState: async () => 'servable',
+      killWedgedPid: (pid: number) => {
+        killedPids.push(pid);
+      },
+    } as any);
+
+    expect(recovered).toEqual({
+      ok: false,
+      reason: 'already_running',
+      heldByPid: 999,
+    });
+    expect(killedPids).toEqual([]);
+    expect(holderStartReads).toBeGreaterThanOrEqual(3);
+    const status = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: 'sess_start_identity_toctou',
+    });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({ pid: 999, processStartTimeMs: 1_000 }),
+    }));
+  });
+
   it('waits for stale-holder termination and confirms the original identity is no longer servable', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
     const first = await acquireSessionRunnerLock({
@@ -129,6 +370,7 @@ describe('sessionRunnerLock', () => {
       pid: 999,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async () => 'servable',
     });
     expect(first.ok).toBe(true);
@@ -150,6 +392,7 @@ describe('sessionRunnerLock', () => {
       pid: 123,
       nowMs: 12_001,
       getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async (pid) => (pid === 999 && !terminateResolved ? 'servable' : 'dead'),
       killWedgedPid: async () => await terminationGate,
     }).finally(() => {
@@ -170,25 +413,36 @@ describe('sessionRunnerLock', () => {
       pid: 999,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async () => 'servable',
     });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     await first.markCleanup({ nowMs: 11_000, deadlineAtMs: 12_000 });
-
-    const recovered = await acquireSessionRunnerLock({
+    let logicalNowMs = 12_001;
+    const readNowMs = vi.fn(() => logicalNowMs);
+    const sleep = vi.fn(async (ms: number) => {
+      logicalNowMs += ms;
+    });
+    const recovery = acquireSessionRunnerLock({
       happyHomeDir,
       sessionId: 'sess_termination_unconfirmed',
       pid: 123,
       nowMs: 12_001,
       getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async () => 'servable',
       killWedgedPid: async () => undefined,
-      terminationConfirmTimeoutMs: 2,
-      terminationConfirmPollMs: 1,
+      terminationConfirmTimeoutMs: 10,
+      terminationConfirmPollMs: 2,
+      readNowMs,
+      sleep,
     });
+    const recovered = await recovery;
 
     expect(recovered).toEqual({ ok: false, reason: 'already_running', heldByPid: 999 });
+    expect(readNowMs).toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalled();
     const status = await readSessionRunnerLockStatus({
       happyHomeDir,
       sessionId: 'sess_termination_unconfirmed',
@@ -207,6 +461,7 @@ describe('sessionRunnerLock', () => {
       pid: 999,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async () => 'servable',
     });
     expect(first.ok).toBe(true);
@@ -227,6 +482,7 @@ describe('sessionRunnerLock', () => {
       pid: 123,
       nowMs: 12_001,
       getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async (pid) => (pid === 999 && terminated ? 'dead' : 'servable'),
       killWedgedPid: async () => await terminationGate,
     });
@@ -251,6 +507,7 @@ describe('sessionRunnerLock', () => {
       pid: 999,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async () => 'servable',
     });
     expect(first.ok).toBe(true);
@@ -274,6 +531,7 @@ describe('sessionRunnerLock', () => {
       getCurrentProcessCommandHash: async (candidatePid) => (
         candidatePid === 999 ? 'a'.repeat(64) : String(candidatePid).padStart(64, 'b').slice(-64)
       ),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async (candidatePid) => (
         candidatePid === 999 && terminated ? 'dead' : 'servable'
       ),
@@ -291,6 +549,337 @@ describe('sessionRunnerLock', () => {
     if (!status.ok) return;
     expect([123, 124]).toContain(status.lock.pid);
     expect(status.lock.generationId).not.toBe(first.generationId);
+  });
+
+  it('recovers a real filesystem claim marker left behind after the claimant crashes', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_crashed_claimant',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const claimPath = `${first.lockPath}.${first.generationId}.claim`;
+    await writeFile(claimPath, JSON.stringify({
+      v: 1,
+      generationId: first.generationId,
+      claimantPid: 777,
+      claimantProcessCommandHash: 'c'.repeat(64),
+      createdAtMs: 10_000,
+      nonce: 'crashed-claimant-nonce',
+    }) + '\n', 'utf8');
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_crashed_claimant',
+      pid: 123,
+      nowMs: 100_000,
+      claimStaleAfterMs: 30_000,
+      getCurrentProcessCommandHash: async (pid) => (
+        pid === 999 ? 'a'.repeat(64) : pid === 777 ? 'c'.repeat(64) : 'b'.repeat(64)
+      ),
+      readProcessRunState: async (pid) => (pid === 999 || pid === 777 ? 'dead' : 'servable'),
+    });
+
+    expect(recovered.ok).toBe(true);
+    const status = await readSessionRunnerLockStatus({ happyHomeDir, sessionId: 'sess_crashed_claimant' });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({ pid: 123 }),
+    }));
+  });
+
+  it('restores the canonical lock from a real owned plus claim pair left after claimant crash', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_post_rename_claimant_crash',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: async () => 1_000,
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const claimPath = `${first.lockPath}.${first.generationId}.claim`;
+    const ownedPath = `${claimPath}.crashed-claimant.owned`;
+    await writeFile(claimPath, JSON.stringify({
+      v: 1,
+      generationId: first.generationId,
+      claimantPid: 777,
+      claimantProcessCommandHash: 'c'.repeat(64),
+      createdAtMs: 10_000,
+      nonce: 'post-rename-crash',
+    }) + '\n', 'utf8');
+    await rename(first.lockPath, ownedPath);
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_post_rename_claimant_crash',
+      pid: 123,
+      nowMs: 20_000,
+      claimStaleAfterMs: 5_000,
+      getCurrentProcessCommandHash: async (pid) => (
+        pid === 999 ? 'a'.repeat(64) : pid === 777 ? 'c'.repeat(64) : 'b'.repeat(64)
+      ),
+      getCurrentProcessStartTimeMs: async (pid) => (
+        pid === 999 ? 1_000 : pid === 777 ? 3_000 : 2_000
+      ),
+      readProcessRunState: async (pid) => (pid === 777 ? 'dead' : 'servable'),
+    });
+
+    expect(recovered).toEqual({
+      ok: false,
+      reason: 'already_running',
+      heldByPid: 999,
+    });
+    const restored = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: 'sess_post_rename_claimant_crash',
+    });
+    expect(restored).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({ generationId: first.generationId, pid: 999 }),
+    }));
+    await expect(readFile(claimPath, 'utf8')).rejects.toThrow();
+    await expect(readFile(ownedPath, 'utf8')).rejects.toThrow();
+  });
+
+  it('cleans an owned plus claim pair left after a crashed claimant created its replacement lock', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_post_create_claimant_crash',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: async () => 1_000,
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const claimPath = `${first.lockPath}.${first.generationId}.claim`;
+    const ownedPath = `${claimPath}.crashed-after-create.owned`;
+    await writeFile(claimPath, JSON.stringify({
+      v: 1,
+      generationId: first.generationId,
+      claimantPid: 777,
+      claimantProcessCommandHash: 'c'.repeat(64),
+      claimantProcessStartTimeMs: 3_000,
+      createdAtMs: 20_000,
+      nonce: 'post-create-crash',
+    }) + '\n', 'utf8');
+    await rename(first.lockPath, ownedPath);
+    await writeFile(first.lockPath, JSON.stringify({
+      sessionId: 'sess_post_create_claimant_crash',
+      pid: 777,
+      acquiredAtMs: 20_000,
+      generationId: 'replacement-crashed-generation',
+      processCommandHash: 'c'.repeat(64),
+      processStartTimeMs: 3_000,
+    }, null, 2) + '\n', 'utf8');
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_post_create_claimant_crash',
+      pid: 123,
+      nowMs: 100_000,
+      claimStaleAfterMs: 30_000,
+      getCurrentProcessCommandHash: async (pid: number) => (
+        pid === 999 ? 'a'.repeat(64) : pid === 777 ? 'c'.repeat(64) : 'b'.repeat(64)
+      ),
+      getCurrentProcessStartTimeMs: async (pid) => (
+        pid === 999 ? 1_000 : pid === 777 ? 3_000 : 2_000
+      ),
+      readProcessRunState: async (pid) => (pid === 123 ? 'servable' : 'dead'),
+    });
+
+    expect(recovered.ok).toBe(true);
+    await expect(readFile(claimPath, 'utf8')).rejects.toThrow();
+    await expect(readFile(ownedPath, 'utf8')).rejects.toThrow();
+  });
+
+  it('does not steal a fresh real filesystem claim marker from a live matching claimant', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_live_claimant',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const claimPath = `${first.lockPath}.${first.generationId}.claim`;
+    await writeFile(claimPath, JSON.stringify({
+      v: 1,
+      generationId: first.generationId,
+      claimantPid: 777,
+      claimantProcessCommandHash: 'c'.repeat(64),
+      createdAtMs: 99_999,
+      nonce: 'live-claimant-nonce',
+    }) + '\n', 'utf8');
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_live_claimant',
+      pid: 123,
+      nowMs: 100_000,
+      claimStaleAfterMs: 30_000,
+      getCurrentProcessCommandHash: async (pid) => (
+        pid === 999 ? 'a'.repeat(64) : pid === 777 ? 'c'.repeat(64) : 'b'.repeat(64)
+      ),
+      readProcessRunState: async (pid) => (pid === 999 ? 'dead' : 'servable'),
+    });
+
+    expect(recovered).toEqual({ ok: false, reason: 'already_running', heldByPid: 999 });
+    const status = await readSessionRunnerLockStatus({ happyHomeDir, sessionId: 'sess_live_claimant' });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({ generationId: first.generationId, pid: 999 }),
+    }));
+  });
+
+  it('does not use TTL alone to steal an expired claim from a live matching claimant', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_expired_live_claimant',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    await writeFile(`${first.lockPath}.${first.generationId}.claim`, JSON.stringify({
+      v: 1,
+      generationId: first.generationId,
+      claimantPid: 777,
+      claimantProcessCommandHash: 'c'.repeat(64),
+      createdAtMs: 10_000,
+      nonce: 'expired-live-claimant',
+    }) + '\n', 'utf8');
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_expired_live_claimant',
+      pid: 123,
+      nowMs: 100_000,
+      claimStaleAfterMs: 30_000,
+      getCurrentProcessCommandHash: async (pid) => (
+        pid === 999 ? 'a'.repeat(64) : pid === 777 ? 'c'.repeat(64) : 'b'.repeat(64)
+      ),
+      readProcessRunState: async (pid) => (pid === 999 ? 'dead' : 'servable'),
+    });
+
+    expect(recovered).toEqual({ ok: false, reason: 'already_running', heldByPid: 999 });
+  });
+
+  it('atomically recovers an expired claim when the claimant pid identity proves reuse', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_reused_claimant',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    await writeFile(`${first.lockPath}.${first.generationId}.claim`, JSON.stringify({
+      v: 1,
+      generationId: first.generationId,
+      claimantPid: 777,
+      claimantProcessCommandHash: 'c'.repeat(64),
+      createdAtMs: 10_000,
+      nonce: 'expired-reused-claimant',
+    }) + '\n', 'utf8');
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_reused_claimant',
+      pid: 123,
+      nowMs: 100_000,
+      claimStaleAfterMs: 30_000,
+      getCurrentProcessCommandHash: async (pid) => (
+        pid === 999 ? 'a'.repeat(64) : pid === 777 ? 'd'.repeat(64) : 'b'.repeat(64)
+      ),
+      readProcessRunState: async (pid) => (pid === 999 ? 'dead' : 'servable'),
+    });
+
+    expect(recovered.ok).toBe(true);
+    const status = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: 'sess_reused_claimant',
+    });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({ pid: 123 }),
+    }));
+  });
+
+  it('recovers an expired claim when claimant start identity proves same-command pid reuse', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const first = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_reused_claimant_start',
+      pid: 999,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async () => 'a'.repeat(64),
+      getCurrentProcessStartTimeMs: async () => 1_000,
+      readProcessRunState: async () => 'servable',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    await writeFile(`${first.lockPath}.${first.generationId}.claim`, JSON.stringify({
+      v: 1,
+      generationId: first.generationId,
+      claimantPid: 777,
+      claimantProcessCommandHash: 'c'.repeat(64),
+      claimantProcessStartTimeMs: 3_000,
+      createdAtMs: 10_000,
+      nonce: 'expired-reused-claimant-start',
+    }) + '\n', 'utf8');
+
+    const recovered = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_reused_claimant_start',
+      pid: 123,
+      nowMs: 100_000,
+      claimStaleAfterMs: 30_000,
+      getCurrentProcessCommandHash: async (pid: number) => (
+        pid === 999 ? 'a'.repeat(64) : pid === 777 ? 'c'.repeat(64) : 'b'.repeat(64)
+      ),
+      getCurrentProcessStartTimeMs: async (pid) => (
+        pid === 999 ? 1_000 : pid === 777 ? 9_000 : 2_000
+      ),
+      readProcessRunState: async (pid) => (pid === 999 ? 'dead' : 'servable'),
+    });
+
+    expect(recovered.ok).toBe(true);
+    const status = await readSessionRunnerLockStatus({
+      happyHomeDir,
+      sessionId: 'sess_reused_claimant_start',
+    });
+    expect(status).toEqual(expect.objectContaining({
+      ok: true,
+      lock: expect.objectContaining({ pid: 123 }),
+    }));
   });
 
   it('keeps unknown live process identity fail-closed without authoritative stale lifecycle evidence', async () => {
@@ -559,7 +1148,13 @@ describe('sessionRunnerLock', () => {
     await mkdir(dirname(lockPath), { recursive: true });
     await writeFile(
       lockPath,
-      JSON.stringify({ sessionId: 'sess_8', pid: 999, acquiredAtMs: 1, processCommandHash: 'a'.repeat(64) }, null, 2),
+      JSON.stringify({
+        sessionId: 'sess_8',
+        pid: 999,
+        acquiredAtMs: 1,
+        processCommandHash: 'a'.repeat(64),
+        processStartTimeMs: 1_000,
+      }, null, 2),
       'utf8',
     );
 
@@ -570,10 +1165,11 @@ describe('sessionRunnerLock', () => {
       pid: 123,
       nowMs: 10_000,
       getCurrentProcessCommandHash: async (pid) => (pid === 999 ? 'a'.repeat(64) : 'b'.repeat(64)),
+      getCurrentProcessStartTimeMs: stableRunnerStartTime,
       readProcessRunState: async (pid) => (
         pid === 999 ? (killedPids.includes(pid) ? 'dead' : 'stopped') : 'servable'
       ),
-      killWedgedPid: (pid) => {
+      killWedgedPid: (pid: number) => {
         killedPids.push(pid);
       },
     });
@@ -606,7 +1202,7 @@ describe('sessionRunnerLock', () => {
       nowMs: 10_000,
       getCurrentProcessCommandHash: async (pid) => (pid === 999 ? null : 'b'.repeat(64)),
       readProcessRunState: async (pid) => (pid === 999 ? 'stopped' : 'servable'),
-      killWedgedPid: (pid) => {
+      killWedgedPid: (pid: number) => {
         killedPids.push(pid);
       },
     });

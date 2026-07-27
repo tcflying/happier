@@ -1,5 +1,6 @@
 import './utils/env/env.mjs';
 
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -23,6 +24,7 @@ import { getCanonicalHomeEnvPath, getHomeEnvPath, ensureCanonicalHomeEnvUpdated,
 import { ensureEnvFilePruned } from './utils/env/env_file.mjs';
 import { coerceHappyMonorepoRootFromPath, getDevRepoDir, getRepoDir, getWorkspaceDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { parseEnvToObject } from './utils/env/dotenv.mjs';
+import { createUpgradeArtifactWriter } from './utils/update/upgrade_artifact.mjs';
 
 function packageJsonPathForNodeModules({ rootDir, packageName }) {
   const name = String(packageName ?? '').trim();
@@ -65,6 +67,23 @@ async function getRuntimeInstalledVersion() {
 
 async function getInvokerVersion({ rootDir }) {
   return await readPackageJsonVersion(join(rootDir, 'package.json'));
+}
+
+async function hashWorkspaceLock(rootDir) {
+  const lockPath = resolve(rootDir, '..', '..', 'yarn.lock');
+  try {
+    const bytes = await readFile(lockPath);
+    return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  } catch {
+    return 'unavailable';
+  }
+}
+
+function readExitCode(value, fallback = 1) {
+  const text = value instanceof Error ? value.message : String(value ?? '');
+  const match = text.match(/(?:status|code)[= ](\d+)/i);
+  const parsed = match ? Number.parseInt(match[1], 10) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function parseSelfChannel({ flags, kv }) {
@@ -170,59 +189,136 @@ async function cmdUpdate({ rootDir, argv }) {
   });
   if (!pkgName) throw new Error('[self] unable to resolve package name (missing package.json name)');
   const spec = to ? `${pkgName}@${to}` : `${pkgName}@${resolveStackSelfNpmDistTag(channel)}`;
+  const runtimeVersionBefore = await getRuntimeInstalledVersion();
+  const lockSha256 = await hashWorkspaceLock(rootDir);
+  const operationId = `hstack-self-update-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+  const artifactWriter = createUpgradeArtifactWriter({
+    homeDir: getHappyStacksHomeDir(),
+    operationId,
+  });
+  await artifactWriter.start({
+    packageName: pkgName,
+    requestedSpec: spec,
+    packageVersionBefore: runtimeVersionBefore,
+    lockSha256,
+  });
+  const attempts = [];
+  let failureStage = 'npm_install';
 
-  // Ensure runtime dir exists.
-  await mkdir(runtimeDir, { recursive: true });
+  try {
+    await mkdir(runtimeDir, { recursive: true });
 
-  // Install/update runtime package.
-  const installRes = installRuntimeFromNpm({ runtimeDir, spec, cwd: rootDir, env: process.env });
-  if (!installRes.ok) {
-    // Pre-publish dev fallback: allow updating runtime from the local checkout.
-    if (!to && !String(process.env.HAPPIER_STACK_UPDATE_PACKAGE_NAME ?? '').trim() && existsSync(join(rootDir, 'package.json'))) {
+    const installRes = installRuntimeFromNpm({ runtimeDir, spec, cwd: rootDir, env: process.env });
+    attempts.push({
+      stage: 'npm_install',
+      exitCode: installRes.ok ? 0 : readExitCode(installRes.errorMessage),
+      outcome: installRes.ok ? 'succeeded' : 'failed',
+    });
+    if (!installRes.ok) {
+      const canUseLocalFallback =
+        !to
+        && !String(process.env.HAPPIER_STACK_UPDATE_PACKAGE_NAME ?? '').trim()
+        && existsSync(join(rootDir, 'package.json'));
+      if (!canUseLocalFallback) {
+        throw new Error(installRes.errorMessage);
+      }
+
+      failureStage = 'local_checkout_fallback';
       try {
         const raw = await readFile(join(rootDir, 'package.json'), 'utf-8');
         const pkg = JSON.parse(raw);
-        if (pkg?.name === pkgName) {
-          await run('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, rootDir], { cwd: rootDir });
-        } else {
+        if (pkg?.name !== pkgName) {
           throw new Error(installRes.errorMessage);
         }
-      } catch {
+        await run(
+          'npm',
+          ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, rootDir],
+          { cwd: rootDir },
+        );
+        attempts.push({ stage: failureStage, exitCode: 0, outcome: 'succeeded' });
+      } catch (error) {
+        attempts.push({
+          stage: failureStage,
+          exitCode: readExitCode(error, readExitCode(installRes.errorMessage)),
+          outcome: 'failed',
+        });
         throw new Error(installRes.errorMessage);
       }
-    } else {
-      throw new Error(installRes.errorMessage);
     }
-  }
 
-  // Refresh cache best-effort.
-  try {
-    const latest = await fetchLatestVersion({ packageName: pkgName, distTag: resolveStackSelfNpmDistTag(channel), cwd: rootDir });
-    const runtimeVersion = await getRuntimeInstalledVersion();
-    const invokerVersion = await getInvokerVersion({ rootDir });
-    const current = runtimeVersion || invokerVersion;
-    const updateAvailable = Boolean(current && latest && compareVersions(latest, current) > 0);
-    const { updateJson, cacheDir } = cachePaths();
-    await mkdir(cacheDir, { recursive: true });
-    await writeJsonSafe(updateJson, {
-      checkedAt: Date.now(),
-      latest,
-      current: current || null,
-      runtimeVersion: runtimeVersion || null,
-      invokerVersion: invokerVersion || null,
-      updateAvailable,
-      notifiedAt: null,
+    try {
+      const latest = await fetchLatestVersion({
+        packageName: pkgName,
+        distTag: resolveStackSelfNpmDistTag(channel),
+        cwd: rootDir,
+      });
+      const runtimeVersion = await getRuntimeInstalledVersion();
+      const invokerVersion = await getInvokerVersion({ rootDir });
+      const current = runtimeVersion || invokerVersion;
+      const updateAvailable = Boolean(current && latest && compareVersions(latest, current) > 0);
+      const { updateJson, cacheDir } = cachePaths();
+      await mkdir(cacheDir, { recursive: true });
+      await writeJsonSafe(updateJson, {
+        checkedAt: Date.now(),
+        latest,
+        current: current || null,
+        runtimeVersion: runtimeVersion || null,
+        invokerVersion: invokerVersion || null,
+        updateAvailable,
+        notifiedAt: null,
+      });
+    } catch {
+      // Cache refresh is best-effort and does not change the install outcome.
+    }
+
+    const runtimeVersionAfter = await getRuntimeInstalledVersion();
+    const artifactPath = await artifactWriter.finish({
+      status: 'succeeded',
+      exitCode: 0,
+      failureStage: null,
+      attempts,
+      packageVersions: {
+        before: runtimeVersionBefore,
+        after: runtimeVersionAfter ?? null,
+      },
+      lockSha256,
+      serviceHealth: {
+        state: 'not_checked',
+        checkedAt: null,
+        runtimePackageVersion: runtimeVersionAfter ?? null,
+        runningServices: 'not_restarted',
+        reason: 'runtime_updated_services_not_restarted',
+      },
     });
-  } catch {
-    // ignore
+    printResult({
+      json,
+      data: { ok: true, runtimeDir, version: runtimeVersionAfter ?? null, spec, artifactPath },
+      text: `${green('✓')} updated runtime in ${cyan(runtimeDir)} ${dim('(')}${cyan(runtimeVersionAfter ?? spec)}${dim(')')}`,
+    });
+  } catch (error) {
+    const exitCode = attempts.at(-1)?.exitCode ?? readExitCode(error);
+    const runtimeVersionAfter = await getRuntimeInstalledVersion().catch(() => null);
+    const artifactPath = await artifactWriter.finish({
+      status: 'failed',
+      exitCode,
+      failureStage,
+      attempts,
+      packageVersions: {
+        before: runtimeVersionBefore,
+        after: runtimeVersionAfter,
+      },
+      lockSha256,
+      serviceHealth: {
+        state: 'not_checked',
+        checkedAt: null,
+        runtimePackageVersion: runtimeVersionAfter,
+        runningServices: 'not_restarted',
+        reason: 'upgrade_failed_services_not_probed',
+      },
+    });
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message} (upgrade artifact: ${artifactPath})`);
   }
-
-  const runtimeVersionAfter = await getRuntimeInstalledVersion();
-  printResult({
-    json,
-    data: { ok: true, runtimeDir, version: runtimeVersionAfter ?? null, spec },
-    text: `${green('✓')} updated runtime in ${cyan(runtimeDir)} ${dim('(')}${cyan(runtimeVersionAfter ?? spec)}${dim(')')}`,
-  });
 }
 
 async function cmdCheck({ rootDir, argv }) {

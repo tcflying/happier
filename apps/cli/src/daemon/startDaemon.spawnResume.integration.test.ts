@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 
 import { HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY } from './platform/linux/daemonSpawnedSessionCgroupSelfMigration';
 import { createHttpStatusError } from '@/api/client/httpStatusError';
@@ -635,6 +636,10 @@ vi.mock('./connectedServices/quotas/resolveConnectedServicesQuotasDaemonEnabled'
 describe('startDaemon spawn resume wiring (integration)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    // A preceding daemon shutdown test uses fake timers. Restore spies first:
+    // a spy created while fake timers are installed would otherwise reinstall
+    // that synthetic timer after `useRealTimers()`.
+    vi.useRealTimers();
     harness.resetControlRefs();
     harness.apiMachine.claimDirectSessionRuntimeOwnership.mockClear();
     harness.apiMachine.releaseDirectSessionRuntimeOwnership.mockClear();
@@ -2662,6 +2667,72 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     }
   });
 
+  it('does not fresh-spawn a historical native thread when its provider resume id is missing', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    vi.mocked(isSessionRunnerActive).mockResolvedValue(false);
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+      createSessionRecordFixture({
+        id: 'sess_historical_native_missing_resume',
+        seq: 42,
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({
+          flavor: 'codex',
+          path: '/tmp',
+        }),
+        dataEncryptionKey: null,
+      }),
+    );
+
+    let run: Promise<unknown> | null = null;
+    let shutdownRequested = false;
+    try {
+      const { startDaemon } = await import('./startDaemon');
+      run = startDaemon();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      let spawnSession = harness.getSpawnSession();
+      for (let attempt = 0; attempt < 10 && !spawnSession; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        spawnSession = harness.getSpawnSession();
+      }
+      if (!spawnSession) {
+        throw new Error('Expected spawnSession to be registered');
+      }
+
+      const result = await spawnSession({
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        existingSessionId: 'sess_historical_native_missing_resume',
+        token: 'token-from-spawn-options',
+      });
+
+      expect(result).toEqual({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.RESUME_NOT_SUPPORTED,
+        errorMessage: 'Historical native session cannot be resumed without its provider resume id.',
+      });
+      expect(spawnHappyCLI).not.toHaveBeenCalled();
+
+      shutdownRequested = true;
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      vi.mocked(isSessionRunnerActive).mockResolvedValue(false);
+      if (!shutdownRequested) {
+        harness.requestShutdown('happier-cli');
+        await run?.catch(() => {});
+      }
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
   it('retries pending queue materialization through the guarded live session RPC after fresh attach', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
@@ -2816,8 +2887,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(callSessionRpc).toHaveBeenCalledTimes(1);
     } finally {
-      vi.useRealTimers();
       setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
       vi.mocked(isSessionRunnerActive).mockResolvedValue(false);
       if (retryAttemptsOriginal === undefined) {
         delete process.env.HAPPIER_DAEMON_ATTACH_PENDING_QUEUE_NUDGE_RETRY_ATTEMPTS;
@@ -2842,14 +2913,16 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
     const homeOriginal = process.env.HOME;
+    const userProfileOriginal = process.env.USERPROFILE;
     process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
     process.env.HOME = '/Users/tester';
+    process.env.USERPROFILE = '/Users/tester';
 
     try {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getSpawnSession()).toEqual(expect.any(Function)));
 
       const spawnSession = harness.getSpawnSession();
       if (!spawnSession) {
@@ -2869,8 +2942,9 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         throw new Error('Expected spawnHappyCLI to be called');
       }
       const opts = firstCall[1] as { cwd?: string; env?: NodeJS.ProcessEnv } | undefined;
-      expect(opts?.cwd).toBe('/Users/tester/Documents');
-      expect(opts?.env?.HAPPIER_SESSION_REQUESTED_DIRECTORY).toBe('/Users/tester/Documents');
+      const expectedDirectory = join('/Users/tester', 'Documents');
+      expect(opts?.cwd).toBe(expectedDirectory);
+      expect(opts?.env?.HAPPIER_SESSION_REQUESTED_DIRECTORY).toBe(expectedDirectory);
 
       harness.requestShutdown('happier-cli');
       await run;
@@ -2884,6 +2958,11 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         delete process.env.HOME;
       } else {
         process.env.HOME = homeOriginal;
+      }
+      if (userProfileOriginal === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = userProfileOriginal;
       }
       exitSpy.mockRestore();
     }
@@ -2907,7 +2986,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getSpawnSession()).toEqual(expect.any(Function)));
 
       const spawnSession = harness.getSpawnSession();
       if (!spawnSession) {
@@ -2967,7 +3046,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getSpawnSession()).toEqual(expect.any(Function)));
 
       const spawnSession = harness.getSpawnSession();
       if (!spawnSession) {
@@ -3011,7 +3090,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getSpawnSession()).toEqual(expect.any(Function)));
 
       const spawnSession = harness.getSpawnSession();
       if (!spawnSession) {
@@ -3058,7 +3137,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getSpawnSession()).toEqual(expect.any(Function)));
 
       const spawnSession = harness.getSpawnSession();
       if (!spawnSession) {
@@ -3101,7 +3180,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getSpawnSession()).toEqual(expect.any(Function)));
 
       const spawnSession = harness.getSpawnSession();
       if (!spawnSession) {
@@ -3146,7 +3225,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getSpawnSession()).toEqual(expect.any(Function)));
 
       const spawnSession = harness.getSpawnSession();
       if (!spawnSession) {
@@ -3196,7 +3275,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getBeforeShutdown()).toEqual(expect.any(Function)));
 
       for (let attempt = 0; !harness.getBeforeShutdown() && attempt < 200; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -3254,18 +3333,10 @@ describe('startDaemon spawn resume wiring (integration)', () => {
 	      const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      for (let attempt = 0; harness.apiMachine.setRPCHandlers.mock.calls.length === 0 && attempt < 200; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-      const hasMachineSync = harness.apiMachine.setRPCHandlers.mock.calls.length > 0;
-
-      for (let attempt = 0; !harness.getBeforeShutdown() && attempt < 200; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      await vi.waitFor(() => expect(harness.getBeforeShutdown()).toEqual(expect.any(Function)));
       const resolvedBeforeShutdown = harness.getBeforeShutdown();
       if (!resolvedBeforeShutdown) throw new Error('Expected beforeShutdown to be registered');
+      const hasMachineSync = harness.apiMachine.setRPCHandlers.mock.calls.length > 0;
 
       if (!hasMachineSync) {
         await resolvedBeforeShutdown();
@@ -3280,7 +3351,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         settled = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.apiMachine.awaitPendingRpcRequests).toHaveBeenCalledTimes(1));
       expect(harness.apiMachine.awaitPendingRpcRequests).toHaveBeenCalledTimes(1);
       expect(settled).toBe(false);
 
@@ -3353,18 +3424,10 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      for (let attempt = 0; harness.apiMachine.setRPCHandlers.mock.calls.length === 0 && attempt < 200; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-      const hasMachineSync = harness.apiMachine.setRPCHandlers.mock.calls.length > 0;
-
-      for (let attempt = 0; !harness.getBeforeShutdown() && attempt < 200; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      await vi.waitFor(() => expect(harness.getBeforeShutdown()).toEqual(expect.any(Function)));
       const resolvedBeforeShutdown = harness.getBeforeShutdown();
       if (!resolvedBeforeShutdown) throw new Error('Expected beforeShutdown to be registered');
+      const hasMachineSync = harness.apiMachine.setRPCHandlers.mock.calls.length > 0;
 
       if (!hasMachineSync) {
         await resolvedBeforeShutdown();
@@ -3379,7 +3442,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         settled = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.apiMachine.awaitPendingRpcRequests).toHaveBeenCalledTimes(1));
       expect(harness.apiMachine.awaitPendingRpcRequests).toHaveBeenCalledTimes(1);
       expect(serverWorkScheduler.flushAll).toHaveBeenCalledTimes(1);
       expect(settled).toBe(false);
@@ -3428,7 +3491,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       vi.mocked(resolveWindowsRemoteSessionConsoleMode).mockReturnValue('console');
 
       run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(harness.getSpawnSession()).toEqual(expect.any(Function)));
 
       const spawnSession = harness.getSpawnSession();
       if (!spawnSession) {

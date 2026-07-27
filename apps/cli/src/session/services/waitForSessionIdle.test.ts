@@ -4,6 +4,7 @@ describe('waitForSessionIdle', () => {
     afterEach(() => {
         vi.resetModules();
         vi.clearAllMocks();
+        vi.useRealTimers();
     });
 
     function mockTransportContext(rawSession: Record<string, unknown>) {
@@ -190,13 +191,16 @@ describe('waitForSessionIdle', () => {
         }));
     });
 
-    it('spends transcript scan time from the caller wait budget before starting socket wait', async () => {
+    it('spends transcript scan time from the caller budget while the shared socket keeps an independent lifetime', async () => {
         const fetchEncryptedTranscriptPageLatest = vi.fn(async (_params: Readonly<{ timeoutMs?: number }>) => {
             await new Promise((resolve) => setTimeout(resolve, 25));
             return [];
         });
         const fetchEncryptedTranscriptPageAfterSeq = vi.fn(async () => []);
-        const waitForIdleViaSocket = vi.fn(async (_params: Readonly<{ timeoutMs?: number }>) => ({
+        const waitForIdleViaSocket = vi.fn(async (_params: Readonly<{
+            timeoutMs?: number;
+            signal?: AbortSignal;
+        }>) => ({
             idle: true as const,
             observedAt: 123,
         }));
@@ -232,7 +236,90 @@ describe('waitForSessionIdle', () => {
         expect(transcriptTimeoutMs).toBeLessThanOrEqual(100);
         const socketCall = waitForIdleViaSocket.mock.calls[0]?.[0];
         const socketTimeoutMs = socketCall?.timeoutMs;
-        expect(socketTimeoutMs).toBeGreaterThan(0);
-        expect(socketTimeoutMs).toBeLessThan(100);
+        expect(socketTimeoutMs).toBe(60 * 60_000);
+        expect(socketCall?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('shares one canonical idle observation stream across concurrent waiters', async () => {
+        const fetchEncryptedTranscriptPageLatest = vi.fn(async () => []);
+        const fetchEncryptedTranscriptPageAfterSeq = vi.fn(async () => []);
+        const idleDeferred: {
+            resolve?: (value: { idle: true; observedAt: number }) => void;
+        } = {};
+        const waitForIdleViaSocket = vi.fn(() => new Promise<{ idle: true; observedAt: number }>((resolve) => {
+            idleDeferred.resolve = resolve;
+        }));
+
+        vi.doMock('@/api/session/fetchEncryptedTranscriptWindow', () => ({
+            fetchEncryptedTranscriptPageLatest,
+            fetchEncryptedTranscriptPageAfterSeq,
+        }));
+        vi.doMock('@/session/transport/socket/sessionSocketAgentState', () => ({
+            waitForIdleViaSocket,
+        }));
+        mockTransportContext({
+            latestTurnStatus: 'in_progress',
+        });
+
+        const { waitForSessionIdle } = await import('./waitForSessionIdle');
+        const waits = Array.from({ length: 3 }, () => waitForSessionIdle({
+            credentials: credentials(),
+            idOrPrefix: 'sess-1',
+            timeoutMs: 1_000,
+        }));
+
+        await vi.waitFor(() => {
+            expect(waitForIdleViaSocket).toHaveBeenCalled();
+        });
+        expect(waitForIdleViaSocket).toHaveBeenCalledOnce();
+
+        const resolveIdle = idleDeferred.resolve;
+        if (!resolveIdle) {
+            throw new Error('Shared idle observation did not start');
+        }
+        resolveIdle({ idle: true, observedAt: 456 });
+
+        await expect(Promise.all(waits)).resolves.toEqual([
+            { ok: true, sessionId: 'sess-1', idle: true, observedAt: 456 },
+            { ok: true, sessionId: 'sess-1', idle: true, observedAt: 456 },
+            { ok: true, sessionId: 'sess-1', idle: true, observedAt: 456 },
+        ]);
+    });
+
+    it('aborts the shared observation when the last waiter reaches its own deadline', async () => {
+        vi.useFakeTimers();
+        const fetchEncryptedTranscriptPageLatest = vi.fn(async () => []);
+        const fetchEncryptedTranscriptPageAfterSeq = vi.fn(async () => []);
+        let sharedSignal: AbortSignal | undefined;
+        const waitForIdleViaSocket = vi.fn((input: Readonly<{ signal?: AbortSignal }>) => {
+            sharedSignal = input.signal;
+            return new Promise<{ idle: true; observedAt: number }>(() => undefined);
+        });
+
+        vi.doMock('@/api/session/fetchEncryptedTranscriptWindow', () => ({
+            fetchEncryptedTranscriptPageLatest,
+            fetchEncryptedTranscriptPageAfterSeq,
+        }));
+        vi.doMock('@/session/transport/socket/sessionSocketAgentState', () => ({
+            waitForIdleViaSocket,
+        }));
+        mockTransportContext({
+            latestTurnStatus: 'in_progress',
+        });
+
+        const { waitForSessionIdle } = await import('./waitForSessionIdle');
+        const wait = waitForSessionIdle({
+            credentials: credentials(),
+            idOrPrefix: 'sess-1',
+            timeoutMs: 20,
+        });
+
+        await vi.waitFor(() => {
+            expect(waitForIdleViaSocket).toHaveBeenCalledOnce();
+        });
+        await vi.advanceTimersByTimeAsync(25);
+
+        await expect(wait).resolves.toEqual({ ok: false, code: 'timeout' });
+        expect(sharedSignal?.aborted).toBe(true);
     });
 });

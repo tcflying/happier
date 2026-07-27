@@ -152,6 +152,86 @@ describe('apps/ui patch-package Metro worklets patches', () => {
         )).toEqual(expect.stringContaining('react-native-worklets/__generatedWorklets/'));
     });
 
+    it('applies the Metro Windows recursive watcher patch through patch-package', () => {
+        const fixtureDir = createTempFixtureDir('happier-ui-metro-file-map-patch-');
+        fixtureDirs.push(fixtureDir);
+
+        writeFixtureFiles(fixtureDir, {
+            'package.json': JSON.stringify({
+                dependencies: {
+                    'metro-file-map': '0.83.3',
+                },
+            }),
+            'node_modules/metro-file-map/package.json': JSON.stringify({
+                name: 'metro-file-map',
+                version: '0.83.3',
+            }),
+            'node_modules/metro-file-map/src/watchers/NativeWatcher.js': `${Array.from({ length: 36 }, (_, index) => `// fixture padding ${index + 1}`).join('\n')}
+const DELETE_EVENT = "delete";
+class NativeWatcher extends _AbstractWatcher.AbstractWatcher {
+  #fsWatcher;
+  static isSupported() {
+    return (0, _os.platform)() === "darwin";
+  }
+  constructor(dir, opts) {
+  }
+}
+`,
+        });
+
+        applyPatchPackage(fixtureDir, {
+            'metro-file-map+0.83.3.patch': readFileSync(
+                join(getRepoRoot(), 'apps/ui/patches/metro-file-map+0.83.3.patch'),
+                'utf8',
+            ),
+        });
+
+        expect(readFileSync(
+            join(fixtureDir, 'node_modules/metro-file-map/src/watchers/NativeWatcher.js'),
+            'utf8',
+        )).toContain('platform === "win32"');
+    });
+
+    it('exports the noble-hashes browser target that Metro revalidates as ./crypto.js', () => {
+        const fixtureDir = createTempFixtureDir('happier-ui-noble-hashes-patch-');
+        fixtureDirs.push(fixtureDir);
+        const installedPackageJson = readFileSync(
+            join(getRepoRoot(), 'node_modules/@noble/hashes/package.json'),
+            'utf8',
+        );
+        const unpatchedPackageJson = installedPackageJson.replace(
+            /    "\.\/crypto\.js": \{\r?\n      "node": \{\r?\n        "import": "\.\/esm\/cryptoNode\.js",\r?\n        "default": "\.\/cryptoNode\.js"\r?\n      \},\r?\n      "import": "\.\/esm\/crypto\.js",\r?\n      "default": "\.\/crypto\.js"\r?\n    \},\r?\n/u,
+            '',
+        );
+
+        writeFixtureFiles(fixtureDir, {
+            'package.json': JSON.stringify({
+                dependencies: {
+                    '@noble/hashes': '1.8.0',
+                },
+            }),
+            'node_modules/@noble/hashes/package.json': unpatchedPackageJson,
+        });
+
+        applyPatchPackage(fixtureDir, {
+            '@noble+hashes+1.8.0.patch': readFileSync(
+                join(getRepoRoot(), 'apps/ui/patches/@noble+hashes+1.8.0.patch'),
+                'utf8',
+            ),
+        });
+
+        const packageJson = JSON.parse(readFileSync(
+            join(fixtureDir, 'node_modules/@noble/hashes/package.json'),
+            'utf8',
+        )) as {
+            browser?: Record<string, unknown>;
+            exports?: Record<string, unknown>;
+        };
+        expect(packageJson.browser?.['node:crypto']).toBe(false);
+        expect(packageJson.browser?.['./crypto']).toBe('./crypto.js');
+        expect(packageJson.exports?.['./crypto.js']).toEqual(packageJson.exports?.['./crypto']);
+    });
+
     it('continues normal HMR eval when the worklets update hook throws', () => {
         const fixtureDir = createTempFixtureDir('happier-ui-metro-runtime-patch-');
         fixtureDirs.push(fixtureDir);

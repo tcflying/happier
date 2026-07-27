@@ -53,6 +53,24 @@ test('buildExpoDevEnv forces stack context in stack mode even when base env sets
   assert.equal(env.EXPO_PUBLIC_HAPPY_SERVER_CONTEXT, 'stack');
 });
 
+test('buildExpoDevEnv marks stack Expo starts as interactive Metro development', () => {
+  const env = buildExpoDevEnv({
+    baseEnv: {
+      ...process.env,
+      CI: '1',
+      HAPPIER_UI_METRO_MODE: 'build',
+    },
+    apiServerUrl: 'http://localhost:3013',
+    wantDevClient: false,
+    wantWeb: true,
+    stackMode: true,
+    stackName: 'qa-agent-metro-dev',
+  });
+
+  assert.equal(env.CI, undefined);
+  assert.equal(env.HAPPIER_UI_METRO_MODE, 'development');
+});
+
 test('buildExpoDevEnv uses the Tailscale IP for dev-client local API URLs when provided', () => {
   const baseEnv = {
     ...process.env,

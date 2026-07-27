@@ -1,12 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ReleaseSessionRunnerLockResult } from '@/daemon/sessionRunnerLock';
+
 const heartbeat = vi.fn(async () => true);
 const markCleanup = vi.fn(async () => true);
-const release = vi.fn(async () => undefined);
+const setControlPort = vi.fn(async () => true);
+const release = vi.fn(async (): Promise<ReleaseSessionRunnerLockResult> => ({ ok: true }));
 const acquireSessionRunnerLock = vi.fn();
+const closeControlChallengeServer = vi.fn(async () => {});
+const startSessionRunnerControlChallengeServer = vi.fn(async () => ({
+  port: 43_210,
+  close: closeControlChallengeServer,
+}));
 
 vi.mock('@/daemon/sessionRunnerLock', () => ({
   acquireSessionRunnerLock,
+}));
+
+vi.mock('@/daemon/sessionRunnerControlChallenge', () => ({
+  startSessionRunnerControlChallengeServer,
 }));
 
 vi.mock('@/ui/auth', () => ({
@@ -33,7 +45,12 @@ describe('runBackendSessionCliCommand (session runner lock)', () => {
   beforeEach(() => {
     heartbeat.mockClear();
     markCleanup.mockClear();
+    setControlPort.mockClear();
     release.mockClear();
+    closeControlChallengeServer.mockClear();
+    startSessionRunnerControlChallengeServer.mockClear();
+    markCleanup.mockResolvedValue(true);
+    release.mockResolvedValue({ ok: true as const });
     acquireSessionRunnerLock.mockReset();
   });
 
@@ -81,6 +98,7 @@ describe('runBackendSessionCliCommand (session runner lock)', () => {
       acquiredAtMs: 1,
       generationId: 'generation-1',
       lockPath: 'lock.json',
+      setControlPort,
       heartbeat,
       markCleanup,
       readLifecycle: vi.fn(async () => null),
@@ -101,6 +119,11 @@ describe('runBackendSessionCliCommand (session runner lock)', () => {
     });
 
     await vi.advanceTimersByTimeAsync(5_000);
+    expect(startSessionRunnerControlChallengeServer).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      generationId: 'generation-1',
+    });
+    expect(setControlPort).toHaveBeenCalledWith(43_210);
     expect(heartbeat).toHaveBeenCalled();
     const heartbeatCallsBeforeCleanup = heartbeat.mock.calls.length;
     const cleanupStartedAtMs = Date.now();
@@ -108,11 +131,11 @@ describe('runBackendSessionCliCommand (session runner lock)', () => {
       beginRegisteredSessionRunnerCleanup,
       finishRegisteredSessionRunnerCleanup,
     } = await import('@/daemon/sessionRunnerLifecycleRuntime');
-    await beginRegisteredSessionRunnerCleanup(100);
-    expect(markCleanup).toHaveBeenCalledWith({
+    await beginRegisteredSessionRunnerCleanup(cleanupStartedAtMs + 100);
+    expect(markCleanup).toHaveBeenCalledWith(expect.objectContaining({
       nowMs: cleanupStartedAtMs,
       deadlineAtMs: cleanupStartedAtMs + 100,
-    });
+    }));
     await vi.advanceTimersByTimeAsync(5_000);
     expect(heartbeat).toHaveBeenCalledTimes(heartbeatCallsBeforeCleanup);
     await finishRegisteredSessionRunnerCleanup('completed');
@@ -121,5 +144,122 @@ describe('runBackendSessionCliCommand (session runner lock)', () => {
 
     expect(markCleanup).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
+    expect(closeControlChallengeServer).toHaveBeenCalledOnce();
+  });
+
+  it('does not release a cleanup generation until the force finalizer confirms completion', async () => {
+    vi.useFakeTimers();
+    acquireSessionRunnerLock.mockResolvedValue({
+      ok: true as const,
+      sessionId: 'sess_1',
+      pid: 123,
+      acquiredAtMs: 1,
+      generationId: 'generation-1',
+      lockPath: 'lock.json',
+      setControlPort,
+      heartbeat,
+      markCleanup,
+      readLifecycle: vi.fn(async () => null),
+      release,
+    });
+    const { runBackendSessionCliCommand } = await import('./runBackendSessionCliCommand');
+    const { beginRegisteredSessionRunnerCleanup } = await import('@/daemon/sessionRunnerLifecycleRuntime');
+    let finishRun!: () => void;
+    const run = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        finishRun = resolve;
+      });
+    });
+    const command = runBackendSessionCliCommand({
+      context: { args: ['codex', '--existing-session', 'sess_1'], terminalRuntime: null } as any,
+      loadRun: vi.fn().mockResolvedValue(run),
+      agentIdForAccountSettings: 'codex' as any,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    await beginRegisteredSessionRunnerCleanup(Date.now() + 100);
+    finishRun();
+    await command;
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('does not treat markCleanup false as a successful lifecycle transition', async () => {
+    markCleanup.mockResolvedValue(false);
+    acquireSessionRunnerLock.mockResolvedValue({
+      ok: true as const,
+      sessionId: 'sess_mark_false',
+      pid: 123,
+      acquiredAtMs: 1,
+      generationId: 'generation-mark-false',
+      lockPath: 'lock.json',
+      setControlPort,
+      heartbeat,
+      markCleanup,
+      readLifecycle: vi.fn(async () => null),
+      release,
+    });
+    const { runBackendSessionCliCommand } = await import('./runBackendSessionCliCommand');
+    const { beginRegisteredSessionRunnerCleanup } = await import('@/daemon/sessionRunnerLifecycleRuntime');
+    let finishRun!: () => void;
+    const command = runBackendSessionCliCommand({
+      context: { args: ['codex', '--existing-session', 'sess_mark_false'], terminalRuntime: null } as any,
+      loadRun: vi.fn().mockResolvedValue(vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+      })),
+      agentIdForAccountSettings: 'codex' as any,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await expect(beginRegisteredSessionRunnerCleanup(Date.now() + 100)).rejects.toThrow(/mark cleanup/i);
+    expect(release).not.toHaveBeenCalled();
+
+    finishRun();
+    await expect(command).rejects.toThrow(/mark cleanup/i);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('keeps the generation owned and reports failure until release returns ok', async () => {
+    release
+      .mockResolvedValueOnce({ ok: false as const, reason: 'not_owner' as const })
+      .mockResolvedValue({ ok: true as const });
+    acquireSessionRunnerLock.mockResolvedValue({
+      ok: true as const,
+      sessionId: 'sess_release_result',
+      pid: 123,
+      acquiredAtMs: 1,
+      generationId: 'generation-release-result',
+      lockPath: 'lock.json',
+      setControlPort,
+      heartbeat,
+      markCleanup,
+      readLifecycle: vi.fn(async () => null),
+      release,
+    });
+    const { runBackendSessionCliCommand } = await import('./runBackendSessionCliCommand');
+    const {
+      beginRegisteredSessionRunnerCleanup,
+      finishRegisteredSessionRunnerCleanup,
+    } = await import('@/daemon/sessionRunnerLifecycleRuntime');
+    let finishRun!: () => void;
+    const command = runBackendSessionCliCommand({
+      context: { args: ['codex', '--existing-session', 'sess_release_result'], terminalRuntime: null } as any,
+      loadRun: vi.fn().mockResolvedValue(vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+      })),
+      agentIdForAccountSettings: 'codex' as any,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await beginRegisteredSessionRunnerCleanup(Date.now() + 100);
+    await expect(finishRegisteredSessionRunnerCleanup('completed')).rejects.toThrow(/release/i);
+    expect(release).toHaveBeenCalledTimes(1);
+
+    finishRun();
+    await command;
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });

@@ -46,6 +46,72 @@ import {
 } from './utils/service/windows_stack_supervisor_runtime.mjs';
 import { renderWindowsStackSupervisorStatusText } from './utils/service/windows_stack_supervisor_status.mjs';
 
+const WINDOWS_RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+
+function windowsServiceWrapperPath(label) {
+  return join(homedir(), '.happier', 'services', `${label}.ps1`);
+}
+
+function windowsServiceRunCommand(definitionPath) {
+  return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${definitionPath}"`;
+}
+
+function isWindowsOnLogonPolicyDenied(error) {
+  const message = String(error?.message ?? error ?? '');
+  return process.platform === 'win32'
+    && /schtasks\s+\/Create/i.test(message)
+    && /\/SC\s+ONLOGON/i.test(message)
+    && /access is denied/i.test(message);
+}
+
+async function hasWindowsRunKeyService(label) {
+  try {
+    const output = await runCapture('reg', ['QUERY', WINDOWS_RUN_KEY, '/v', label]);
+    return /\bREG_SZ\b/i.test(String(output));
+  } catch {
+    return false;
+  }
+}
+
+async function installWindowsRunKeyService(label) {
+  const definitionPath = windowsServiceWrapperPath(label);
+  await run('reg', [
+    'ADD',
+    WINDOWS_RUN_KEY,
+    '/v',
+    label,
+    '/t',
+    'REG_SZ',
+    '/d',
+    windowsServiceRunCommand(definitionPath),
+    '/f',
+  ]);
+  return { definitionPath };
+}
+
+async function removeWindowsRunKeyService(label) {
+  await run('reg', ['DELETE', WINDOWS_RUN_KEY, '/v', label, '/f']).catch(() => {});
+}
+
+function startWindowsRunKeyService(label) {
+  const definitionPath = windowsServiceWrapperPath(label);
+  const child = spawn('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-WindowStyle',
+    'Hidden',
+    '-File',
+    definitionPath,
+  ], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+}
+
 /**
  * Manage the autostart service installed by `hstack bootstrap -- --autostart`.
  *
@@ -210,22 +276,28 @@ export async function installService({ mode = 'user', systemUser = null } = {}) 
     installedCliRoot: resolveInstalledCliRoot(rootDir),
   });
 
-  await installManagedService({
-    platform: process.platform,
-    mode,
-    homeDir: homedir(),
-    spec: {
-      label,
-      description: `Happier Stack (${label})`,
-      programArgs,
-      workingDirectory,
-      env,
-      runAsUser: mode === 'system' && systemUser ? systemUser : '',
-      stdoutPath,
-      stderrPath,
-    },
-    persistent: true,
-  });
+  try {
+    await installManagedService({
+      platform: process.platform,
+      mode,
+      homeDir: homedir(),
+      spec: {
+        label,
+        description: `Happier Stack (${label})`,
+        programArgs,
+        workingDirectory,
+        env,
+        runAsUser: mode === 'system' && systemUser ? systemUser : '',
+        stdoutPath,
+        stderrPath,
+      },
+      persistent: true,
+    });
+  } catch (error) {
+    if (!(mode === 'user' && isWindowsOnLogonPolicyDenied(error))) throw error;
+    const fallback = await installWindowsRunKeyService(label);
+    return { backend: 'windows-run-key-user', fallback: true, definitionPath: fallback.definitionPath };
+  }
 
   if (process.platform === 'win32') {
     console.log(`${green('✓')} service installed ${dim('(Windows scheduled task)')}`);
@@ -264,6 +336,10 @@ export async function uninstallService({ mode = 'user' } = {}) {
       requestedBy: 'service uninstall',
       reason: 'service uninstall requested',
     }).catch(() => {});
+  }
+
+  if (process.platform === 'win32' && mode === 'user') {
+    await removeWindowsRunKeyService(label);
   }
 
   await uninstallManagedService({
@@ -788,10 +864,14 @@ async function main() {
       }
       return;
     }
-    case 'install':
-      await installService({ mode, systemUser });
-      if (json) printResult({ json, data: { ok: true, action: 'install' } });
+    case 'install': {
+      const installed = await installService({ mode, systemUser });
+      if (!json && installed?.fallback) {
+        console.log(`[service] Windows ONLOGON task policy denied; installed per-user Run-key fallback (${installed.definitionPath})`);
+      }
+      if (json) printResult({ json, data: { ok: true, action: 'install', ...(installed ?? {}) } });
       return;
+    }
     case 'uninstall':
       await uninstallService({ mode });
       if (json) printResult({ json, data: { ok: true, action: 'uninstall' } });
@@ -818,6 +898,7 @@ async function main() {
             schtasksStatus = e && typeof e === 'object' && 'out' in e ? e.out : null;
           }
           const supervisor = await readWindowsStackSupervisorStatus({ baseDir });
+          const runKeyRegistered = await hasWindowsRunKeyService(label);
           printResult({
             json,
             data: {
@@ -827,6 +908,7 @@ async function main() {
               stderrPath,
               internalUrl,
               schtasksStatus,
+              runKeyRegistered,
               health,
               supervisor,
             },
@@ -865,6 +947,8 @@ async function main() {
             console.log('');
           }
           const supervisor = await readWindowsStackSupervisorStatus({ baseDir });
+          const runKeyRegistered = await hasWindowsRunKeyService(label);
+          console.log(`Windows Run-key fallback: ${runKeyRegistered ? 'registered' : 'not registered'}`);
           console.log(renderWindowsStackSupervisorStatusText(supervisor));
           return;
         }
@@ -883,7 +967,11 @@ async function main() {
     case 'start':
       if (process.platform === 'win32') {
         const { label } = getDefaultAutostartPaths();
-        await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
+        if (await hasWindowsRunKeyService(label)) {
+          startWindowsRunKeyService(label);
+        } else {
+          await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
+        }
         await postStartDiagnostics();
         if (json) printResult({ json, data: { ok: true, action: 'start' } });
         return;
@@ -939,7 +1027,11 @@ async function main() {
           stopSessions: false,
         });
         await run('schtasks', ['/End', '/TN', `Happier\\${label}`]).catch(() => {});
-        await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
+        if (await hasWindowsRunKeyService(label)) {
+          startWindowsRunKeyService(label);
+        } else {
+          await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
+        }
         await postStartDiagnostics();
         if (json) printResult({ json, data: { ok: graceful.stopped, action: 'restart', graceful } });
         return;
@@ -970,8 +1062,12 @@ async function main() {
     case 'enable':
       if (process.platform === 'win32') {
         const { label } = getDefaultAutostartPaths();
-        await run('schtasks', ['/Change', '/TN', `Happier\\${label}`, '/Enable']).catch(() => {});
-        await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
+        if (await hasWindowsRunKeyService(label)) {
+          startWindowsRunKeyService(label);
+        } else {
+          await run('schtasks', ['/Change', '/TN', `Happier\\${label}`, '/Enable']).catch(() => {});
+          await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
+        }
         await postStartDiagnostics();
         if (json) printResult({ json, data: { ok: true, action: 'enable' } });
         return;
@@ -1004,6 +1100,7 @@ async function main() {
         });
         await run('schtasks', ['/End', '/TN', `Happier\\${label}`]).catch(() => {});
         await run('schtasks', ['/Change', '/TN', `Happier\\${label}`, '/Disable']).catch(() => {});
+        await removeWindowsRunKeyService(label);
         if (json) printResult({ json, data: { ok: graceful.stopped, action: 'disable', graceful } });
         return;
       }

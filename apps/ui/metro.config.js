@@ -51,8 +51,9 @@ function isGeneratedWorkletImport(moduleName) {
 }
 
 function referencesGeneratedWorkletPath(moduleName) {
-  return typeof moduleName === "string"
-    && generatedWorkletModulePrefixes.some((prefix) => moduleName.includes(prefix));
+  if (typeof moduleName !== "string") return false;
+  const normalizedModuleName = moduleName.replace(/\\/g, "/");
+  return generatedWorkletModulePrefixes.some((prefix) => normalizedModuleName.includes(prefix));
 }
 
 function resolveGeneratedWorkletModule(moduleName) {
@@ -178,6 +179,12 @@ const isNonInteractiveMetroBuild =
 
 if (isNonInteractiveMetroBuild || isWatchmanDisabledForLocalRun) {
   config.resolver.useWatchman = false;
+  // metro-file-map selects its watcher from this field, independently from the
+  // resolver. Keep both values aligned whenever Watchman is explicitly off.
+  config.watcher = {
+    ...(config.watcher || {}),
+    useWatchman: false,
+  };
 }
 
 // Add support for .wasm files (required by Skia for all platforms)
@@ -317,13 +324,23 @@ function resolveUiInternalWorkspaceDependencies() {
 function compactMetroWatchFolders(folders) {
   const projectRoot = resolveRealPathOrAbsolute(__dirname);
   const directWorkspaceDependencies = resolveUiInternalWorkspaceDependencies();
+  const requiredMetroWatchFolderKeys = new Set(
+    [
+      ...generatedWorkletsWatchFolders,
+      ...workletsRuntimeWatchFolders,
+      ...(hmrSoakWatchRoot ? [hmrSoakWatchRoot] : []),
+    ].map((folder) => normalizedPathKey(folder)),
+  );
   const unique = new Map();
 
   for (const folder of folders) {
     if (typeof folder !== 'string' || !folder.trim()) continue;
     const absolute = path.resolve(folder);
     const realPath = resolveRealPathOrAbsolute(absolute);
-    if (isSameOrNestedPath(realPath, projectRoot)) continue;
+    if (
+      isSameOrNestedPath(realPath, projectRoot)
+      && !requiredMetroWatchFolderKeys.has(normalizedPathKey(realPath))
+    ) continue;
 
     const workspacePackageName = resolveWorkspacePackageName(absolute);
     if (workspacePackageName && !directWorkspaceDependencies.has(workspacePackageName)) continue;
@@ -340,7 +357,9 @@ function compactMetroWatchFolders(folders) {
       !entries.some((candidate, candidateIndex) =>
         candidateIndex !== index
         && entry.realPath !== candidate.realPath
-        && isSameOrNestedPath(entry.realPath, candidate.realPath),
+        && isSameOrNestedPath(entry.realPath, candidate.realPath)
+        && !(requiredMetroWatchFolderKeys.has(normalizedPathKey(entry.realPath))
+          && requiredMetroWatchFolderKeys.has(normalizedPathKey(candidate.realPath))),
       ),
     )
     .map((entry) => entry.absolute);

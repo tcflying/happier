@@ -51,8 +51,9 @@ function isGeneratedWorkletImport(moduleName) {
 }
 
 function referencesGeneratedWorkletPath(moduleName) {
-  return typeof moduleName === "string"
-    && generatedWorkletModulePrefixes.some((prefix) => moduleName.includes(prefix));
+  if (typeof moduleName !== "string") return false;
+  const normalizedModuleName = moduleName.replace(/\\/g, "/");
+  return generatedWorkletModulePrefixes.some((prefix) => normalizedModuleName.includes(prefix));
 }
 
 function resolveGeneratedWorkletModule(moduleName) {

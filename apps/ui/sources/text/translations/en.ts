@@ -511,6 +511,12 @@ export const en = {
         progress: {
             catchingUp: 'Catching up…',
         },
+        unsupportedContent: {
+            unparsedUserMessage: 'Unparsed user message',
+            unparsedAgentMessage: 'Unparsed agent message',
+            unsupportedAgentOutput: 'Unsupported output',
+            unsupportedTranscriptRecord: 'Unsupported record',
+        },
     },
 
     inbox: {

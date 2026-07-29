@@ -722,6 +722,13 @@ export const zhHans: TranslationStructure = {
 
     },
 
+    unsupportedContent: {
+      unparsedUserMessage: '无法解析的用户消息',
+      unparsedAgentMessage: '无法解析的助手消息',
+      unsupportedAgentOutput: '不支持的输出',
+      unsupportedTranscriptRecord: '不支持的记录',
+    },
+
   },
 
 

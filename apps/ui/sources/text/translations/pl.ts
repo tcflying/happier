@@ -735,6 +735,13 @@ export const pl: TranslationStructure = {
 
     },
 
+    unsupportedContent: {
+      unparsedUserMessage: 'Nieprzeanalizowana wiadomość użytkownika',
+      unparsedAgentMessage: 'Nieprzeanalizowana wiadomość asystenta',
+      unsupportedAgentOutput: 'Nieobsługiwane wyjście',
+      unsupportedTranscriptRecord: 'Nieobsługiwany rekord',
+    },
+
   },
 
 

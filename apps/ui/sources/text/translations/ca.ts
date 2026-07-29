@@ -678,6 +678,12 @@ export const ca: TranslationStructure = {
         progress: {
             catchingUp: 'Posant-se al dia…',
         },
+        unsupportedContent: {
+            unparsedUserMessage: 'Missatge d\'usuari no analitzat',
+            unparsedAgentMessage: 'Missatge d\'assistent no analitzat',
+            unsupportedAgentOutput: 'Sortida no compatible',
+            unsupportedTranscriptRecord: 'Registre no compatible',
+        },
     },
 
     inbox: {

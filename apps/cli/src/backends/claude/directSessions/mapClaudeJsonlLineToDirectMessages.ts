@@ -1,5 +1,6 @@
 import type { DirectTranscriptRawMessageV1 } from '@happier-dev/protocol';
 
+import { resolveClaudeSessionMessageRole } from '@/api/session/messageRole';
 import { isClaudeInternalTranscriptMessage } from '@/backends/claude/utils/isClaudeInternalTranscriptMessage';
 import { normalizeClaudeToolUseNamesInRawJsonLines } from '@/backends/claude/utils/normalizeClaudeToolUseNames';
 import { parseRawJsonLinesObject } from '@/backends/claude/utils/parseRawJsonLines';
@@ -95,6 +96,9 @@ export function mapClaudeJsonlLineToDirectMessages(params: Readonly<{
         id: stableId,
         localId: stableId,
         createdAtMs,
+        // Classify from the raw body: a row we cannot parse still gets the same role treatment as a
+        // synced one, instead of reaching the transcript as unclassified agent content.
+        messageRole: resolveClaudeSessionMessageRole(rawObject),
         raw: {
           role: 'agent',
           content: {
@@ -119,6 +123,7 @@ export function mapClaudeJsonlLineToDirectMessages(params: Readonly<{
     return [];
   }
   const normalizedForOutput = ensureClaudeOutputMessageRole(normalized);
+  const messageRole = resolveClaudeSessionMessageRole(normalized);
 
   if (
     normalized.type === 'user' &&
@@ -131,6 +136,7 @@ export function mapClaudeJsonlLineToDirectMessages(params: Readonly<{
         id: stableId,
         localId: stableId,
         createdAtMs,
+        messageRole,
         raw: {
           role: 'user',
           content: { type: 'text', text: String((normalized as any).message.content) },
@@ -142,12 +148,13 @@ export function mapClaudeJsonlLineToDirectMessages(params: Readonly<{
   return [
     {
       id: stableId,
-        localId: stableId,
-        createdAtMs,
-        raw: {
-          role: 'agent',
-          content: { type: 'output', data: normalizedForOutput },
-        },
+      localId: stableId,
+      createdAtMs,
+      messageRole,
+      raw: {
+        role: 'agent',
+        content: { type: 'output', data: normalizedForOutput },
       },
+    },
   ];
 }

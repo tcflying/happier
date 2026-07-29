@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Message } from '@/sync/domains/messages/messageTypes';
+import { resolveUnsupportedContentLabel } from '@/sync/domains/messages/resolveUnsupportedContentLabel';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
 
 import { resolveTranscriptSelectionToolbarMessages } from './resolveTranscriptSelectionToolbarMessages';
@@ -49,5 +50,54 @@ describe('resolveTranscriptSelectionToolbarMessages', () => {
         ], { path: '/', host: 'localhost', discardedCommittedMessageLocalIds: ['local-discarded'] } as Metadata);
 
         expect(resolved).toEqual([{ id: 'done', role: 'assistant', text: 'complete' }]);
+    });
+
+    it('resolves the localized label, not the raw fallback text, for a user placeholder that stays visible', () => {
+        const resolved = resolveTranscriptSelectionToolbarMessages([
+            message({
+                id: 'unsupported',
+                kind: 'user-text',
+                text: '[Unparsed user message]',
+                meta: { happierUnsupportedContentV1: 'unparsed-user-message' },
+            }),
+        ]);
+
+        expect(resolved).toEqual([{
+            id: 'unsupported',
+            role: 'user',
+            text: resolveUnsupportedContentLabel('unparsed-user-message'),
+        }]);
+        expect(resolved[0]?.text).not.toBe('[Unparsed user message]');
+    });
+
+    it('drops agent placeholders that the transcript does not render when diagnostics are disabled', () => {
+        const resolved = resolveTranscriptSelectionToolbarMessages([
+            message({
+                id: 'unsupported',
+                kind: 'agent-text',
+                text: '[Unsupported agent output: future-type]',
+                meta: { happierUnsupportedContentV1: 'unsupported-agent-output' },
+            }),
+            message({ id: 'answer', kind: 'agent-text', text: 'done' }),
+        ]);
+
+        expect(resolved).toEqual([{ id: 'answer', role: 'assistant', text: 'done' }]);
+    });
+
+    it('keeps the raw diagnostic selectable when developer diagnostics are enabled', () => {
+        const resolved = resolveTranscriptSelectionToolbarMessages([
+            message({
+                id: 'unsupported',
+                kind: 'agent-text',
+                text: '[Unsupported agent output: future-type]',
+                meta: { happierUnsupportedContentV1: 'unsupported-agent-output' },
+            }),
+        ], null, { debugInformationEnabled: true });
+
+        expect(resolved).toEqual([{
+            id: 'unsupported',
+            role: 'assistant',
+            text: '[Unsupported agent output: future-type]',
+        }]);
     });
 });

@@ -31,6 +31,12 @@ import { ThinkingTimelineRow } from '@/components/sessions/transcript/thinking/T
 import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { parseHappierMetaEnvelope } from '@/components/sessions/transcript/structured/happierMetaEnvelope';
+import { readUnsupportedContentMeta, type UnsupportedContentKind } from '@/sync/domains/messages/unsupportedContentMeta';
+import { resolveUnsupportedContentLabel } from '@/sync/domains/messages/resolveUnsupportedContentLabel';
+import {
+  resolveUnsupportedContentPresentation,
+  type UnsupportedContentPresentation,
+} from '@/sync/domains/messages/unsupportedContentPresentation';
 import { AttachmentsMessageRow } from '@/components/sessions/attachments/messages/AttachmentsMessageRow';
 import { SessionMediaInlineImages } from '@/components/sessions/sessionMedia/SessionMediaInlineImages';
 import { parseSessionMediaMessageMeta } from '@/sync/domains/sessionMedia/sessionMediaMessageMeta';
@@ -135,6 +141,28 @@ function shouldHideVoiceAgentTurnMessage(message: Message): boolean {
     return normalizedText == null || normalizedText.trim().length === 0;
 }
 
+function resolveMessageUnsupportedContentPresentation(
+  message: Message,
+  debugInformationEnabled: boolean,
+): UnsupportedContentPresentation | null {
+  const kind = readUnsupportedContentMeta(message.meta);
+  return kind ? resolveUnsupportedContentPresentation({ kind, debugInformationEnabled }) : null;
+}
+
+/**
+ * Resolve the text a placeholder row renders: the raw fallback text carries the offending payload
+ * type, so it is kept for developer diagnostics and replaced by the localized label otherwise.
+ */
+function resolveUnsupportedContentText(params: Readonly<{
+  presentation: UnsupportedContentPresentation;
+  kind: UnsupportedContentKind;
+  rawText: string | null | undefined;
+}>): string {
+  if (params.presentation !== 'diagnostic') return resolveUnsupportedContentLabel(params.kind);
+  const raw = typeof params.rawText === 'string' ? params.rawText.trim() : '';
+  return raw.length > 0 ? raw : resolveUnsupportedContentLabel(params.kind);
+}
+
 function formatTranscriptMessageTimestamp(createdAt: number): string | null {
   if (typeof createdAt !== 'number' || !Number.isFinite(createdAt) || createdAt < 0) return null;
   const date = new Date(createdAt);
@@ -206,6 +234,12 @@ export const MessageViewWithSessionCommon = (props: MessageViewProps & {
   toolRouteCommon: TranscriptToolRouteCommon;
 }) => {
   if (shouldHideVoiceAgentTurnMessage(props.message)) return null;
+  // Placeholders for content we could not render are dropped here rather than inside the message
+  // blocks, so toggling developer diagnostics never changes the hook order of a mounted row.
+  if (resolveMessageUnsupportedContentPresentation(
+    props.message,
+    props.messageDisplayCommon.debugInformationEnabled,
+  ) === 'hidden') return null;
   return (
     <View style={styles.messageContainer} renderToHardwareTextureAndroid={true}>
       <View style={styles.messageContent}>
@@ -342,6 +376,11 @@ function UserTextBlock(props: {
     return envelope?.kind === 'voice_agent_turn.v1';
   }, [props.message.meta]);
 
+  const unsupportedContentMeta = React.useMemo(
+    () => readUnsupportedContentMeta(props.message.meta),
+    [props.message.meta],
+  );
+
   const structuredNode = renderStructuredMessage({
     message: props.message,
     sessionId: props.sessionId,
@@ -367,14 +406,26 @@ function UserTextBlock(props: {
     pushSessionFileDeepLink(router, pathname, { sessionId: props.sessionId, filePath });
   }, [pathname, props.sessionId, router]);
 
+  const unsupportedContentText = unsupportedContentMeta
+    ? resolveUnsupportedContentText({
+      presentation: resolveUnsupportedContentPresentation({
+        kind: unsupportedContentMeta,
+        debugInformationEnabled: props.messageDisplayCommon.debugInformationEnabled,
+      }),
+      kind: unsupportedContentMeta,
+      rawText: props.message.text,
+    })
+    : null;
+
   const markdownText = React.useMemo(() => {
+    if (unsupportedContentText != null) return unsupportedContentText;
     if (isVoiceAgentTurn && props.message.displayText === undefined) {
       return normalizeVoiceAgentTurnTranscriptText(props.message.text);
     }
     if (props.message.displayText !== undefined) return props.message.displayText;
     if (attachmentsMeta) return stripLegacyAttachmentsBlock(props.message.text);
     return props.message.text;
-  }, [attachmentsMeta, isVoiceAgentTurn, props.message.displayText, props.message.text]);
+  }, [attachmentsMeta, isVoiceAgentTurn, props.message.displayText, props.message.text, unsupportedContentText]);
   const renderedMarkdownText = markdownText ?? props.message.displayText ?? props.message.text;
 
   const linkedWorkspaceFiles = React.useMemo(
@@ -406,11 +457,14 @@ function UserTextBlock(props: {
     return true;
   }, []);
 
-  const selectableMessage = isDiscarded ? null : resolveSelectableMessageText({
-    message: props.message,
-    isStructuredOnly,
-    hasAttachmentBlockToStrip: attachmentsMeta != null,
-  });
+  const selectableMessage = isDiscarded ? null : (() => {
+    const base = resolveSelectableMessageText({
+      message: props.message,
+      isStructuredOnly,
+      hasAttachmentBlockToStrip: attachmentsMeta != null,
+    });
+    return base && unsupportedContentText != null ? { ...base, text: unsupportedContentText } : base;
+  })();
   const selectionEnabled = props.messageDisplayCommon.transcriptMessageSelectionEnabled === true && selectableMessage != null;
   const selectionRow = useOptionalTranscriptSelectionRow(props.message.id);
   const selectionModeActionsVisible = selectionEnabled && selectionRow.isSelectionMode;
@@ -705,6 +759,10 @@ function AgentTextBlock(props: {
     const envelope = parseHappierMetaEnvelope(props.message.meta);
     return envelope?.kind === 'voice_agent_turn.v1';
   }, [props.message.meta]);
+  const unsupportedContentMeta = React.useMemo(
+    () => readUnsupportedContentMeta(props.message.meta),
+    [props.message.meta],
+  );
   const sessionThinkingDisplayMode = props.messageDisplayCommon.sessionThinkingDisplayMode;
   const sessionThinkingInlinePresentation = props.messageDisplayCommon.sessionThinkingInlinePresentation;
   const sessionThinkingInlineChrome = props.messageDisplayCommon.sessionThinkingInlineChrome;
@@ -729,14 +787,28 @@ function AgentTextBlock(props: {
   const handleOpenMediaPath = React.useCallback((filePath: string) => {
     pushSessionFileDeepLink(router, pathname, { sessionId: props.sessionId, filePath });
   }, [pathname, props.sessionId, router]);
-  const baseMarkdownText = isVoiceAgentTurn
-    ? normalizeVoiceAgentTurnTranscriptText(props.message.text)
-    : props.message.text;
-  if (isVoiceAgentTurn && baseMarkdownText == null) {
+  const unsupportedContentText = unsupportedContentMeta
+    ? resolveUnsupportedContentText({
+      presentation: resolveUnsupportedContentPresentation({
+        kind: unsupportedContentMeta,
+        debugInformationEnabled: props.messageDisplayCommon.debugInformationEnabled,
+      }),
+      kind: unsupportedContentMeta,
+      rawText: props.message.text,
+    })
+    : null;
+  const baseMarkdownText = unsupportedContentText != null
+    ? unsupportedContentText
+    : isVoiceAgentTurn
+      ? normalizeVoiceAgentTurnTranscriptText(props.message.text)
+      : props.message.text;
+  if (!unsupportedContentMeta && isVoiceAgentTurn && baseMarkdownText == null) {
     return null;
   }
   const markdownSource = baseMarkdownText ?? props.message.text;
-  const markdown = props.message.isThinking ? unwrapLegacyThinkingWrapper(markdownSource) : markdownSource;
+  const markdown = (!unsupportedContentMeta && props.message.isThinking)
+    ? unwrapLegacyThinkingWrapper(markdownSource)
+    : markdownSource;
   const deriveThinkingSummary = (text: string) => {
     const trimmed = String(text ?? '').trim();
     if (!trimmed) return '';
@@ -749,11 +821,14 @@ function AgentTextBlock(props: {
     if (cleaned.length <= 120) return cleaned;
     return cleaned.slice(0, 117) + '…';
   };
-  const selectableMessage = resolveSelectableMessageText({
-    message: props.message,
-    isStructuredOnly,
-    hasAttachmentBlockToStrip: false,
-  });
+  const selectableMessage = (() => {
+    const base = resolveSelectableMessageText({
+      message: props.message,
+      isStructuredOnly,
+      hasAttachmentBlockToStrip: false,
+    });
+    return base && unsupportedContentText != null ? { ...base, text: unsupportedContentText } : base;
+  })();
   const selectionEnabled = props.messageDisplayCommon.transcriptMessageSelectionEnabled === true && selectableMessage != null;
   const copyText = selectableMessage?.text ?? (isStructuredOnly ? props.message.text : markdown);
 

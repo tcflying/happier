@@ -739,6 +739,13 @@ export const ru: TranslationStructure = {
 
     },
 
+    unsupportedContent: {
+      unparsedUserMessage: 'Нераспознанное сообщение пользователя',
+      unparsedAgentMessage: 'Нераспознанное сообщение ассистента',
+      unsupportedAgentOutput: 'Неподдерживаемый вывод',
+      unsupportedTranscriptRecord: 'Неподдерживаемая запись',
+    },
+
   },
 
 

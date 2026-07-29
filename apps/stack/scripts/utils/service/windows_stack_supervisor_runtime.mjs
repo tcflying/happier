@@ -210,7 +210,8 @@ export async function runWindowsStackSupervisorRuntime({
   await mkdir(baseDir, { recursive: true });
 
   const previousState = await readJsonIfExists(paths.statePath, { defaultValue: null });
-  const initialRestartTimestamps = Array.isArray(previousState?.restartTimestamps)
+  const initialRestartTimestamps = previousState?.phase !== 'crash_budget_exhausted'
+    && Array.isArray(previousState?.restartTimestamps)
     ? previousState.restartTimestamps
     : [];
   let stopSignalRequested = false;

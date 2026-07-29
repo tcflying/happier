@@ -82,6 +82,12 @@ test('Windows supervisor runtime launches the canonical stack and uses canonical
 test('Windows supervisor runtime can launch and health-check the stack development UI', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-windows-supervisor-runtime-dev-' });
   const baseDir = join(fixture.root, 'dev');
+  const supervisorPaths = resolveWindowsStackSupervisorPaths({ baseDir });
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(supervisorPaths.statePath, JSON.stringify({
+    phase: 'crash_budget_exhausted',
+    restartTimestamps: [40_100, 40_200, 40_300],
+  }));
   const spawned = [];
   const healthInputs = [];
 
@@ -132,6 +138,8 @@ test('Windows supervisor runtime can launch and health-check the stack developme
   ]);
   assert.equal(healthInputs[0].relayUrl, 'http://127.0.0.1:52211');
   assert.equal(healthInputs[0].uiUrl, 'http://127.0.0.1:18287');
+  const state = JSON.parse(await readFile(supervisorPaths.statePath, 'utf8'));
+  assert.equal(state.restartCount, 0, 'an explicit start should reset an exhausted crash budget');
 });
 
 test('Windows service stop targets the active generation and waits for supervisor exit', async (t) => {

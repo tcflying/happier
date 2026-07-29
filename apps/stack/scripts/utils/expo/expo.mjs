@@ -189,7 +189,7 @@ async function readProcessIdentityLine(pid) {
 async function verifyStatePidIdentity({ pid, state, statePath }) {
   const line = await readProcessIdentityLine(pid);
   if (!line) {
-    return { ok: process.platform === 'win32', reason: 'pid_unverified' };
+    return { ok: false, reason: 'pid_identity_mismatch' };
   }
 
   const expectedExpoHomeDir = join(dirname(statePath), 'expo-home');

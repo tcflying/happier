@@ -335,6 +335,7 @@ export async function runWindowsStackSupervisorRuntime({
         runtimeEnv.HAPPIER_STACK_SUPERVISOR_MAX_CONSECUTIVE_HEALTH_FAILURES,
         3,
       ),
+      adoptHealthyOnChildExit: serviceRunMode === 'dev',
       initialRestartTimestamps,
       startupMaxAttempts: positiveInteger(
         runtimeEnv.HAPPIER_STACK_SUPERVISOR_STARTUP_MAX_ATTEMPTS,

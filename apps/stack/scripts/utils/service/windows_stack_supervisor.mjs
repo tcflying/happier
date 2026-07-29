@@ -157,6 +157,7 @@ export async function runWindowsStackSupervisor({
   restartWindowMs = 5 * 60_000,
   restartBackoffMs = 1_000,
   maxConsecutiveHealthFailures = 3,
+  adoptHealthyOnChildExit = false,
   initialRestartTimestamps = [],
   startupMaxAttempts = 30,
   startupPollMs = 1_000,
@@ -227,15 +228,32 @@ export async function runWindowsStackSupervisor({
         ? null
         : startup.event ?? { type: 'startup_failed', reason: startup.reason, health: startup.report };
       let consecutiveHealthFailures = 0;
+      let monitoredHealth = startup.report;
       while (startup.ok && event == null) {
-        const observed = await waitForEvent({ child, health: startup.report });
+        const observed = await waitForEvent({ child, health: monitoredHealth });
         if (observed?.type === 'health_ok') {
           consecutiveHealthFailures = 0;
+          monitoredHealth = observed.health ?? monitoredHealth;
           await publish('running', {
-            health: observed.health ?? startup.report,
+            health: monitoredHealth,
             lastHealthCheckAt: new Date(now()).toISOString(),
           });
           continue;
+        }
+        if (adoptHealthyOnChildExit === true && observed?.type === 'exit') {
+          const postExitHealth = await probeHealth();
+          if (postExitHealth?.restartable !== true && resolveStartupPhase(postExitHealth) === 'ready') {
+            child = null;
+            consecutiveHealthFailures = 0;
+            monitoredHealth = postExitHealth;
+            await publish('running', {
+              reason: 'wrapper_exited_endpoints_healthy',
+              lastEvent: observed,
+              health: postExitHealth,
+              lastHealthCheckAt: new Date(now()).toISOString(),
+            });
+            continue;
+          }
         }
         if (observed?.type === 'health_failure') {
           consecutiveHealthFailures += 1;

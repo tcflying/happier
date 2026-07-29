@@ -182,6 +182,48 @@ test('Windows stack supervisor restarts the canonical stack once after a child c
   assert.equal(states.filter((state) => state.phase === 'restarting').length, 1);
 });
 
+test('Windows stack supervisor adopts healthy infrastructure after the wrapper exits', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-windows-supervisor-adopt-healthy-' });
+  const monitorEvents = [
+    { type: 'exit', code: 0, signal: null },
+    { type: 'stop_requested', stopSessions: false, preserveDaemon: true },
+  ];
+  let starts = 0;
+  const states = [];
+
+  const healthy = {
+    status: 'healthy',
+    restartable: false,
+    dimensions: {
+      relay: { ok: true },
+      ui: { ok: true },
+      rpc: { ok: true },
+      daemonAuth: { ok: true },
+      machineRegistration: { ok: true },
+      sessionRunner: { ok: true },
+    },
+  };
+
+  const result = await runWindowsStackSupervisor({
+    lockPath: join(fixture.root, 'supervisor.lock.json'),
+    pid: 334,
+    generationId: 'generation-adopt-healthy',
+    now: () => 11_000,
+    isPidAliveImpl: (pid) => pid === 334,
+    startStack: async () => ({ pid: 410 + starts++, exitCode: null }),
+    stopStack: async () => {},
+    probeHealth: async () => healthy,
+    waitForEvent: async () => monitorEvents.shift(),
+    sleep: async () => {},
+    adoptHealthyOnChildExit: true,
+    writeState: async (state) => states.push(state),
+  });
+
+  assert.equal(result.status, 'stopped');
+  assert.equal(starts, 1);
+  assert.ok(states.some((state) => state.reason === 'wrapper_exited_endpoints_healthy'));
+});
+
 test('Windows stack supervisor stops after the crash budget is exhausted', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-windows-supervisor-budget-' });
   let starts = 0;

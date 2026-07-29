@@ -111,6 +111,7 @@ test('Windows stack supervisor restarts the canonical stack once after a child c
   const events = [{ type: 'exit', code: 1, signal: null }, { type: 'stop_requested' }];
   const started = [];
   const stopped = [];
+  const stopContexts = [];
   const states = [];
 
   const result = await runWindowsStackSupervisor({
@@ -124,8 +125,9 @@ test('Windows stack supervisor restarts the canonical stack once after a child c
       started.push(child.pid);
       return child;
     },
-    stopStack: async (child) => {
+    stopStack: async (child, context) => {
       stopped.push(child.pid);
+      stopContexts.push(context);
     },
     probeHealth: async () => ({
       status: 'healthy',
@@ -148,6 +150,7 @@ test('Windows stack supervisor restarts the canonical stack once after a child c
   assert.equal(result.status, 'stopped');
   assert.deepEqual(started, [400, 401]);
   assert.deepEqual(stopped, [400, 401]);
+  assert.equal(stopContexts[0].preserveDaemon, true);
   assert.equal(states.filter((state) => state.phase === 'restarting').length, 1);
 });
 

@@ -225,10 +225,16 @@ export async function runWindowsStackSupervisorRuntime({
     HAPPIER_STACK_SERVICE_MODE: '1',
     HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH: '1',
   };
+  const serviceRunMode = String(runtimeEnv.HAPPIER_STACK_SERVICE_RUN_MODE ?? '').trim().toLowerCase() === 'dev'
+    ? 'dev'
+    : 'start';
   const internalServerUrl = getInternalServerUrl({ env: runtimeEnv, defaultPort: 3005 }).internalServerUrl;
   const uiUrl =
     String(runtimeEnv.HAPPIER_STACK_UI_URL ?? '').trim() ||
     String(runtimeEnv.HAPPIER_WEBAPP_URL ?? '').trim() ||
+    (serviceRunMode === 'dev'
+      ? `http://127.0.0.1:${positiveInteger(runtimeEnv.HAPPIER_STACK_EXPO_DEV_PORT, 8081)}`
+      : '') ||
     internalServerUrl;
   const cliHomeDir =
     String(runtimeEnv.HAPPIER_STACK_CLI_HOME_DIR ?? '').trim() ||
@@ -264,7 +270,9 @@ export async function runWindowsStackSupervisorRuntime({
 
   const startStack = async () => spawnImpl(
     process.execPath,
-    [join(resolvedRootDir, 'scripts', 'run.mjs'), '--restart', '--no-browser'],
+    serviceRunMode === 'dev'
+      ? [join(resolvedRootDir, 'scripts', 'dev.mjs'), '--no-browser']
+      : [join(resolvedRootDir, 'scripts', 'run.mjs'), '--restart', '--no-browser'],
     {
       cwd: resolvedRootDir,
       env: runtimeEnv,

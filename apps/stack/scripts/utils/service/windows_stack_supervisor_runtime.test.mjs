@@ -79,6 +79,59 @@ test('Windows supervisor runtime launches the canonical stack and uses canonical
   assert.equal(state.generationId, 'runtime-generation');
 });
 
+test('Windows supervisor runtime can launch and health-check the stack development UI', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-windows-supervisor-runtime-dev-' });
+  const baseDir = join(fixture.root, 'dev');
+  const spawned = [];
+  const healthInputs = [];
+
+  const result = await runWindowsStackSupervisorRuntime({
+    rootDir: fixture.root,
+    baseDir,
+    stackName: 'dev',
+    env: {
+      HAPPIER_STACK_ENV_FILE: join(baseDir, 'env'),
+      HAPPIER_STACK_SERVICE_RUN_MODE: 'dev',
+      HAPPIER_STACK_EXPO_DEV_PORT: '18287',
+      HAPPIER_STACK_SERVER_PORT: '52211',
+    },
+    pid: 778,
+    generationId: 'runtime-dev-generation',
+    now: () => 41_000,
+    isPidAliveImpl: (pid) => pid === 778 || pid === 802,
+    spawnImpl: (command, args, options) => {
+      spawned.push({ command, args, options });
+      return { pid: 802, exitCode: null };
+    },
+    collectHealthImpl: async (options) => {
+      healthInputs.push(options);
+      return {
+        status: 'healthy',
+        restartable: false,
+        dimensions: {
+          relay: { ok: true },
+          ui: { ok: true },
+          rpc: { ok: true },
+          daemonAuth: { ok: true },
+          machineRegistration: { ok: true },
+          sessionRunner: { ok: true },
+        },
+      };
+    },
+    waitForEventImpl: async () => ({ type: 'stop_requested', preserveDaemon: true }),
+    stopStackWithEnvImpl: async () => ({ ok: true }),
+    sleepImpl: async () => {},
+  });
+
+  assert.equal(result.status, 'stopped');
+  assert.deepEqual(spawned[0].args, [
+    join(fixture.root, 'scripts', 'dev.mjs'),
+    '--no-browser',
+  ]);
+  assert.equal(healthInputs[0].relayUrl, 'http://127.0.0.1:52211');
+  assert.equal(healthInputs[0].uiUrl, 'http://127.0.0.1:18287');
+});
+
 test('Windows service stop targets the active generation and waits for supervisor exit', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-windows-supervisor-stop-request-' });
   const baseDir = join(fixture.root, 'main');

@@ -331,7 +331,10 @@ export async function runWindowsStackSupervisorRuntime({
       restartWindowMs: positiveInteger(runtimeEnv.HAPPIER_STACK_SUPERVISOR_RESTART_WINDOW_MS, 5 * 60_000),
       restartBackoffMs: positiveInteger(runtimeEnv.HAPPIER_STACK_SUPERVISOR_RESTART_BACKOFF_MS, 2_000),
       initialRestartTimestamps,
-      startupMaxAttempts: positiveInteger(runtimeEnv.HAPPIER_STACK_SUPERVISOR_STARTUP_MAX_ATTEMPTS, 90),
+      startupMaxAttempts: positiveInteger(
+        runtimeEnv.HAPPIER_STACK_SUPERVISOR_STARTUP_MAX_ATTEMPTS,
+        serviceRunMode === 'dev' ? 300 : 90,
+      ),
       startupPollMs: positiveInteger(runtimeEnv.HAPPIER_STACK_SUPERVISOR_STARTUP_POLL_MS, 1_000),
     });
   } finally {

@@ -105,12 +105,13 @@ test('Windows supervisor runtime can launch and health-check the stack developme
     },
     collectHealthImpl: async (options) => {
       healthInputs.push(options);
+      const ready = healthInputs.length > 100;
       return {
-        status: 'healthy',
-        restartable: false,
+        status: ready ? 'healthy' : 'unhealthy',
+        restartable: !ready,
         dimensions: {
           relay: { ok: true },
-          ui: { ok: true },
+          ui: { ok: ready },
           rpc: { ok: true },
           daemonAuth: { ok: true },
           machineRegistration: { ok: true },
@@ -124,6 +125,7 @@ test('Windows supervisor runtime can launch and health-check the stack developme
   });
 
   assert.equal(result.status, 'stopped');
+  assert.equal(spawned.length, 1, 'dev UI warm-up should not consume a restart');
   assert.deepEqual(spawned[0].args, [
     join(fixture.root, 'scripts', 'dev.mjs'),
     '--no-browser',

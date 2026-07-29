@@ -11,9 +11,12 @@ test('Windows RunKey fallback installs the registration and starts the service i
       calls.push(['install', label]);
       return { definitionPath: 'C:\\Users\\example\\.happier\\services\\example.ps1' };
     },
-    start: (label) => {
-      calls.push(['start', label]);
-    },
+    start: (label) => new Promise((resolve) => {
+      setImmediate(() => {
+        calls.push(['start', label]);
+        resolve();
+      });
+    }),
   });
 
   assert.deepEqual(calls, [

@@ -40,6 +40,7 @@ import { buildConfigureServerLinks } from '@happier-dev/cli-common/links';
 import { spawnStackOwnerDeathWatchdog } from './utils/stack/owner_death_watchdog.mjs';
 import { resolveTauriPaneInvocation } from './utils/tui/tauri_mode.mjs';
 import { resolveReactNativeDevtoolsUrl } from './utils/dev/react_native_devtools.mjs';
+import { shouldExitAlreadyRunningDevStack } from './utils/service/dev_service_lifecycle.mjs';
 
  /**
   * Dev mode stack:
@@ -163,7 +164,8 @@ async function main() {
 
 	  const cliBin = join(cliDir, 'bin', 'happier.mjs');
   const autostart = getDefaultAutostartPaths();
-  const baseEnv = { ...process.env };
+	  const baseEnv = { ...process.env };
+	  const serviceMode = String(baseEnv.HAPPIER_STACK_SERVICE_MODE ?? '').trim() === '1';
   const stackCtx = resolveStackContext({ env: baseEnv, autostart });
   const { stackMode, runtimeStatePath, stackName, envPath, ephemeral } = stackCtx;
 
@@ -274,7 +276,13 @@ async function main() {
   const expoRunning = startExpo ? await isStateProcessRunning(expoPaths.statePath) : { running: false, state: null };
   let expoAlreadyRunning = Boolean(expoRunning.running);
 
-  if (!restart && (!startServer || serverAlreadyRunning) && (!startDaemon || daemonAlreadyRunning) && (!startExpo || expoAlreadyRunning)) {
+  if (shouldExitAlreadyRunningDevStack({
+    serviceMode,
+    restart,
+    serverReady: !startServer || serverAlreadyRunning,
+    daemonReady: !startDaemon || daemonAlreadyRunning,
+    expoReady: !startExpo || expoAlreadyRunning,
+  })) {
     console.log(
       `${green('✓')} dev: already running ${dim('(')}` +
         `${dim('server=')}${cyan(internalServerUrl)}${startServer ? '' : dim(' (external)')}` +

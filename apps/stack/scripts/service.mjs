@@ -93,23 +93,26 @@ async function removeWindowsRunKeyService(label) {
   await run('reg', ['DELETE', WINDOWS_RUN_KEY, '/v', label, '/f']).catch(() => {});
 }
 
-function startWindowsRunKeyService(label) {
+async function startWindowsRunKeyService(label) {
   const definitionPath = windowsServiceWrapperPath(label);
-  const child = spawn('powershell.exe', [
+  const launchCommand = [
+    '$wrapper = $env:HAPPIER_RUN_KEY_SERVICE_WRAPPER',
+    "$arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $wrapper)",
+    "Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden | Out-Null",
+  ].join('; ');
+  await run('powershell.exe', [
     '-NoProfile',
     '-NonInteractive',
     '-ExecutionPolicy',
     'Bypass',
-    '-WindowStyle',
-    'Hidden',
-    '-File',
-    definitionPath,
+    '-Command',
+    launchCommand,
   ], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
+    env: {
+      ...process.env,
+      HAPPIER_RUN_KEY_SERVICE_WRAPPER: definitionPath,
+    },
   });
-  child.unref();
 }
 
 export async function installWindowsRunKeyFallbackService(label, {
@@ -117,7 +120,7 @@ export async function installWindowsRunKeyFallbackService(label, {
   start = startWindowsRunKeyService,
 } = {}) {
   const fallback = await install(label);
-  start(label);
+  await start(label);
   return {
     backend: 'windows-run-key-user',
     fallback: true,
@@ -980,7 +983,7 @@ async function main() {
       if (process.platform === 'win32') {
         const { label } = getDefaultAutostartPaths();
         if (await hasWindowsRunKeyService(label)) {
-          startWindowsRunKeyService(label);
+          await startWindowsRunKeyService(label);
         } else {
           await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
         }
@@ -1040,7 +1043,7 @@ async function main() {
         });
         await run('schtasks', ['/End', '/TN', `Happier\\${label}`]).catch(() => {});
         if (await hasWindowsRunKeyService(label)) {
-          startWindowsRunKeyService(label);
+          await startWindowsRunKeyService(label);
         } else {
           await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});
         }
@@ -1075,7 +1078,7 @@ async function main() {
       if (process.platform === 'win32') {
         const { label } = getDefaultAutostartPaths();
         if (await hasWindowsRunKeyService(label)) {
-          startWindowsRunKeyService(label);
+          await startWindowsRunKeyService(label);
         } else {
           await run('schtasks', ['/Change', '/TN', `Happier\\${label}`, '/Enable']).catch(() => {});
           await run('schtasks', ['/Run', '/TN', `Happier\\${label}`]).catch(() => {});

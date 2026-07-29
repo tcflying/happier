@@ -156,6 +156,7 @@ export async function runWindowsStackSupervisor({
   maxRestarts = 3,
   restartWindowMs = 5 * 60_000,
   restartBackoffMs = 1_000,
+  maxConsecutiveHealthFailures = 3,
   initialRestartTimestamps = [],
   startupMaxAttempts = 30,
   startupPollMs = 1_000,
@@ -175,6 +176,7 @@ export async function runWindowsStackSupervisor({
 
   const restartLimit = Math.max(0, Number(maxRestarts) || 0);
   const restartWindow = Math.max(1, Number(restartWindowMs) || 1);
+  const healthFailureLimit = Math.max(1, Number(maxConsecutiveHealthFailures) || 1);
   const initialNow = Number(now());
   const restartTimestamps = Array.isArray(initialRestartTimestamps)
     ? initialRestartTimestamps
@@ -224,14 +226,28 @@ export async function runWindowsStackSupervisor({
       let event = startup.ok
         ? null
         : startup.event ?? { type: 'startup_failed', reason: startup.reason, health: startup.report };
+      let consecutiveHealthFailures = 0;
       while (startup.ok && event == null) {
         const observed = await waitForEvent({ child, health: startup.report });
         if (observed?.type === 'health_ok') {
+          consecutiveHealthFailures = 0;
           await publish('running', {
             health: observed.health ?? startup.report,
             lastHealthCheckAt: new Date(now()).toISOString(),
           });
           continue;
+        }
+        if (observed?.type === 'health_failure') {
+          consecutiveHealthFailures += 1;
+          if (consecutiveHealthFailures < healthFailureLimit) {
+            await publish('degraded', {
+              reason: 'transient_health_failure',
+              health: observed.health ?? null,
+              consecutiveHealthFailures,
+              healthFailureLimit,
+            });
+            continue;
+          }
         }
         event = observed ?? { type: 'monitor_failed' };
       }

@@ -157,3 +157,32 @@ test('isStateProcessRunning does not trust a live pid whose Expo isolation belon
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+test('isStateProcessRunning trusts a live process whose command line binds the expected project', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-state-live-project-'));
+  let child = null;
+  try {
+    const projectDir = join(tmp, 'expected-project');
+    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);', projectDir], {
+      stdio: 'ignore',
+    });
+
+    const statePath = join(tmp, 'expo.state.json');
+    await writeFile(
+      statePath,
+      JSON.stringify({ pid: child.pid, port: 19001, projectDir }, null, 2) + '\n',
+      'utf-8'
+    );
+
+    const res = await isStateProcessRunning(statePath);
+    assert.equal(res.running, true);
+    assert.equal(res.reason, 'pid');
+  } finally {
+    try {
+      child?.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

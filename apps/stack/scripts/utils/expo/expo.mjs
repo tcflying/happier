@@ -162,7 +162,21 @@ export async function readPidState(statePath) {
 async function readProcessIdentityLine(pid) {
   const n = Number(pid);
   if (!Number.isFinite(n) || n <= 1) return null;
-  if (process.platform === 'win32') return null;
+  if (process.platform === 'win32') {
+    try {
+      const command = `Get-CimInstance Win32_Process -Filter "ProcessId = ${Math.trunc(n)}" | Select-Object CommandLine,ExecutablePath | ConvertTo-Json -Compress`;
+      const raw = await runCapture(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', command],
+        { timeoutMs: 2_000 },
+      );
+      const processInfo = JSON.parse(String(raw ?? '').trim());
+      const line = `${String(processInfo?.ExecutablePath ?? '').trim()} ${String(processInfo?.CommandLine ?? '').trim()}`.trim();
+      return line || null;
+    } catch {
+      return null;
+    }
+  }
   if (process.platform === 'linux') {
     const [cmdline, environ] = await Promise.all([
       readFile(`/proc/${n}/cmdline`, 'utf-8')

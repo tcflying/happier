@@ -301,6 +301,45 @@ test('Windows stack supervisor keeps a healthy child instead of restarting on mo
   assert.equal(stops, 1);
 });
 
+test('Windows stack supervisor tolerates a transient health failure', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-windows-supervisor-transient-health-' });
+  const monitorEvents = [
+    { type: 'health_failure', health: { status: 'unhealthy' } },
+    { type: 'health_ok', health: { status: 'healthy' } },
+    { type: 'stop_requested', stopSessions: false, preserveDaemon: true },
+  ];
+  let starts = 0;
+  const states = [];
+
+  const result = await runWindowsStackSupervisor({
+    lockPath: join(fixture.root, 'supervisor.lock.json'),
+    pid: 559,
+    generationId: 'generation-transient-health',
+    now: () => 31_500,
+    isPidAliveImpl: (pid) => pid === 559,
+    startStack: async () => ({ pid: 615 + starts++, exitCode: null }),
+    stopStack: async () => {},
+    probeHealth: async () => ({
+      status: 'healthy',
+      dimensions: {
+        relay: { ok: true },
+        ui: { ok: true },
+        rpc: { ok: true },
+        daemonAuth: { ok: true },
+        machineRegistration: { ok: true },
+        sessionRunner: { ok: true },
+      },
+    }),
+    waitForEvent: async () => monitorEvents.shift(),
+    sleep: async () => {},
+    writeState: async (state) => states.push(state),
+  });
+
+  assert.equal(result.status, 'stopped');
+  assert.equal(starts, 1);
+  assert.equal(states.filter((state) => state.phase === 'degraded').length, 1);
+});
+
 test('Windows stack supervisor keeps relay and UI available while daemon auth awaits user setup', async () => {
   const blocked = {
     status: 'blocked',

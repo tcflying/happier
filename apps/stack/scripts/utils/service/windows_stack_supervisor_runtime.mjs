@@ -331,6 +331,10 @@ export async function runWindowsStackSupervisorRuntime({
       maxRestarts: positiveInteger(runtimeEnv.HAPPIER_STACK_SUPERVISOR_MAX_RESTARTS, 3),
       restartWindowMs: positiveInteger(runtimeEnv.HAPPIER_STACK_SUPERVISOR_RESTART_WINDOW_MS, 5 * 60_000),
       restartBackoffMs: positiveInteger(runtimeEnv.HAPPIER_STACK_SUPERVISOR_RESTART_BACKOFF_MS, 2_000),
+      maxConsecutiveHealthFailures: positiveInteger(
+        runtimeEnv.HAPPIER_STACK_SUPERVISOR_MAX_CONSECUTIVE_HEALTH_FAILURES,
+        3,
+      ),
       initialRestartTimestamps,
       startupMaxAttempts: positiveInteger(
         runtimeEnv.HAPPIER_STACK_SUPERVISOR_STARTUP_MAX_ATTEMPTS,

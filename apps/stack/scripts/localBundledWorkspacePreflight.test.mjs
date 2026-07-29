@@ -18,7 +18,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { runNodeCapture } from './testkit/core/run_node_capture.mjs';
 import { coerceHappyMonorepoRootFromPath } from './utils/paths/paths.mjs';
@@ -160,13 +160,14 @@ test('local bundled workspace preflight falls back to bundleWorkspaceDeps when t
     );
 
     const modulePath = join(rootDir, 'bin', 'localBundledWorkspacePreflight.mjs');
+    const moduleHref = pathToFileURL(modulePath).href;
     const res = await runNodeCapture(
-      ['--input-type=module', '-e', `import { refreshLocalBundledWorkspacePackages } from ${JSON.stringify(modulePath)}; await refreshLocalBundledWorkspacePackages(${JSON.stringify(rootDir)});`],
+      ['--input-type=module', '-e', `import { refreshLocalBundledWorkspacePackages } from ${JSON.stringify(moduleHref)}; await refreshLocalBundledWorkspacePackages(${JSON.stringify(rootDir)});`],
       {
         cwd: rootDir,
         env: {
           ...process.env,
-          NODE_OPTIONS: `--experimental-loader=${loaderPath}`,
+          NODE_OPTIONS: `--experimental-loader=${pathToFileURL(loaderPath).href}`,
         },
       },
     );
@@ -175,6 +176,89 @@ test('local bundled workspace preflight falls back to bundleWorkspaceDeps when t
     const options = JSON.parse(readFileSync(markerPath, 'utf8'));
     assert.equal(options.repoRoot, repoRoot);
     assert.equal(options.stackDir, rootDir);
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
+test('local bundled workspace preflight validates external vendored dependencies after monorepo sync', async () => {
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'local-bundled-preflight-vendored-deps-'));
+  try {
+    const syncMarkerPath = join(fixtureDir, 'sync.marker');
+    const bundleMarkerPath = join(fixtureDir, 'bundle.marker');
+    const syncStubPath = join(fixtureDir, 'syncBundledWorkspacePackages.mjs');
+    const bundleStubPath = join(fixtureDir, 'bundleWorkspaceDeps.mjs');
+    const resolveSyncModulePathStubPath = join(fixtureDir, 'resolveBundledWorkspaceSyncModulePath.mjs');
+    const loaderPath = join(fixtureDir, 'loader.mjs');
+
+    writeFileSync(
+      syncStubPath,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        'export function syncBundledWorkspacePackages() {',
+        `  writeFileSync(${JSON.stringify(syncMarkerPath)}, 'synced', 'utf8');`,
+        '}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      bundleStubPath,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        'export async function bundleWorkspaceDeps() {',
+        `  writeFileSync(${JSON.stringify(bundleMarkerPath)}, 'validated', 'utf8');`,
+        '}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      resolveSyncModulePathStubPath,
+      [
+        'export function resolveBundledWorkspaceSyncModulePath() {',
+        `  return ${JSON.stringify(syncStubPath)};`,
+        '}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      loaderPath,
+      [
+        "import { pathToFileURL } from 'node:url';",
+        '',
+        'export async function resolve(specifier, context, defaultResolve) {',
+        "  if (specifier === '../scripts/bundleWorkspaceDeps.mjs') {",
+        `    return { url: pathToFileURL(${JSON.stringify(bundleStubPath)}).href, shortCircuit: true };`,
+        '  }',
+        "  if (specifier === '../scripts/runtime/resolveBundledWorkspaceSyncModulePath.mjs') {",
+        `    return { url: pathToFileURL(${JSON.stringify(resolveSyncModulePathStubPath)}).href, shortCircuit: true };`,
+        '  }',
+        '  return defaultResolve(specifier, context, defaultResolve);',
+        '}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const modulePath = join(rootDir, 'bin', 'localBundledWorkspacePreflight.mjs');
+    const moduleHref = pathToFileURL(modulePath).href;
+    const res = await runNodeCapture(
+      ['--input-type=module', '-e', `import { refreshLocalBundledWorkspacePackages } from ${JSON.stringify(moduleHref)}; await refreshLocalBundledWorkspacePackages(${JSON.stringify(rootDir)});`],
+      {
+        cwd: rootDir,
+        env: {
+          ...process.env,
+          NODE_OPTIONS: `--experimental-loader=${pathToFileURL(loaderPath).href}`,
+        },
+      },
+    );
+
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
+    assert.equal(existsSync(syncMarkerPath), true, 'expected monorepo workspace sync to run');
+    assert.equal(existsSync(bundleMarkerPath), true, 'expected external vendored dependencies to be validated');
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true });
   }
@@ -202,11 +286,12 @@ test('local bundled workspace preflight is importable from a published stack pac
     }
 
     const modulePath = join(packageRoot, 'bin', 'localBundledWorkspacePreflight.mjs');
+    const moduleHref = pathToFileURL(modulePath).href;
     const res = await runNodeCapture(
       [
         '--input-type=module',
         '-e',
-        `import { refreshLocalBundledWorkspacePackages } from ${JSON.stringify(modulePath)}; await refreshLocalBundledWorkspacePackages(${JSON.stringify(packageRoot)});`,
+        `import { refreshLocalBundledWorkspacePackages } from ${JSON.stringify(moduleHref)}; await refreshLocalBundledWorkspacePackages(${JSON.stringify(packageRoot)});`,
       ],
       { cwd: packageRoot },
     );
@@ -218,18 +303,19 @@ test('local bundled workspace preflight is importable from a published stack pac
 });
 
 function runPreflightProcess({ modulePath, rootDir, loaderPath }) {
+  const moduleHref = pathToFileURL(modulePath).href;
   const child = spawn(
     process.execPath,
     [
       '--input-type=module',
       '-e',
-      `import { refreshLocalBundledWorkspacePackages } from ${JSON.stringify(modulePath)}; await refreshLocalBundledWorkspacePackages(${JSON.stringify(rootDir)});`,
+      `import { refreshLocalBundledWorkspacePackages } from ${JSON.stringify(moduleHref)}; await refreshLocalBundledWorkspacePackages(${JSON.stringify(rootDir)});`,
     ],
     {
       cwd: rootDir,
       env: {
         ...process.env,
-        NODE_OPTIONS: `--experimental-loader=${loaderPath}`,
+        NODE_OPTIONS: `--experimental-loader=${pathToFileURL(loaderPath).href}`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

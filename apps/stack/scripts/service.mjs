@@ -112,6 +112,19 @@ function startWindowsRunKeyService(label) {
   child.unref();
 }
 
+export async function installWindowsRunKeyFallbackService(label, {
+  install = installWindowsRunKeyService,
+  start = startWindowsRunKeyService,
+} = {}) {
+  const fallback = await install(label);
+  start(label);
+  return {
+    backend: 'windows-run-key-user',
+    fallback: true,
+    definitionPath: fallback.definitionPath,
+  };
+}
+
 /**
  * Manage the autostart service installed by `hstack bootstrap -- --autostart`.
  *
@@ -295,8 +308,7 @@ export async function installService({ mode = 'user', systemUser = null } = {}) 
     });
   } catch (error) {
     if (!(mode === 'user' && isWindowsOnLogonPolicyDenied(error))) throw error;
-    const fallback = await installWindowsRunKeyService(label);
-    return { backend: 'windows-run-key-user', fallback: true, definitionPath: fallback.definitionPath };
+    return await installWindowsRunKeyFallbackService(label);
   }
 
   if (process.platform === 'win32') {

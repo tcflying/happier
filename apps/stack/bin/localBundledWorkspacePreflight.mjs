@@ -32,7 +32,6 @@ export async function refreshLocalBundledWorkspacePackages(cliRootDir) {
       pollIntervalMs: 250,
       staleAfterMs: 240_000,
     });
-    return;
   }
 
   const { bundleWorkspaceDeps } = await import('../scripts/bundleWorkspaceDeps.mjs');

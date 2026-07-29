@@ -147,7 +147,7 @@ test('Windows stack supervisor restarts the canonical stack once after a child c
 
   assert.equal(result.status, 'stopped');
   assert.deepEqual(started, [400, 401]);
-  assert.deepEqual(stopped, [401]);
+  assert.deepEqual(stopped, [400, 401]);
   assert.equal(states.filter((state) => state.phase === 'restarting').length, 1);
 });
 

@@ -229,9 +229,7 @@ export async function runWindowsStackSupervisor({
         return { status: 'stopped', state };
       }
 
-      if (event?.type !== 'exit') {
-        await stopStack(child, { reason: event?.type ?? 'health_failure' });
-      }
+      await stopStack(child, { reason: event?.type ?? 'health_failure' });
       child = null;
 
       const at = Number(now());

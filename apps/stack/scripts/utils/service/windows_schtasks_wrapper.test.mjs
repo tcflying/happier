@@ -21,5 +21,7 @@ test('renderWindowsScheduledTaskWrapperPs1 emits a wrapper that sets env and run
   assert.match(ps1, /& "C:\\\\Users\\\\me\\\\.happier\\\\self-host\\\\bin\\\\happier-server\.exe"/);
   assert.match(ps1, /1>> "C:\\\\Users\\\\me\\\\.happier\\\\self-host\\\\logs\\\\server\.out\.log"/);
   assert.match(ps1, /2>> "C:\\\\Users\\\\me\\\\.happier\\\\self-host\\\\logs\\\\server\.err\.log"/);
+  assert.match(ps1, /\$ErrorActionPreference = "Continue"\r?\n& /);
+  assert.match(ps1, /exit \$LASTEXITCODE/);
 });
 

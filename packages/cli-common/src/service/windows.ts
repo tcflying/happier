@@ -107,12 +107,19 @@ export function renderWindowsScheduledTaskWrapperPs1(params: Readonly<{
 
   const cmd = args.length ? `& ${args.map(psQuoted).join(' ')}` : '';
   const redirect = out || err ? ` 1>> ${psQuoted(out)} 2>> ${psQuoted(err)}` : '';
+  const invocation = cmd
+    ? [
+        '$ErrorActionPreference = "Continue"',
+        `${cmd}${redirect}`,
+        'exit $LASTEXITCODE',
+      ].join('\n')
+    : '';
 
   return [
     '$ErrorActionPreference = "Stop"',
     wd ? `Set-Location -LiteralPath ${psQuoted(wd)}` : '',
     envLines,
-    cmd ? `${cmd}${redirect}` : '',
+    invocation,
     '',
   ]
     .filter(Boolean)

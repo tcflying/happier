@@ -85,7 +85,7 @@ test('Windows supervisor runtime can launch and health-check the stack developme
   const supervisorPaths = resolveWindowsStackSupervisorPaths({ baseDir });
   await mkdir(baseDir, { recursive: true });
   await writeFile(supervisorPaths.statePath, JSON.stringify({
-    phase: 'crash_budget_exhausted',
+    phase: 'starting',
     restartTimestamps: [40_100, 40_200, 40_300],
   }));
   const spawned = [];
@@ -103,7 +103,7 @@ test('Windows supervisor runtime can launch and health-check the stack developme
     },
     pid: 778,
     generationId: 'runtime-dev-generation',
-    now: () => 41_000,
+    now: () => 400_000,
     isPidAliveImpl: (pid) => pid === 778 || pid === 802,
     spawnImpl: (command, args, options) => {
       spawned.push({ command, args, options });
@@ -139,7 +139,7 @@ test('Windows supervisor runtime can launch and health-check the stack developme
   assert.equal(healthInputs[0].relayUrl, 'http://127.0.0.1:52211');
   assert.equal(healthInputs[0].uiUrl, 'http://127.0.0.1:18287');
   const state = JSON.parse(await readFile(supervisorPaths.statePath, 'utf8'));
-  assert.equal(state.restartCount, 0, 'an explicit start should reset an exhausted crash budget');
+  assert.equal(state.restartCount, 0, 'a new supervisor should prune an expired crash budget');
 });
 
 test('Windows service stop targets the active generation and waits for supervisor exit', async (t) => {

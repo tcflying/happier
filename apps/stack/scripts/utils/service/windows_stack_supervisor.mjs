@@ -90,6 +90,7 @@ function resolveStartupPhase(report) {
 
 export async function waitForWindowsStackStartup({
   probeHealth,
+  readChildExit = () => null,
   sleep,
   maxAttempts = 30,
   pollMs = 1_000,
@@ -101,6 +102,16 @@ export async function waitForWindowsStackStartup({
   const attempts = Math.max(1, Number(maxAttempts) || 1);
   let latestReport = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const beforeProbeExit = readChildExit();
+    if (beforeProbeExit) {
+      return {
+        ok: false,
+        reason: 'startup_child_exit',
+        event: beforeProbeExit,
+        report: latestReport,
+        attempts: attempt - 1,
+      };
+    }
     latestReport = await probeHealth();
     const phase = resolveStartupPhase(latestReport);
     onPhase(phase, latestReport);
@@ -109,6 +120,16 @@ export async function waitForWindowsStackStartup({
     }
     if (attempt < attempts) {
       await sleep(pollMs);
+      const afterSleepExit = readChildExit();
+      if (afterSleepExit) {
+        return {
+          ok: false,
+          reason: 'startup_child_exit',
+          event: afterSleepExit,
+          report: latestReport,
+          attempts: attempt,
+        };
+      }
     }
   }
   return {
@@ -154,10 +175,13 @@ export async function runWindowsStackSupervisor({
 
   const restartLimit = Math.max(0, Number(maxRestarts) || 0);
   const restartWindow = Math.max(1, Number(restartWindowMs) || 1);
+  const initialNow = Number(now());
   const restartTimestamps = Array.isArray(initialRestartTimestamps)
     ? initialRestartTimestamps
         .map((value) => Number(value))
-        .filter((value) => Number.isFinite(value) && value >= 0)
+        .filter((value) => Number.isFinite(value)
+          && value >= 0
+          && (!Number.isFinite(initialNow) || initialNow - value <= restartWindow))
         .sort((left, right) => left - right)
     : [];
   let child = null;
@@ -184,6 +208,9 @@ export async function runWindowsStackSupervisor({
       await publish('starting');
       const startup = await waitForWindowsStackStartup({
         probeHealth,
+        readChildExit: () => child?.exitCode != null || child?.signalCode != null
+          ? { type: 'exit', code: child?.exitCode ?? null, signal: child?.signalCode ?? null }
+          : null,
         sleep,
         maxAttempts: startupMaxAttempts,
         pollMs: startupPollMs,
@@ -196,7 +223,7 @@ export async function runWindowsStackSupervisor({
 
       let event = startup.ok
         ? null
-        : { type: 'startup_failed', reason: startup.reason, health: startup.report };
+        : startup.event ?? { type: 'startup_failed', reason: startup.reason, health: startup.report };
       while (startup.ok && event == null) {
         const observed = await waitForEvent({ child, health: startup.report });
         if (observed?.type === 'health_ok') {

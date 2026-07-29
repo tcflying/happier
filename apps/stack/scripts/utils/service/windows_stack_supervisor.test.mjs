@@ -106,6 +106,34 @@ test('Windows stack supervisor waits for relay, UI, then daemon readiness in ord
   assert.equal(probeIndex, 4);
 });
 
+test('Windows stack supervisor stops startup polling when the child exits', async () => {
+  let exited = false;
+  let probes = 0;
+
+  const result = await waitForWindowsStackStartup({
+    probeHealth: async () => {
+      probes += 1;
+      return {
+        status: 'starting',
+        dimensions: {
+          relay: { ok: true },
+          ui: { ok: false },
+        },
+      };
+    },
+    readChildExit: () => exited ? { type: 'exit', code: 1, signal: null } : null,
+    sleep: async () => {
+      exited = true;
+    },
+    maxAttempts: 30,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'startup_child_exit');
+  assert.deepEqual(result.event, { type: 'exit', code: 1, signal: null });
+  assert.equal(probes, 1);
+});
+
 test('Windows stack supervisor restarts the canonical stack once after a child crash', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-windows-supervisor-restart-' });
   const events = [{ type: 'exit', code: 1, signal: null }, { type: 'stop_requested' }];

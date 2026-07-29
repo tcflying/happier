@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
@@ -2629,7 +2629,7 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         expect(onSessionFound).toHaveBeenCalledWith(
             'sess_999',
             expect.objectContaining({
-                transcript_path: `/tmp/claude_cfg/projects/${resolveClaudeProjectId('/tmp')}/sess_999.jsonl`,
+                transcript_path: join('/tmp/claude_cfg', 'projects', resolveClaudeProjectId('/tmp'), 'sess_999.jsonl'),
             }),
         );
     });
@@ -2693,7 +2693,7 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         expect(onSessionFound).toHaveBeenCalledWith(
             'sess_abc',
             expect.objectContaining({
-                transcript_path: `/tmp/claude_cfg/projects/${resolveClaudeProjectId('/tmp')}/sess_abc.jsonl`,
+                transcript_path: join('/tmp/claude_cfg', 'projects', resolveClaudeProjectId('/tmp'), 'sess_abc.jsonl'),
             }),
         );
     });
@@ -2801,7 +2801,7 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         expect(onSessionFound).toHaveBeenCalledWith(
             'sess_init',
             expect.objectContaining({
-                transcript_path: `/tmp/claude_cfg/projects/${resolveClaudeProjectId('/tmp')}/sess_init.jsonl`,
+                transcript_path: join('/tmp/claude_cfg', 'projects', resolveClaudeProjectId('/tmp'), 'sess_init.jsonl'),
             }),
         );
     });
@@ -3010,7 +3010,7 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
             expect(capturedOptions?.plugins).toEqual([{ type: 'local', path: '/tmp/plugin' }]);
             expect(capturedOptions?.hooks?.SessionStart?.[0]?.hooks?.length).toBe(1);
             expect(typeof capturedOptions?.debugFile).toBe('string');
-            expect(capturedOptions?.debugFile).toMatch(/^\/tmp\/happier-claude-debug-artifacts\//);
+            expect(capturedOptions?.debugFile?.startsWith(`${join('/tmp', 'happier-claude-debug-artifacts')}${sep}`)).toBe(true);
             expect(typeof capturedOptions?.stderr).toBe('function');
         } finally {
             if (typeof prevArtifactsDir === 'string') process.env.HAPPIER_CLAUDE_DEBUG_ARTIFACTS_DIR = prevArtifactsDir;

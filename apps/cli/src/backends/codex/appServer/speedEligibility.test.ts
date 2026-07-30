@@ -45,6 +45,17 @@ describe('Codex app-server Speed eligibility', () => {
         })).toBe(false);
     });
 
+    it('recognizes the current app-server priority tier labeled Fast', () => {
+        expect(isCodexAppServerSpeedEligible({
+            authMethod: 'credentials_file',
+            currentModelId: 'gpt-5.6-sol',
+            serviceTiers: [
+                { id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' },
+            ],
+            additionalSpeedTiers: ['fast'],
+        })).toBe(true);
+    });
+
     it('accepts the deprecated additionalSpeedTiers capability from older app-server builds', () => {
         expect(isCodexAppServerSpeedEligible({
             authMethod: 'credentials_file',

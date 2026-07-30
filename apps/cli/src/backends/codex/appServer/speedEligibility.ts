@@ -25,7 +25,17 @@ function readServiceTierId(value: unknown): string | null {
 }
 
 function advertisesFastServiceTier(value: unknown): boolean {
-    return Array.isArray(value) && value.some((entry) => readServiceTierId(entry) === 'fast');
+    return Array.isArray(value) && value.some((entry) => {
+        if (readServiceTierId(entry) === 'fast') return true;
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+
+        // Current Codex app-server builds advertise the user-facing Fast tier as
+        // `{ id: "priority", name: "Fast" }`.  The stable tier id is provider-owned,
+        // so use the advertised display name instead of assuming the id is `fast`.
+        const record = entry as Record<string, unknown>;
+        return readServiceTierId(record.name) === 'fast'
+            || readServiceTierId(record.label) === 'fast';
+    });
 }
 
 export function isCodexAppServerSpeedEligible(params: Readonly<{

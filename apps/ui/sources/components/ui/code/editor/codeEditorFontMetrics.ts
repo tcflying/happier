@@ -17,7 +17,7 @@ export function resolveCodeEditorFontMetrics(params: Readonly<{
 }>): CodeEditorFontMetrics {
     const uiFontScale =
         typeof params.uiFontScale === 'number' && Number.isFinite(params.uiFontScale)
-            ? clamp(params.uiFontScale, 0.5, 2.5)
+            ? clamp(params.uiFontScale, 0.5, 3)
             : 1;
     const osFontScale =
         typeof params.osFontScale === 'number' && Number.isFinite(params.osFontScale)

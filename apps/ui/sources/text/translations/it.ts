@@ -4630,6 +4630,8 @@ export const it: TranslationStructure = {
       large: "Grande",
       xlarge: "Molto grande",
       xxlarge: "Molto molto grande",
+      double: "2×",
+      triple: "3×",
     },
     itemDensity: "Densità elementi",
     itemDensityDescription: "Scegli quanto grandi devono apparire righe e impostazioni in tutta l'app",

@@ -4256,6 +4256,8 @@ export const ru: TranslationStructure = {
       large: "Большой",
       xlarge: "Очень большой",
       xxlarge: "Очень очень большой",
+      double: "2×",
+      triple: "3×",
     },
     itemDensity: "Плотность элементов",
     itemDensityDescription: "Выберите размер строк списков и настроек во всём приложении",

@@ -4073,6 +4073,8 @@ export const ca: TranslationStructure = {
             large: 'Gran',
             xlarge: 'Molt gran',
             xxlarge: 'Molt molt gran',
+            double: '2×',
+            triple: '3×',
         },
         itemDensity: 'Densitat dels elements',
         itemDensityDescription: 'Tria la mida de les files de llistes i dels ajustos a tota l’app',

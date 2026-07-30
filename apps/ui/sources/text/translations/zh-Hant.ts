@@ -3904,6 +3904,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             large: '大',
             xlarge: '特大',
             xxlarge: '超特大',
+            double: '2×',
+            triple: '3×',
         },
         itemDensity: '項目密度',
         itemDensityDescription: '選擇整個應用程式中清單列與設定項目的顯示大小',

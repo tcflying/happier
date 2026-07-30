@@ -4001,6 +4001,8 @@ export const en = {
             large: 'Large',
             xlarge: 'Extra large',
             xxlarge: 'Extra extra large',
+            double: '2×',
+            triple: '3×',
         },
         itemDensity: 'Item Density',
         itemDensityDescription: 'Choose how large list rows and settings items appear throughout the app',

@@ -38,6 +38,7 @@ import { FaviconPermissionIndicator } from '@/components/web/FaviconPermissionIn
 import { CommandPaletteProvider } from '@/components/appShell/commandPalette/CommandPaletteProvider';
 import { StatusBarProvider } from '@/components/ui/layout/StatusBarProvider';
 import { AppUpdateStatusTag } from '@/components/ui/feedback/AppUpdateStatusTag';
+import { HeaderUiFontScaleMenu } from '@/components/navigation/HeaderUiFontScaleMenu';
 import { monkeyPatchConsoleForRemoteLoggingForFasterAiAutoDebuggingOnlyInLocalBuilds } from '@/utils/system/remoteLogger';
 import { installBugReportConsoleCapture } from '@/utils/system/bugReportLogBuffer';
 import { configureBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
@@ -884,7 +885,13 @@ function RootAppShell(props: Readonly<{
                         zIndex: 10,
                     }}
                 >
-                    <AppUpdateStatusTag testID="root-shell-app-update-status-tag" />
+                    <View
+                        testID="root-shell-top-right-controls"
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                    >
+                        <HeaderUiFontScaleMenu />
+                        <AppUpdateStatusTag testID="root-shell-app-update-status-tag" />
+                    </View>
                 </View>
             ) : null}
             <View style={{ flex: 1 }}>

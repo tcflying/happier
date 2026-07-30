@@ -4163,6 +4163,8 @@ export const zhHans: TranslationStructure = {
       large: "大",
       xlarge: "特大",
       xxlarge: "超特大",
+      double: "2×",
+      triple: "3×",
     },
     itemDensity: "项目密度",
     itemDensityDescription: "选择应用内列表行和设置项的显示大小",

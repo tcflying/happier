@@ -4323,6 +4323,8 @@ export const pl: TranslationStructure = {
       large: "Duży",
       xlarge: "Bardzo duży",
       xxlarge: "Bardzo bardzo duży",
+      double: "2×",
+      triple: "3×",
     },
     itemDensity: "Gęstość elementów",
     itemDensityDescription: "Wybierz rozmiar wierszy list i ustawień w całej aplikacji",

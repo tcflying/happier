@@ -4572,6 +4572,8 @@ localTailscale: {
       large: "大",
       xlarge: "特大",
       xxlarge: "超特大",
+      double: "2×",
+      triple: "3×",
     },
     itemDensity: "項目密度",
     itemDensityDescription: "アプリ全体でリスト行や設定項目の大きさを選択します",

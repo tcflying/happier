@@ -4415,6 +4415,8 @@ export const pt: TranslationStructure = {
       large: "Grande",
       xlarge: "Muito grande",
       xxlarge: "Muito muito grande",
+      double: "2×",
+      triple: "3×",
     },
     itemDensity: "Densidade dos itens",
     itemDensityDescription: "Escolha o tamanho das linhas de listas e configurações em todo o app",

@@ -67,3 +67,16 @@ export function calculateHeaderHeight(params: {
     }
     return 44; // iPhone: 44 points
 }
+
+export function calculateUiFontScaledHeaderHeight(params: {
+    baseHeight: number;
+    platform: string;
+    uiFontScale: unknown;
+}): number {
+    if (params.platform !== 'web') return params.baseHeight;
+
+    const scale = typeof params.uiFontScale === 'number' && Number.isFinite(params.uiFontScale)
+        ? Math.max(1, params.uiFontScale)
+        : 1;
+    return Math.round(params.baseHeight * scale * 100) / 100;
+}

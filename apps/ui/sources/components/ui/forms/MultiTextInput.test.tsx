@@ -67,16 +67,39 @@ describe('MultiTextInput', () => {
 
     it('uses the caller textStyle font size as the scaled native input base', async () => {
         localSettingState.uiFontScale = 1.25;
+        const { Platform } = await import('react-native');
+        const originalPlatform = Platform.OS;
+        Platform.OS = 'ios';
+        try {
+            const { MultiTextInput } = await import('./MultiTextInput');
+            const tree = (await renderScreen(<MultiTextInput
+                        testID="composer-input"
+                        value=""
+                        textStyle={{ fontSize: 16 }}
+                        onChangeText={() => {}}
+                    />)).tree;
+            const input = tree.findByType('TextInput' as any);
+            expect(flattenStyle(input.props.style).fontSize).toBe(20);
+        } finally {
+            Platform.OS = originalPlatform;
+        }
+    });
 
-        const { MultiTextInput } = await import('./MultiTextInput');
+    it('uses the scaled base font size for a web Unistyles-backed caller style', async () => {
+        localSettingState.uiFontScale = 2;
+
+        const { MultiTextInput } = await import('./MultiTextInput.web');
         const tree = (await renderScreen(<MultiTextInput
-                    testID="composer-input"
-                    value=""
-                    textStyle={{ fontSize: 16 }}
-                    onChangeText={() => {}}
-                />)).tree;
-        const input = tree.findByType('TextInput' as any);
-        expect(flattenStyle(input.props.style).fontSize).toBe(20);
+            testID="composer-input"
+            value=""
+            textStyle={{ unistyles_composer_text: {} } as any}
+            onChangeText={() => {}}
+        />)).tree;
+        const input = tree.findByType('textarea' as any);
+
+        expect(flattenStyle(input.props.style).fontSize).toBe(
+            'calc(16px * var(--happier-ui-font-scale, 1))',
+        );
     });
 
     it('derives the native return key type from submit behavior', async () => {
@@ -318,9 +341,57 @@ describe('MultiTextInput', () => {
                     onChangeText: () => {},
         }))).tree;
         const input = tree.findByType('textarea' as any);
-        expect(input.props.style.fontSize).toBe('20px');
+        expect(input.props.style.fontSize).toBe('calc(16px * var(--happier-ui-font-scale, 1))');
         expect(input.props.style.color).toBeDefined();
         expect(input.props.style.fontFamily).toBeDefined();
+    });
+
+    it('remeasures the web textarea after the UI font scale changes', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput.web');
+        const onContentHeightChange = vi.fn();
+        const mockTextarea = {
+            value: 'hello',
+            scrollTop: 0,
+            scrollHeight: 30,
+            style: {} as Record<string, string>,
+            setSelectionRange: vi.fn(),
+            dispatchEvent: vi.fn(),
+        };
+        let tree: renderer.ReactTestRenderer | null = null;
+
+        await act(async () => {
+            tree = renderer.create(
+                <MultiTextInput
+                    testID="composer-input"
+                    value="hello"
+                    onChangeText={() => {}}
+                    onContentHeightChange={onContentHeightChange}
+                />,
+                {
+                    createNodeMock: (element) => element.type === 'textarea' ? mockTextarea : null,
+                },
+            );
+        });
+        expect(mockTextarea.style.height).toBe('30px');
+
+        onContentHeightChange.mockClear();
+        mockTextarea.scrollHeight = 70;
+        localSettingState.uiFontScale = 3;
+        await act(async () => {
+            tree!.update(
+                <MultiTextInput
+                    testID="composer-input"
+                    value="hello"
+                    onChangeText={() => {}}
+                    onContentHeightChange={onContentHeightChange}
+                />,
+            );
+        });
+
+        const input = tree!.root.findByType('textarea' as any);
+        expect(input.props.style['--happier-ui-font-scale']).toBe('3');
+        expect(mockTextarea.style.height).toBe('70px');
+        expect(onContentHeightChange).toHaveBeenCalledWith(70);
     });
 
     it('uses one stable web textarea surface for short and very large values', async () => {

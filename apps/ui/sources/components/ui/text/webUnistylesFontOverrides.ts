@@ -135,7 +135,7 @@ function buildOverrideRule(className: string, metric: UnistylesFontMetric): stri
         parts.push(`letter-spacing: calc(${metric.letterSpacing} * var(${HAPPIER_UI_FONT_SCALE_CSS_VAR})) !important;`);
     }
     if (parts.length === 0) return '';
-    return `.${className} { ${parts.join(' ')} }\n`;
+    return `.${className}:not([data-happier-ui-font-scale="disabled"]) { ${parts.join(' ')} }\n`;
 }
 
 export function syncOverrideStyleElement(

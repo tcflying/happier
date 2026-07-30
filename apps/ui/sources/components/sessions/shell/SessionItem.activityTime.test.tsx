@@ -721,7 +721,7 @@ describe('SessionItem activity time', () => {
         expect(screen.getTextContent()).not.toContain('1m');
     });
 
-    it('uses a tighter fixed row height in very compact mode', async () => {
+    it('uses a tighter minimum row height in very compact web mode', async () => {
         const { SessionItem } = await importSessionItemForTest();
 
         const screen = await renderScreen(
@@ -740,13 +740,14 @@ describe('SessionItem activity time', () => {
         );
 
         const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_height')?.props.style);
-        expect(rowStyle.height).toBe(34);
+        expect(rowStyle.height).toBe('auto');
+        expect(rowStyle.minHeight).toBe(34);
         expect(rowStyle.paddingHorizontal).toBe(8);
 
         expect(screen.findByTestId('session-row-attention-indicator-sess_compact_height')).toBeNull();
     });
 
-    it('renders an 18px micro avatar in very compact web rows', async () => {
+    it('keeps very compact web rows growable above their 34px minimum', async () => {
         platformOs = 'web';
         const { SessionItem } = await importSessionItemForTest();
 
@@ -766,12 +767,51 @@ describe('SessionItem activity time', () => {
         );
 
         const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_avatar_web')?.props.style);
-        expect(rowStyle.height).toBe(34);
+        expect(rowStyle.height).toBe('auto');
+        expect(rowStyle.minHeight).toBe(34);
         expect(screen.findAllByType(AvatarMock)[0].props).toMatchObject({
             id: 'avatar',
             size: 18,
         });
         expect(findRowContentStyle(screen, 'sess_compact_avatar_web').marginLeft).toBe(8);
+    });
+
+    it('keeps default and compact web rows growable above their density minimums', async () => {
+        platformOs = 'web';
+        const { SessionItem } = await importSessionItemForTest();
+
+        const defaultScreen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_default_growable_web')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+            />,
+        );
+        const defaultStyle = flattenStyle(defaultScreen.findByTestId('session-list-item-sess_default_growable_web')?.props.style);
+        expect(defaultStyle.height).toBe('auto');
+        expect(defaultStyle.minHeight).toBe(84);
+
+        const compactScreen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_growable_web')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+            />,
+        );
+        const compactStyle = flattenStyle(compactScreen.findByTestId('session-list-item-sess_compact_growable_web')?.props.style);
+        expect(compactStyle.height).toBe('auto');
+        expect(compactStyle.minHeight).toBe(58);
     });
 
     it('uses a 20px micro avatar for very compact native phone rows', async () => {
@@ -1016,7 +1056,8 @@ describe('SessionItem activity time', () => {
         const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_web')?.props.style);
         const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
 
-        expect(rowStyle.height).toBe(34);
+        expect(rowStyle.height).toBe('auto');
+        expect(rowStyle.minHeight).toBe(34);
         expect(titleStyle.fontSize).toBe(12);
         expect(titleStyle.lineHeight).toBe(16);
     });

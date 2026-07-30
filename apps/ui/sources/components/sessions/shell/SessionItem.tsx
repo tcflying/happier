@@ -41,7 +41,7 @@ import {
     SESSION_LIST_ROW_HEIGHT_MINIMAL,
     SESSION_LIST_ROW_HEIGHT_MINIMAL_NATIVE_PHONE,
 } from './sessionListRowHeights';
-import { shouldUseReadableNativePhoneMinimalSessionRow } from './sessionListRowDensity';
+import { resolveSessionListRowHeight, shouldUseReadableNativePhoneMinimalSessionRow } from './sessionListRowDensity';
 import { planSessionTagDisplay } from './sessionTagPlacement';
 import { useIsTablet } from '@/utils/platform/responsive';
 import type { SessionStatus } from '@/utils/sessions/sessionUtils';
@@ -699,6 +699,17 @@ const SessionItemContent = React.memo(
             isTablet,
             platform: Platform.OS,
         });
+        const webGrowableRowStyle = isWeb
+            ? {
+                height: 'auto' as const,
+                minHeight: resolveSessionListRowHeight({
+                    compact: Boolean(compact),
+                    compactMinimal: Boolean(compactMinimal),
+                    isTablet,
+                    platform: Platform.OS,
+                }),
+            }
+            : null;
         const showRowActions = isWeb && (isRowHovered || isActionsHovered || tagMenuOpen || moreMenuOpen || isBeingDragged === true);
         const rowActionIconColor = theme.colors.text.secondary;
         const resolveSessionDebugInformation = React.useCallback(() => {
@@ -1148,6 +1159,7 @@ const SessionItemContent = React.memo(
                     useReadableNativePhoneMinimalRow ? styles.sessionItemMinimalNativePhone : null,
                     selected || rowSelection.isSelected ? styles.sessionItemSelected : null,
                     embedded && !embeddedIsLast ? styles.embeddedSeparator : null,
+                    webGrowableRowStyle,
                 ]}
                 onPress={handleRowPress}
                 onPressIn={enableLongPressContextMenu ? () => {

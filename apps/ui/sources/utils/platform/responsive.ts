@@ -1,8 +1,14 @@
 import { Dimensions, Platform } from 'react-native';
 import { useWindowDimensions } from 'react-native';
 import { useEffect, useMemo, useRef } from 'react';
-import { calculateDeviceDimensions, determineDeviceType, calculateHeaderHeight } from './deviceCalculations';
+import {
+    calculateDeviceDimensions,
+    determineDeviceType,
+    calculateHeaderHeight,
+    calculateUiFontScaledHeaderHeight,
+} from './deviceCalculations';
 import { isRunningOnMac } from './platform';
+import { useLocalSetting } from '@/sync/store/hooks';
 
 // Re-export calculation functions for use in other components
 export { calculateDeviceDimensions, determineDeviceType, calculateHeaderHeight };
@@ -87,14 +93,20 @@ export function useIsLandscape(): boolean {
 export function useHeaderHeight(): number {
     const isLandscape = useIsLandscape();
     const deviceType = useDeviceType();
+    const uiFontScale = useLocalSetting('uiFontScale');
     
     return useMemo(() => {
-        return calculateHeaderHeight({
+        const baseHeight = calculateHeaderHeight({
             platform: Platform.OS,
             isLandscape,
             isPad: Platform.OS === 'ios' ? (Platform as any).isPad === true : undefined,
             deviceType: Platform.OS === 'android' ? deviceType : undefined,
             isMacCatalyst: isRunningOnMac()
         });
-    }, [isLandscape, deviceType]);
+        return calculateUiFontScaledHeaderHeight({
+            baseHeight,
+            platform: Platform.OS,
+            uiFontScale,
+        });
+    }, [deviceType, isLandscape, uiFontScale]);
 }

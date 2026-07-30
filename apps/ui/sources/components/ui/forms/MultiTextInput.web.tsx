@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { View, type TextStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
-import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
+import { HAPPIER_UI_FONT_SCALE_CSS_VAR } from '@/components/ui/text/webUnistylesFontOverrides';
 import { useLocalSetting } from '@/sync/store/hooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';
@@ -108,6 +108,11 @@ function toCssLength(value: TextStyle['fontSize'] | TextStyle['lineHeight'] | Te
     return undefined;
 }
 
+function toScaledCssLength(value: TextStyle['fontSize'] | TextStyle['lineHeight'] | TextStyle['letterSpacing']) {
+    const length = toCssLength(value);
+    return length ? `calc(${length} * var(${HAPPIER_UI_FONT_SCALE_CSS_VAR}, 1))` : undefined;
+}
+
 function normalizeWebTextareaMaxHeight(maxHeight: number): number {
     return Number.isFinite(maxHeight) && maxHeight > 0 ? Math.round(maxHeight) : 120;
 }
@@ -122,20 +127,23 @@ function clampTextSelection(selection: { start: number; end: number }, textLengt
     return { start, end };
 }
 
-function resolveWebTextStyle(textStyle: TextStyle | undefined, uiFontScale: number): WebTextStyleOverride {
-    const scaledStyle = scaleTextStyle(textStyle ?? DEFAULT_TEXT_STYLE, uiFontScale);
+function resolveWebTextStyle(textStyle: TextStyle | undefined): WebTextStyleOverride {
+    const baseStyle = textStyle ?? DEFAULT_TEXT_STYLE;
     const next: Record<string, string | TextStyle['fontStyle'] | TextStyle['fontWeight']> = {};
-    const color = typeof scaledStyle.color === 'string' ? scaledStyle.color : undefined;
-    const fontFamily = typeof scaledStyle.fontFamily === 'string' ? scaledStyle.fontFamily : undefined;
-    const fontSize = toCssLength(scaledStyle.fontSize);
-    const letterSpacing = toCssLength(scaledStyle.letterSpacing);
-    const lineHeight = toCssLength(scaledStyle.lineHeight);
+    const color = typeof baseStyle.color === 'string' ? baseStyle.color : undefined;
+    const fontFamily = typeof baseStyle.fontFamily === 'string' ? baseStyle.fontFamily : undefined;
+    // Keep Web on the same single CSS scale owner as App Text. In particular,
+    // Unistyles-backed caller styles expose no numeric fontSize here, so use the
+    // canonical composer base and let the root CSS variable update immediately.
+    const fontSize = toScaledCssLength(baseStyle.fontSize ?? MULTI_TEXT_INPUT_BASE_FONT_SIZE);
+    const letterSpacing = toScaledCssLength(baseStyle.letterSpacing);
+    const lineHeight = toScaledCssLength(baseStyle.lineHeight);
 
     if (color) next.color = color;
     if (fontFamily) next.fontFamily = fontFamily;
     if (fontSize) next.fontSize = fontSize;
-    if (scaledStyle.fontStyle) next.fontStyle = scaledStyle.fontStyle;
-    if (scaledStyle.fontWeight) next.fontWeight = scaledStyle.fontWeight;
+    if (baseStyle.fontStyle) next.fontStyle = baseStyle.fontStyle;
+    if (baseStyle.fontWeight) next.fontWeight = baseStyle.fontWeight;
     if (letterSpacing) next.letterSpacing = letterSpacing;
     if (lineHeight) next.lineHeight = lineHeight;
 
@@ -155,7 +163,10 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     } = props;
     
     const { theme } = useUnistyles();
-    const uiFontScale = useLocalSetting('uiFontScale');
+    const rawUiFontScale = useLocalSetting('uiFontScale');
+    const uiFontScale = typeof rawUiFontScale === 'number' && Number.isFinite(rawUiFontScale) && rawUiFontScale > 0
+        ? rawUiFontScale
+        : 1;
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
     const isComposingRef = React.useRef(false);
     const liveValueRef = React.useRef(value);
@@ -168,8 +179,8 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         () => (value.length > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT ? normalizedMaxHeight : undefined),
     );
     const scaledTextStyle = React.useMemo(
-        () => resolveWebTextStyle(props.textStyle, uiFontScale),
-        [props.textStyle, uiFontScale],
+        () => resolveWebTextStyle(props.textStyle),
+        [props.textStyle],
     );
     const textareaStyle = React.useMemo<WebTextareaStyle>(() => ({
         width: '100%',
@@ -189,6 +200,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         paddingLeft: props.paddingLeft,
         paddingRight: props.paddingRight,
         ...scaledTextStyle,
+        [HAPPIER_UI_FONT_SCALE_CSS_VAR]: String(uiFontScale),
         caretColor: theme.colors.input.text,
     }), [
         props.paddingBottom,
@@ -197,6 +209,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         props.paddingTop,
         scaledTextStyle,
         theme.colors.input.text,
+        uiFontScale,
     ]);
     const clearPendingChangeTimer = React.useCallback(() => {
         if (pendingChangeTimerRef.current === null) return;

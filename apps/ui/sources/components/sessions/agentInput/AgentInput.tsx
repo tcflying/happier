@@ -109,6 +109,7 @@ import { resolveSessionModeChipPresentation } from './controls/resolveSessionMod
 import { useAgentInputActionMenuControls } from './controls/useAgentInputActionMenuControls';
 import { useAgentInputCoreControlHandlers } from './controls/useAgentInputCoreControlHandlers';
 import { useRenderedAgentInputControlRows } from './controls/useRenderedAgentInputControlRows';
+import { resolveAgentChipModelControlSummary } from './controls/resolveAgentChipModelControlSummary';
 import { buildAgentInputSelectionOverlayViewModel } from './selection/buildAgentInputSelectionOverlayViewModel';
 import { useAgentInputSelectionAnchors } from './selection/useAgentInputSelectionAnchors';
 import { useAgentInputSelectionOverlayController } from './selection/useAgentInputSelectionOverlayController';
@@ -2471,8 +2472,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         toggleSelectionOverlay,
     });
     const engineChipLabel = React.useMemo(() => {
-        return hasAgentPickerOptions ? selectedModelLabel : resolvedAgentLabel;
-    }, [hasAgentPickerOptions, resolvedAgentLabel, selectedModelLabel]);
+        if (!hasAgentPickerOptions) return resolvedAgentLabel;
+        const controlSummary = resolveAgentChipModelControlSummary(selectedModelOptionControls);
+        return [selectedModelLabel, ...controlSummary].join(' · ');
+    }, [hasAgentPickerOptions, resolvedAgentLabel, selectedModelLabel, selectedModelOptionControls]);
     const hasRecipient = React.useMemo(() => {
         return (props.extraActionChips ?? []).some((chip) => chip.controlId === 'recipient');
     }, [props.extraActionChips]);

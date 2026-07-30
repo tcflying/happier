@@ -52,7 +52,14 @@ export function createAgentSelectionActionChip(params: Readonly<{
                 )}
             </View>
             {params.showLabel ? (
-                <Text style={params.textStyle}>{params.label}</Text>
+                <Text
+                    testID="agent-input-agent-chip-label"
+                    style={params.textStyle}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                >
+                    {params.label}
+                </Text>
             ) : null}
         </Pressable>
     );

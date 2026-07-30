@@ -1545,6 +1545,40 @@ describe('SessionItem activity time', () => {
         expect(screen.findByTestId('session-list-item-sess_selected')?.props.accessibilityState).toMatchObject({
             selected: true,
         });
+        const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_selected')?.props.style);
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+        expect(rowStyle.backgroundColor).toBe(lightTheme.colors.state.neutral.background);
+        expect(titleStyle.fontWeight).not.toBe('600');
+    });
+
+    it('keeps attention-state session titles at the regular weight', async () => {
+        mockSessionStatus = {
+            state: 'thinking',
+            isConnected: true,
+            statusText: 'working',
+            shouldShowStatus: true,
+            statusColor: '#007AFF',
+            statusDotColor: '#007AFF',
+            isPulsing: true,
+        };
+
+        const { SessionItem } = await importSessionItemForTest();
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_working_regular')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+        expect(titleStyle.fontWeight).not.toBe('600');
     });
 
     it('uses row-model ownership data without subscribing to profile or full session state', async () => {

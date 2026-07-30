@@ -746,6 +746,72 @@ describe('publishCodexAppServerSessionControlsMetadata', () => {
         });
     });
 
+    it('publishes Speed for GPT-5.6 variants when model/list advertises the fast service tier', async () => {
+        const client = {
+            request: vi.fn(async (method: string) => {
+                if (method === 'collaborationMode/list') {
+                    return { data: [] };
+                }
+                if (method === 'model/list') {
+                    return {
+                        data: [
+                            {
+                                id: 'gpt-5.6-sol',
+                                displayName: 'GPT-5.6 Sol',
+                                isDefault: true,
+                                serviceTiers: [
+                                    { id: 'standard', name: 'Standard', description: 'Standard speed' },
+                                    { id: 'fast', name: 'Fast', description: 'Higher speed' },
+                                ],
+                            },
+                            {
+                                id: 'gpt-5.4-mini',
+                                displayName: 'GPT-5.4 Mini',
+                                serviceTiers: [],
+                            },
+                        ],
+                    };
+                }
+                throw new Error(`Unexpected method: ${method}`);
+            }),
+        };
+        const { session, getMetadata } = createSessionHarness();
+
+        await publishCodexAppServerSessionControlsMetadata({
+            client,
+            session,
+            provider: 'codex',
+            updatedAt: 902,
+            authMethod: 'oauth_cli',
+            currentModeId: null,
+            currentModelId: 'gpt-5.6-sol',
+            currentServiceTier: 'fast',
+        });
+
+        expect(getMetadata()[SESSION_MODELS_STATE_KEY]).toMatchObject({
+            currentModelId: 'gpt-5.6-sol',
+            availableModels: [
+                {
+                    id: 'gpt-5.6-sol',
+                    modelOptions: [
+                        {
+                            id: 'service_tier',
+                            currentValue: 'fast',
+                            options: [
+                                { value: 'standard', name: 'Standard' },
+                                { value: 'fast', name: 'Fast' },
+                            ],
+                        },
+                    ],
+                },
+                {
+                    id: 'gpt-5.4-mini',
+                },
+            ],
+        });
+        expect((getMetadata()[SESSION_MODELS_STATE_KEY] as any).availableModels[1].modelOptions).toBeUndefined();
+    });
+
     it('resolves collaboration mode selection with the provider default model when currentModelId is missing', () => {
         const selection = resolveCodexAppServerCollaborationModeSelection({
             modesResponse: {

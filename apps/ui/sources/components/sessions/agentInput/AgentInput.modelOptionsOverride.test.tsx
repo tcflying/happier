@@ -1349,6 +1349,56 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(logo?.props.height).toBe(16);
     });
 
+    it('shows the selected reasoning effort and speed tier in the engine chip', async () => {
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: 'hello',
+            placeholder: 'placeholder',
+            onChangeText: () => {},
+            onSend: () => {},
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            agentType: 'codex',
+            permissionMode: 'default',
+            onPermissionModeChange: () => {},
+            modelMode: 'gpt-5.6-sol',
+            onModelModeChange: () => {},
+            onAcpConfigOptionChange: () => {},
+            modelOptionsOverride: [
+                {
+                    value: 'gpt-5.6-sol',
+                    label: 'GPT 5.6 Sol',
+                    description: 'Latest',
+                    modelOptions: [
+                        {
+                            id: 'reasoning_effort',
+                            name: 'Thinking',
+                            type: 'select',
+                            currentValue: 'high',
+                            options: [
+                                { value: 'medium', name: 'Medium' },
+                                { value: 'high', name: 'High' },
+                            ],
+                        },
+                        {
+                            id: 'service_tier',
+                            name: 'Speed',
+                            type: 'select',
+                            currentValue: 'fast',
+                            options: [
+                                { value: 'standard', name: 'Standard' },
+                                { value: 'fast', name: 'Fast' },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        } as any));
+
+        expect(screen.findByTestId('agent-input-agent-chip-label')?.props.children).toBe('GPT 5.6 Sol · High · Fast');
+    });
+
     it('applies the shared provider picker icon scale to the engine chip logo', async () => {
         const { AgentInput } = await import('./AgentInput');
 

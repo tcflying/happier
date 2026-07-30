@@ -233,12 +233,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         height: SESSION_LIST_ROW_HEIGHT_MINIMAL_NATIVE_PHONE,
     },
     sessionItemSelected: {
-        backgroundColor: theme.colors.surface.selected,
-        borderColor: theme.dark ? theme.colors.surface.selected : theme.colors.surface.base,
-    },
-    sessionTitleSelected: {
-        color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
+        backgroundColor: theme.colors.state.neutral.background,
+        borderColor: theme.colors.state.neutral.background,
     },
     avatarContainer: {
         position: 'relative',
@@ -361,9 +357,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     sessionTitleMinimalNativePhone: {
         fontSize: 14,
         lineHeight: 18,
-    },
-    sessionTitleEmphasized: {
-        ...Typography.default('semiBold'),
     },
     sessionTitleConnected: {
         color: theme.colors.text.primary,
@@ -1028,7 +1021,6 @@ const SessionItemContent = React.memo(
             || shouldShowStatusSecondaryLine
             || shouldShowPathSecondaryLine
         );
-        const shouldEmphasizeTitle = rowPresentation.titleTone === 'emphasized';
         const shouldMuteTitle = rowPresentation.titleTone === 'quiet';
         const trailingAttentionIndicator = isMinimal ? rowPresentation.attentionIndicator : 'none';
         const showTrailingAttentionIndicator = trailingAttentionIndicator !== 'none';
@@ -1102,9 +1094,7 @@ const SessionItemContent = React.memo(
             compact ? styles.sessionTitleCompact : null,
             isMinimal ? styles.sessionTitleMinimal : null,
             useReadableNativePhoneMinimalRow ? styles.sessionTitleMinimalNativePhone : null,
-            shouldEmphasizeTitle ? styles.sessionTitleEmphasized : null,
             shouldMuteTitle ? null : sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
-            selected || rowSelection.isSelected ? styles.sessionTitleSelected : null,
             { color: sessionTitleColor },
         ];
         const renderTagChipRow = (placement: 'below' | 'inline') => (

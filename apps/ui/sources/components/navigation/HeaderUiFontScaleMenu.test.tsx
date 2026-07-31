@@ -103,25 +103,31 @@ describe('HeaderUiFontScaleMenu', () => {
         vi.unstubAllGlobals();
     });
 
-    it('opens a real dropdown with default, 1.2x, 1.5x, 2x, and 3x choices', async () => {
+    it('opens a real dropdown with default, 1.1x, 1.2x, 1.3x, 1.5x, 2x, and 3x choices', async () => {
         const { HeaderUiFontScaleMenu } = await import('./HeaderUiFontScaleMenu');
         const screen = await renderScreen(<HeaderUiFontScaleMenu />);
 
         await screen.pressByTestIdAsync('header-ui-font-scale-menu');
 
         expect(screen.findByTestId('header-ui-font-scale-option-default')).toBeTruthy();
+        expect(screen.findByTestId('header-ui-font-scale-option-large')).toBeTruthy();
         expect(screen.findByTestId('header-ui-font-scale-option-xlarge')).toBeTruthy();
+        expect(screen.findByTestId('header-ui-font-scale-option-xxlarge')).toBeTruthy();
         expect(screen.findByTestId('header-ui-font-scale-option-one-and-half')).toBeTruthy();
         expect(screen.findByTestId('header-ui-font-scale-option-double')).toBeTruthy();
         expect(screen.findByTestId('header-ui-font-scale-option-triple')).toBeTruthy();
     });
 
-    it('writes 1.2x, 1.5x, 2x, 3x, and 1x after the corresponding menu option is pressed', async () => {
+    it('writes 1.1x, 1.2x, 1.3x, 1.5x, 2x, 3x, and 1x after the corresponding menu option is pressed', async () => {
         const { HeaderUiFontScaleMenu } = await import('./HeaderUiFontScaleMenu');
         const screen = await renderScreen(<HeaderUiFontScaleMenu />);
 
         await screen.pressByTestIdAsync('header-ui-font-scale-menu');
+        await screen.pressByTestIdAsync('header-ui-font-scale-option-large');
+        await screen.pressByTestIdAsync('header-ui-font-scale-menu');
         await screen.pressByTestIdAsync('header-ui-font-scale-option-xlarge');
+        await screen.pressByTestIdAsync('header-ui-font-scale-menu');
+        await screen.pressByTestIdAsync('header-ui-font-scale-option-xxlarge');
         await screen.pressByTestIdAsync('header-ui-font-scale-menu');
         await screen.pressByTestIdAsync('header-ui-font-scale-option-one-and-half');
         await screen.pressByTestIdAsync('header-ui-font-scale-menu');
@@ -131,7 +137,7 @@ describe('HeaderUiFontScaleMenu', () => {
         await screen.pressByTestIdAsync('header-ui-font-scale-menu');
         await screen.pressByTestIdAsync('header-ui-font-scale-option-default');
 
-        expect(fontScaleState.setValue.mock.calls).toEqual([[1.2], [1.5], [2], [3], [1]]);
+        expect(fontScaleState.setValue.mock.calls).toEqual([[1.1], [1.2], [1.3], [1.5], [2], [3], [1]]);
     });
 
     it('marks the effective 1.5x choice as selected', async () => {

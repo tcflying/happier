@@ -57,6 +57,22 @@ describe('Text web UI font scaling', () => {
         expect(inputScreen.findByType('RNTextInput' as any).props.dataSet).toEqual({ happierUiFontScale: 'disabled' });
     });
 
+    it('scales an already-large explicit font only once', async () => {
+        localSettingState.uiFontScale = 1.3;
+        const { Text } = await import('./Text');
+
+        const screen = await renderScreen(
+            <Text style={{ fontSize: 24, lineHeight: 32 }}>large text</Text>,
+        );
+        const text = screen.findByType('RNText' as any);
+
+        expect(flattenStyle(text.props.style)).toMatchObject({
+            fontSize: 31.2,
+            lineHeight: 41.6,
+        });
+        expect(text.props.dataSet).toEqual({ happierUiFontScale: 'disabled' });
+    });
+
     it('scales the React Native Web default font size for bare and color-only App Text', async () => {
         const { Text, TextInput } = await import('./Text');
 

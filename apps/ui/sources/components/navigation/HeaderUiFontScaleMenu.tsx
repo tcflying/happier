@@ -31,9 +31,19 @@ export const HeaderUiFontScaleMenu = React.memo(function HeaderUiFontScaleMenu()
             subtitle: '1×',
         },
         {
+            id: 'large',
+            testID: 'header-ui-font-scale-option-large',
+            title: formatUiFontScaleMultiplier(UI_FONT_SCALE_PRESETS.large),
+        },
+        {
             id: 'xlarge',
             testID: 'header-ui-font-scale-option-xlarge',
             title: formatUiFontScaleMultiplier(UI_FONT_SCALE_PRESETS.xlarge),
+        },
+        {
+            id: 'xxlarge',
+            testID: 'header-ui-font-scale-option-xxlarge',
+            title: formatUiFontScaleMultiplier(UI_FONT_SCALE_PRESETS.xxlarge),
         },
         {
             id: 'oneAndHalf',

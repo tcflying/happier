@@ -13,7 +13,7 @@ export const UI_FONT_SCALE_PRESETS = {
 
 export type UiFontScalePresetId = keyof typeof UI_FONT_SCALE_PRESETS;
 
-export const HEADER_UI_FONT_SCALE_PRESET_IDS = ['default', 'xlarge', 'oneAndHalf', 'double', 'triple'] as const satisfies readonly UiFontScalePresetId[];
+export const HEADER_UI_FONT_SCALE_PRESET_IDS = ['default', 'large', 'xlarge', 'xxlarge', 'oneAndHalf', 'double', 'triple'] as const satisfies readonly UiFontScalePresetId[];
 
 export type HeaderUiFontScalePresetId = typeof HEADER_UI_FONT_SCALE_PRESET_IDS[number];
 

@@ -140,8 +140,20 @@ describe('Appearance settings item density', () => {
         expect(textSizeDropdown?.props?.selectedId).toBe('default');
 
         const itemIds = textSizeDropdown?.props?.items?.map((item: any) => item.id) ?? [];
+        expect(itemIds).toContain('large');
         expect(itemIds).toContain('xlarge');
+        expect(itemIds).toContain('xxlarge');
         expect(itemIds).toContain('oneAndHalf');
+
+        await act(async () => {
+            textSizeDropdown!.props.onSelect('large');
+        });
+        expect(shared.settingsState.uiFontScale).toBe(1.1);
+
+        await act(async () => {
+            textSizeDropdown!.props.onSelect('xxlarge');
+        });
+        expect(shared.settingsState.uiFontScale).toBe(1.3);
 
         await act(async () => {
             textSizeDropdown!.props.onSelect('oneAndHalf');

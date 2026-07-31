@@ -103,6 +103,7 @@ afterEach(() => {
     standardCleanup();
     resetSessionSettingsEntryState();
     shared.settingsState.uiItemDensity = 'comfortable';
+    shared.settingsState.uiFontScale = 1;
 });
 
 describe('Appearance settings item density', () => {
@@ -125,5 +126,27 @@ describe('Appearance settings item density', () => {
         });
 
         expect(shared.settingsState.uiItemDensity).toBe('cozy');
+    });
+
+    it('keeps the text size dropdown in sync with the new 1.5x shared preset', async () => {
+        const mod = await import('@/app/(app)/settings/appearance');
+        const screen = await renderSettingsView(React.createElement(mod.default), {
+            flushOptions: { cycles: 0 },
+        });
+
+        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const textSizeDropdown = dropdowns.find((node: any) => node.props?.itemTrigger?.title === 'settingsAppearance.textSize');
+        expect(textSizeDropdown).toBeTruthy();
+        expect(textSizeDropdown?.props?.selectedId).toBe('default');
+
+        const itemIds = textSizeDropdown?.props?.items?.map((item: any) => item.id) ?? [];
+        expect(itemIds).toContain('xlarge');
+        expect(itemIds).toContain('oneAndHalf');
+
+        await act(async () => {
+            textSizeDropdown!.props.onSelect('oneAndHalf');
+        });
+
+        expect(shared.settingsState.uiFontScale).toBe(1.5);
     });
 });

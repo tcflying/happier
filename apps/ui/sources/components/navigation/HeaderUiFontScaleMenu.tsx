@@ -7,6 +7,7 @@ import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropd
 import { Text } from '@/components/ui/text/Text';
 import {
     formatUiFontScaleMultiplier,
+    HEADER_UI_FONT_SCALE_PRESET_IDS,
     resolveHeaderUiFontScalePresetId,
     UI_FONT_SCALE_PRESETS,
 } from '@/components/ui/text/uiFontScalePresets';
@@ -30,6 +31,16 @@ export const HeaderUiFontScaleMenu = React.memo(function HeaderUiFontScaleMenu()
             subtitle: '1×',
         },
         {
+            id: 'xlarge',
+            testID: 'header-ui-font-scale-option-xlarge',
+            title: formatUiFontScaleMultiplier(UI_FONT_SCALE_PRESETS.xlarge),
+        },
+        {
+            id: 'oneAndHalf',
+            testID: 'header-ui-font-scale-option-one-and-half',
+            title: formatUiFontScaleMultiplier(UI_FONT_SCALE_PRESETS.oneAndHalf),
+        },
+        {
             id: 'double',
             testID: 'header-ui-font-scale-option-double',
             title: t('settingsAppearance.textSizeOptions.double'),
@@ -42,8 +53,9 @@ export const HeaderUiFontScaleMenu = React.memo(function HeaderUiFontScaleMenu()
     ], []);
 
     const selectScale = React.useCallback((itemId: string) => {
-        if (itemId !== 'default' && itemId !== 'double' && itemId !== 'triple') return;
-        setUiFontScale(UI_FONT_SCALE_PRESETS[itemId]);
+        const presetId = HEADER_UI_FONT_SCALE_PRESET_IDS.find((id) => id === itemId);
+        if (!presetId) return;
+        setUiFontScale(UI_FONT_SCALE_PRESETS[presetId]);
     }, [setUiFontScale]);
 
     return (

@@ -121,6 +121,7 @@ export default React.memo(function AppearanceSettingsScreen() {
             { id: 'large', title: t('settingsAppearance.textSizeOptions.large') },
             { id: 'xlarge', title: t('settingsAppearance.textSizeOptions.xlarge') },
             { id: 'xxlarge', title: t('settingsAppearance.textSizeOptions.xxlarge') },
+            { id: 'oneAndHalf', title: '1.5×' },
             { id: 'double', title: t('settingsAppearance.textSizeOptions.double') },
             { id: 'triple', title: t('settingsAppearance.textSizeOptions.triple') },
         ];

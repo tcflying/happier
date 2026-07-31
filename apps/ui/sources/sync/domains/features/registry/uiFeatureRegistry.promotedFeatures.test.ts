@@ -12,6 +12,7 @@ const promotedFeatureIds = [
     'files.syntaxHighlighting.advanced',
     'sessions.direct',
     'sessions.folders',
+    'attachments.uploads',
 ] satisfies FeatureId[];
 
 describe('UI promoted feature registry', () => {

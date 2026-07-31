@@ -3714,6 +3714,8 @@ function SessionViewLoaded({
             activity: status?.activity ?? 'unknown',
             canTakeOverDirect: status?.canTakeOverDirect ?? false,
             canTakeOverPersist: status?.canTakeOverPersist ?? false,
+            providerLabel: directSessionLink.providerId === 'codex' ? 'Codex' : directSessionLink.providerId,
+            trustedPid: status?.trustedPid ?? null,
             takeoverInFlight: directSessionTakeover.takeoverInFlight,
             onRequestTakeOverDirect: (status?.canTakeOverDirect ?? false)
                 ? () => { void directSessionTakeover.requestTakeover('direct'); }
@@ -3723,6 +3725,9 @@ function SessionViewLoaded({
                 : undefined,
         } as const;
     }, [directSessionLink, directSessionRuntime.status, directSessionTakeover, isHiddenSystemSessionSession]);
+    const isDirectSessionControlledByCurrentHappier = directSessionLink !== null
+        && directSessionRuntime.status?.runnerActive === true;
+    const isDirectSessionControlLocked = directSessionLink !== null && !isDirectSessionControlledByCurrentHappier;
 
     const [followBottomIntentSeq, setFollowBottomIntentSeq] = React.useState(0);
     const [jumpToBottomControl, setJumpToBottomControl] = React.useState<TranscriptJumpToBottomControl | null>(null);
@@ -4718,7 +4723,11 @@ function SessionViewLoaded({
                 session={session}
                 connectionStatusLeadingAction={jumpToBottomStatusAction}
                 sessionLatestUsage={session.latestUsage}
-                placeholder={isReadOnly ? t('session.sharing.viewOnlyMode') : t('session.inputPlaceholder')}
+                placeholder={isReadOnly
+                    ? t('session.sharing.viewOnlyMode')
+                    : isDirectSessionControlLocked
+                        ? t('chatFooter.directSessionControlledElsewhere')
+                        : t('session.inputPlaceholder')}
                 value={message}
                 onChangeText={setDraftValue}
                 sessionId={sessionId}
@@ -4760,7 +4769,7 @@ function SessionViewLoaded({
                 onActiveStatusBadgeKeyChange={setActiveStatusBadgeKey}
                 connectedServicesRestartState={sessionConnectedServicesAuthSwitch.restartState}
                 onSend={handleAgentInputSend}
-                isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isUploadingAttachments}
+                isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isDirectSessionControlLocked || isUploadingAttachments}
                 isSending={isComposerSendPending}
                 onMicPress={micButtonState.onMicPress}
                 isMicActive={micButtonState.isMicActive}
@@ -4773,7 +4782,7 @@ function SessionViewLoaded({
                 autocompletePrefixes={SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES}
                 autocompleteSuggestions={handleAutocompleteSuggestions}
                 onAutocompleteSuggestionSelect={handleAutocompleteSuggestionSelect}
-                disabled={isReadOnly}
+                disabled={isReadOnly || isDirectSessionControlLocked}
                 alwaysShowContextSize={alwaysShowContextSize}
                 extraActionChips={agentInputExtraActionChips}
             />

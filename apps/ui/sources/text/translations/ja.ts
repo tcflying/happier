@@ -1596,6 +1596,7 @@ export const ja: TranslationStructure = {
     error: "エラー",
     online: "オンライン",
     working: "作業中...",
+    thinking: "思考中…",
     readyForReview: "レビュー準備完了",
     offline: "オフライン",
     lastSeen: ({ time }: { time: string }) => `最終アクセス: ${time}`,
@@ -9788,6 +9789,9 @@ settingsSession: {
     detachLocalTerminal: "ターミナルを切り離す",
     directSessionTakeoverAvailable:
       "この直接セッションはあなたのマシンで利用できます。ここで操作するために Happier で引き継いでください。",
+    directSessionControlledByHappier: "この直接セッションは現在 Happier Direct が操作しています。",
+    directSessionControlledByProviderProcess: "この直接セッションは現在 {provider}（プロセス {pid}）が操作しています。",
+    directSessionControlledElsewhere: "この直接セッションは別の実行環境が操作中です。返信するには Happier で引き継いでください。",
     directSessionMachineOffline:
       "この直接セッションは、マシンがオフラインのため現在利用できません。",
     switchingToDirectTakeover: "この直接セッションを引き継いでいます…",

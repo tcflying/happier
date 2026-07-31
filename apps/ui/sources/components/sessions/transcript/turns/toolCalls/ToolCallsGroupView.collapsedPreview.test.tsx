@@ -344,7 +344,7 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
             .filter(Boolean);
 
         expect(previewIds).toEqual([]);
-        expect(screen.findAllByTestId('transcript-tool-calls-preview-more')).toHaveLength(1);
+        expect(screen.findAllByTestId('transcript-tool-calls-preview-more')).toHaveLength(0);
     });
 
     it('updates collapsed previews to the newest tools when a tool is appended', async () => {
@@ -395,7 +395,7 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
         expect(screen.findAllByTestId('transcript-tool-calls-preview-more')).toHaveLength(1);
     });
 
-    it('renders no previews when count is 0', async () => {
+    it('renders only the header when count is 0', async () => {
         collapsedPreviewCount = 0;
 
         const toolMessages = [
@@ -412,7 +412,8 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
         expect(previews).toHaveLength(0);
 
         const moreRows = screen.findAllByTestId('transcript-tool-calls-preview-more');
-        expect(moreRows).toHaveLength(1);
+        expect(moreRows).toHaveLength(0);
+        expect(screen.findAllByTestId('transcript-tool-calls-header')).toHaveLength(1);
     });
 
     it('clamps preview count to 15', async () => {

@@ -849,7 +849,7 @@ describe('SessionView (direct sessions)', () => {
     machineDirectSessionStatusGetSpy.mockResolvedValue({
       ok: true,
       machineOnline: true,
-      runnerActive: false,
+      runnerActive: true,
       activity: 'running',
       canTakeOverDirect: true,
       canTakeOverPersist: true,
@@ -2675,39 +2675,36 @@ describe('SessionView (direct sessions)', () => {
     }
   });
 
-  it('prompts for takeover on send and submits after taking over the direct session', async () => {
-    showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
-    const screen = await renderSessionView();
-
-    const agentInput = findAgentInput(screen);
-    await act(async () => {
-      agentInput.props.onChangeText('continue this session');
-    });
-
-    await act(async () => {
-      await agentInput.props.onSend();
-    });
-
-    expect(showDirectSessionTakeoverDialogSpy).toHaveBeenCalledWith({
+  it('disables the composer while a direct session is controlled outside Happier', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: false,
+      activity: 'running',
       canTakeOverDirect: true,
       canTakeOverPersist: true,
       canForceStop: false,
     });
-    expect(machineDirectSessionTakeoverSpy).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      sessionId: 's1',
-    }, { serverId: 'server-1' });
-    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
-      's1',
-      'continue this session',
-      undefined,
-      undefined,
-      expectDirectSendProjectionOptions(),
-    );
+    const screen = await renderSessionView();
+
+    const agentInput = findAgentInput(screen);
+    expect(agentInput.props.disabled).toBe(true);
+    expect(agentInput.props.isSendDisabled).toBe(true);
+    expect(agentInput.props.placeholder).toBe('chatFooter.directSessionControlledElsewhere');
+    expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
 
   });
 
   it('keeps the composer text when direct takeover is cancelled from the send prompt', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: false,
+      activity: 'running',
+      canTakeOverDirect: true,
+      canTakeOverPersist: true,
+      canForceStop: false,
+    });
     showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: null, forceStop: false });
     const screen = await renderSessionView();
 
@@ -2730,6 +2727,15 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('keeps the composer text visible while a direct takeover send prompt is still pending', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: false,
+      activity: 'running',
+      canTakeOverDirect: true,
+      canTakeOverPersist: true,
+      canForceStop: false,
+    });
     showDirectSessionTakeoverDialogSpy.mockImplementationOnce(
       () => new Promise<{ action: 'direct' | 'persisted' | null; forceStop: boolean }>(() => {}),
     );
@@ -2750,8 +2756,7 @@ describe('SessionView (direct sessions)', () => {
 
   });
 
-  it('passes force-stop through when persisting takeover from the send prompt', async () => {
-    showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'persisted', forceStop: true });
+  it('does not send while another provider process requires a persisted takeover', async () => {
     machineDirectSessionStatusGetSpy.mockResolvedValue({
       ok: true,
       machineOnline: true,
@@ -2773,18 +2778,8 @@ describe('SessionView (direct sessions)', () => {
       await agentInput.props.onSend();
     });
 
-    expect(machineDirectSessionTakeoverPersistSpy).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      sessionId: 's1',
-      forceStop: true,
-    }, { serverId: 'server-1' });
-    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
-      's1',
-      'persist this',
-      undefined,
-      undefined,
-      expectDirectSendProjectionOptions(),
-    );
+    expect(machineDirectSessionTakeoverPersistSpy).not.toHaveBeenCalled();
+    expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
 
   });
 

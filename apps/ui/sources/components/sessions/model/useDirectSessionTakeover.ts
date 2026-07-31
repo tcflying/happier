@@ -111,31 +111,11 @@ export function useDirectSessionTakeover(params: UseDirectSessionTakeoverParams)
         }
 
         const latestStatus = await readLatestStatus();
-        if (!latestStatus) {
-            return true;
-        }
-        if (latestStatus.runnerActive) {
-            return true;
-        }
-        if (!latestStatus.machineOnline) {
-            Modal.alert(t('common.error'), t('chatFooter.directSessionMachineOffline'));
-            return false;
-        }
-
-        const resolution = await showDirectSessionTakeoverDialog({
-            canTakeOverDirect: latestStatus.canTakeOverDirect,
-            canTakeOverPersist: latestStatus.canTakeOverPersist,
-            canForceStop: latestStatus.canForceStop,
-        });
-        if (!resolution.action) {
-            return false;
-        }
-
-        return requestTakeover(resolution.action, {
-            forceStop: resolution.forceStop,
-            promptForForceStop: false,
-        });
-    }, [params.directSessionRuntime, readLatestStatus, requestTakeover]);
+        // A direct transcript remains read-only until this Happier runner has
+        // explicitly taken ownership. The takeover controls in the footer are
+        // the only path that may change that ownership.
+        return latestStatus?.runnerActive === true;
+    }, [params.directSessionRuntime, readLatestStatus]);
 
     return {
         takeoverInFlight,

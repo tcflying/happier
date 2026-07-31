@@ -5348,6 +5348,7 @@ export const ru: TranslationStructure = {
     error: "ошибка",
     online: "в сети",
     working: "работаю...",
+    thinking: "Думает…",
     readyForReview: "готово к проверке",
     offline: "не в сети",
     lastSeen: ({ time }: { time: string }) => `в сети ${time}`,
@@ -9462,6 +9463,9 @@ settingsSession: {
     detachLocalTerminal: "Отсоединить терминал",
     directSessionTakeoverAvailable:
       "Эта прямая сессия доступна на вашей машине. Возьмите её под контроль в Happier, чтобы управлять ею здесь.",
+    directSessionControlledByHappier: "Эта прямая сессия сейчас управляется Happier Direct.",
+    directSessionControlledByProviderProcess: "Эта прямая сессия сейчас управляется {provider} (процесс {pid}).",
+    directSessionControlledElsewhere: "Эта прямая сессия управляется в другом месте. Возьмите её под контроль в Happier, чтобы ответить.",
     directSessionMachineOffline:
       "Эта прямая сессия сейчас недоступна, потому что машина офлайн.",
     switchingToDirectTakeover: "Берём эту прямую сессию под контроль…",

@@ -145,25 +145,19 @@ describe('useDirectSessionTakeover', () => {
     await harness.unmount();
   });
 
-  it('uses the owning session server when send takeover is confirmed after an active-server switch', async () => {
+  it('does not take over from the send path when another controller owns the direct session', async () => {
     const refreshNow = vi.fn(async () => status);
-    showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
     const harness = await renderHarness({ directSessionLink, status, refreshNow });
 
     activeServerId = 'server-2';
+    let ready = true;
     await act(async () => {
-      await harness.getCurrent().ensureReadyForSend();
+      ready = await harness.getCurrent().ensureReadyForSend();
     });
 
-    expect(showDirectSessionTakeoverDialogSpy).toHaveBeenCalledWith({
-      canTakeOverDirect: true,
-      canTakeOverPersist: true,
-      canForceStop: false,
-    });
-    expect(machineDirectSessionTakeoverSpy).toHaveBeenCalledWith(
-      { machineId: 'machine-1', sessionId: 's1' },
-      { serverId: 'server-owned' },
-    );
+    expect(ready).toBe(false);
+    expect(showDirectSessionTakeoverDialogSpy).not.toHaveBeenCalled();
+    expect(machineDirectSessionTakeoverSpy).not.toHaveBeenCalled();
     await harness.unmount();
   });
 

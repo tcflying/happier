@@ -1266,6 +1266,7 @@ export const zhHans: TranslationStructure = {
     error: "错误",
     online: "在线",
     working: "正在工作...",
+    thinking: "正在思考…",
     readyForReview: "已可审核",
     offline: "离线",
     lastSeen: ({ time }: { time: string }) => `最后活跃时间 ${time}`,
@@ -9188,6 +9189,9 @@ settingsSession: {
     detachLocalTerminal: "断开终端",
     directSessionTakeoverAvailable:
       "此直连会话可在你的机器上使用。可在 Happier 中接管它并在这里控制。",
+    directSessionControlledByHappier: "此直连会话当前由 Happier 直连运行器操作。",
+    directSessionControlledByProviderProcess: "此直连会话当前由 {provider}（进程 {pid}）操作。",
+    directSessionControlledElsewhere: "此直连会话正由其他运行器操作；请先在 Happier 中接管后再发送。",
     directSessionMachineOffline:
       "此直连会话当前不可用，因为机器已离线。",
     switchingToDirectTakeover: "正在接管此直连会话…",

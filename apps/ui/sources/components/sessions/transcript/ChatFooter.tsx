@@ -15,6 +15,8 @@ export type ChatFooterDirectControlState = Readonly<{
     activity: 'running' | 'active_recently' | 'idle' | 'unknown';
     canTakeOverDirect: boolean;
     canTakeOverPersist: boolean;
+    providerLabel: string;
+    trustedPid?: number | null;
     takeoverInFlight: 'direct' | 'persisted' | null;
     onRequestTakeOverDirect?: () => void | Promise<void>;
     onRequestTakeOverPersist?: () => void | Promise<void>;
@@ -163,7 +165,6 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
 
     const directModeBanner = React.useMemo(() => {
         if (!props.directControl) return null;
-        if (props.directControl.runnerActive) return null;
 
         const switchingToDirect = props.directControl.takeoverInFlight === 'direct';
         const switchingToPersisted = props.directControl.takeoverInFlight === 'persisted';
@@ -181,9 +182,11 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
             && typeof props.directControl.onRequestTakeOverPersist === 'function';
 
         const textKey = (() => {
+            if (props.directControl.runnerActive) return 'chatFooter.directSessionControlledByHappier';
             if (switchingToPersisted) return 'chatFooter.switchingToPersistedTakeover';
             if (switchingToDirect) return 'chatFooter.switchingToDirectTakeover';
             if (!props.directControl.machineOnline) return 'chatFooter.directSessionMachineOffline';
+            if (typeof props.directControl.trustedPid === 'number') return 'chatFooter.directSessionControlledByProviderProcess';
             return 'chatFooter.directSessionTakeoverAvailable';
         })();
 
@@ -197,7 +200,12 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
                             color={theme.colors.state.warning.foreground}
                         />
                         <Text selectable style={warningTextStyle}>
-                            {t(textKey)}
+                            {textKey === 'chatFooter.directSessionControlledByProviderProcess'
+                                ? t(textKey, {
+                                    provider: props.directControl.providerLabel,
+                                    pid: props.directControl.trustedPid,
+                                })
+                                : t(textKey)}
                         </Text>
                         {showDirectAction && (
                             <Pressable

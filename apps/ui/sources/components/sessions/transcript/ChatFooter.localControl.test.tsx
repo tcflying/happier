@@ -273,4 +273,40 @@ describe('ChatFooter (local control)', () => {
         expect(screen.findByTestId('session-chatFooter-takeOverDirect')).toBeNull();
         expect(screen.findByTestId('session-chatFooter-takeOverPersist')).toBeNull();
     });
+
+    it('shows the current Happier direct runner as the active operator', async () => {
+        const screen = await renderFooter({
+            controlledByUser: false,
+            directControl: {
+                machineOnline: true,
+                runnerActive: true,
+                activity: 'running',
+                canTakeOverDirect: false,
+                canTakeOverPersist: false,
+                takeoverInFlight: null,
+                providerLabel: 'Codex',
+            },
+        } as any);
+
+        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByHappier');
+        expect(screen.findByTestId('session-chatFooter-takeOverDirect')).toBeNull();
+    });
+
+    it('identifies a native provider process that currently controls a direct session', async () => {
+        const screen = await renderFooter({
+            controlledByUser: false,
+            directControl: {
+                machineOnline: true,
+                runnerActive: false,
+                activity: 'running',
+                canTakeOverDirect: true,
+                canTakeOverPersist: true,
+                takeoverInFlight: null,
+                providerLabel: 'Codex',
+                trustedPid: 4321,
+            },
+        } as any);
+
+        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByProviderProcess');
+    });
 });

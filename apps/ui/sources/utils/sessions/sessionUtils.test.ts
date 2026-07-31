@@ -8,6 +8,7 @@ import {
 import { installSessionUtilsCommonModuleMocks } from './sessionUtilsTestHelpers';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { StorageState } from '@/sync/store/types';
+import type { Message } from '@/sync/domains/messages/messageTypes';
 
 type MockStorageState = {
     sessionMessages: Record<string, { messages: unknown[]; messagesVersion?: number }>;
@@ -106,6 +107,56 @@ function createBaseSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('getSessionStatus', () => {
+    const contextCompactionMessage = (
+        id: string,
+        phase: 'started' | 'progress' | 'completed' | 'failed' | 'cancelled',
+        lifecycleId = 'compact-1',
+    ): Message => ({
+        kind: 'agent-event',
+        id,
+        createdAt: Number(id.replace(/\D/g, '')) || 1,
+        event: {
+            type: 'context-compaction',
+            phase,
+            lifecycleId,
+            source: 'provider-event',
+        },
+    });
+
+    it('uses the localized context-compaction status for an active lifecycle', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const status = getSessionStatus(createBaseSession(), now, {
+            vibingIndex: 0,
+            contextCompactionPhase: 'started',
+        });
+
+        expect(status.state).toBe('thinking');
+        expect(status.statusText).toBe('message.contextCompactionStarted');
+        expect(status.shouldShowStatus).toBe(true);
+        expect(status.isPulsing).toBe(true);
+    });
+
+    it('resolves only an active context-compaction lifecycle from transcript events', async () => {
+        const { resolveActiveContextCompactionPhase } = await import('./sessionUtils');
+
+        expect(resolveActiveContextCompactionPhase([
+            contextCompactionMessage('compact-1-start', 'started'),
+        ])).toBe('started');
+        expect(resolveActiveContextCompactionPhase([
+            contextCompactionMessage('compact-1-start', 'started'),
+            contextCompactionMessage('compact-1-progress', 'progress'),
+        ])).toBe('progress');
+        expect(resolveActiveContextCompactionPhase([
+            contextCompactionMessage('compact-1-start', 'started'),
+            contextCompactionMessage('compact-1-complete', 'completed'),
+        ])).toBeNull();
+        expect(resolveActiveContextCompactionPhase([
+            contextCompactionMessage('compact-1-start', 'started'),
+            contextCompactionMessage('compact-1-failed', 'failed'),
+        ])).toBeNull();
+    });
+
     it('exports the shared runtime status freshness budget and helper', async () => {
         const statusModule = await import('./sessionUtils');
 
@@ -438,7 +489,7 @@ describe('getSessionStatus', () => {
         const status = getSessionStatus(session, now, 0);
         expect(status.state).toBe('thinking');
         expect(status.isConnected).toBe(true);
-        expect(status.statusText).toBe('accomplishing…');
+        expect(status.statusText).toBe('status.thinking');
         expect(status.shouldShowStatus).toBe(true);
         expect(status.isPulsing).toBe(true);
     });

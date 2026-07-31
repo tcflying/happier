@@ -1306,6 +1306,7 @@ export const pl: TranslationStructure = {
     error: "błąd",
     online: "w sieci",
     working: "pracuje...",
+    thinking: "Myślenie…",
     readyForReview: "gotowe do przeglądu",
     offline: "poza siecią",
     lastSeen: ({ time }: { time: string }) => `ostatnio widziano ${time}`,
@@ -9564,6 +9565,9 @@ settingsSession: {
     detachLocalTerminal: "Odłącz terminal",
     directSessionTakeoverAvailable:
       "Ta bezpośrednia sesja jest dostępna na Twojej maszynie. Przejmij ją w Happier, aby sterować nią tutaj.",
+    directSessionControlledByHappier: "Ta bezpośrednia sesja jest obecnie kontrolowana przez Happier Direct.",
+    directSessionControlledByProviderProcess: "Ta bezpośrednia sesja jest obecnie kontrolowana przez {provider} (proces {pid}).",
+    directSessionControlledElsewhere: "Ta bezpośrednia sesja jest kontrolowana gdzie indziej. Przejmij ją w Happier, aby odpowiedzieć.",
     directSessionMachineOffline:
       "Ta bezpośrednia sesja jest obecnie niedostępna, ponieważ maszyna jest offline.",
     switchingToDirectTakeover: "Przejmowanie tej bezpośredniej sesji…",

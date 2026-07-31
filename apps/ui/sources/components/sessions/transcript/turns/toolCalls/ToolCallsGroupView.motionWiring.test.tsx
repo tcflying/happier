@@ -15,6 +15,7 @@ import { installToolCallsGroupViewCommonModuleMocks } from './toolCallsGroupView
 
 let toolChromeMode: 'activity_feed' | 'cards' = 'activity_feed';
 let toolCallsGroupShowBackground: boolean = false;
+let collapsedPreviewCount = 1;
 installToolCallsGroupViewCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -48,7 +49,7 @@ installToolCallsGroupViewCommonModuleMocks({
             overrides: {
                 useSetting: (key: string) => {
                     if (key === 'toolViewTimelineChromeMode') return toolChromeMode;
-                    if (key === 'transcriptToolCallsCollapsedPreviewCount') return 0;
+                    if (key === 'transcriptToolCallsCollapsedPreviewCount') return collapsedPreviewCount;
                     if (key === 'transcriptToolCallsGroupShowBackground') return toolCallsGroupShowBackground;
                     return null;
                 },
@@ -76,7 +77,12 @@ vi.mock('@/components/sessions/transcript/motion/TranscriptCollapsible', () => (
 }));
 
 describe('ToolCallsGroupView (motion wiring)', () => {
-    afterEach(standardCleanup);
+    afterEach(() => {
+        collapsedPreviewCount = 1;
+        toolChromeMode = 'activity_feed';
+        toolCallsGroupShowBackground = false;
+        standardCleanup();
+    });
 
     it('wraps tool rows in TranscriptEnterWrapper and uses TranscriptCollapsible for expand/collapse', async () => {
         const toolMessages = [
@@ -102,7 +108,10 @@ describe('ToolCallsGroupView (motion wiring)', () => {
         toolChromeMode = 'activity_feed';
         toolCallsGroupShowBackground = false;
 
-        const toolMessages = [createToolCallMessageFixture({ id: 'm1', createdAt: 1 })];
+        const toolMessages = [
+            createToolCallMessageFixture({ id: 'm1', createdAt: 1 }),
+            createToolCallMessageFixture({ id: 'm2', createdAt: 2 }),
+        ];
 
         const screen = await renderStatefulToolCallsGroupView({
             status: 'completed',

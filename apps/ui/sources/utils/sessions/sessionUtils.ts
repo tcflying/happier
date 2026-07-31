@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Message } from '@/sync/domains/messages/messageTypes';
-import { useSession, useSessionMessagesVersion, useSetting } from '@/sync/domains/state/storage';
+import { useSession, useSessionMessages, useSessionMessagesVersion, useSetting } from '@/sync/domains/state/storage';
 import { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
@@ -43,7 +43,6 @@ export interface SessionStatus {
     statusDotColor: string;
     isPulsing?: boolean;
 }
-
 export const OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS = 15_000;
 
 export type PendingPermissionRequest = SessionPendingRequest;
@@ -61,6 +60,7 @@ type SessionStatusColors = Readonly<{
 type GetSessionStatusOptions = Readonly<{
     vibingIndex?: number;
     workingTextMode?: SessionWorkingTextMode;
+    contextCompactionPhase?: ActiveContextCompactionPhase | null;
     statusColors?: SessionStatusColors;
 }>;
 type GetSessionStatusOptionsInput = number | GetSessionStatusOptions;
@@ -78,6 +78,37 @@ const DEFAULT_SESSION_STATUS_COLORS: SessionStatusColors = {
     default: '#8E8E93',
 };
 
+export type ActiveContextCompactionPhase = 'started' | 'progress';
+
+/**
+ * Reads the latest durable compaction lifecycle state without inferring progress.
+ * Terminal events suppress only their own lifecycle, so a distinct active lifecycle
+ * remains visible when provider events overlap in the transcript.
+ */
+export function resolveActiveContextCompactionPhase(messages: ReadonlyArray<Message>): ActiveContextCompactionPhase | null {
+    const terminalLifecycleIds = new Set<string>();
+    let terminalWithoutLifecycleId = false;
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (!message || message.kind !== 'agent-event' || message.event.type !== 'context-compaction') continue;
+
+        const lifecycleId = typeof message.event.lifecycleId === 'string' && message.event.lifecycleId.trim().length > 0
+            ? message.event.lifecycleId
+            : null;
+        if (message.event.phase === 'completed' || message.event.phase === 'failed' || message.event.phase === 'cancelled') {
+            if (lifecycleId) terminalLifecycleIds.add(lifecycleId);
+            else terminalWithoutLifecycleId = true;
+            continue;
+        }
+
+        if (message.event.phase !== 'started' && message.event.phase !== 'progress') continue;
+        if (lifecycleId ? terminalLifecycleIds.has(lifecycleId) : terminalWithoutLifecycleId) continue;
+        return message.event.phase;
+    }
+
+    return null;
+}
 export function listPendingTranscriptRequests(
     session: Session,
     messages?: ReadonlyArray<Message>,
@@ -194,7 +225,11 @@ function resolveGetSessionStatusOptions(options?: GetSessionStatusOptionsInput):
 }
 
 export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), options?: GetSessionStatusOptionsInput): SessionStatus {
-    const { vibingIndex, workingTextMode = 'animated', statusColors = DEFAULT_SESSION_STATUS_COLORS } = resolveGetSessionStatusOptions(options);
+    const {
+        workingTextMode = 'animated',
+        contextCompactionPhase = null,
+        statusColors = DEFAULT_SESSION_STATUS_COLORS,
+    } = resolveGetSessionStatusOptions(options);
     const isOnline = session.presence === "online";
     const hasPermissions = hasPendingPermissionRequests(session);
     const hasUserActions = hasPendingUserActionRequests(session);
@@ -216,14 +251,12 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
     const isOptimisticThinking = !runtimeStatus.hasTerminalMaterializedTurnStatus
         && typeof optimisticThinkingAt === 'number'
         && nowMs - optimisticThinkingAt < OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS;
-    const isThinking = runtimeStatus.working;
+    const isThinking = runtimeStatus.working || contextCompactionPhase !== null;
 
     const workingStatusText = (() => {
+        if (contextCompactionPhase !== null) return t('message.contextCompactionStarted');
         if (workingTextMode === 'static') return t('status.working');
-        const idx = typeof vibingIndex === 'number'
-            ? vibingIndex
-            : Math.floor(Math.random() * vibingMessages.length);
-        return vibingMessages[idx % vibingMessages.length].toLowerCase() + '…';
+        return t('status.thinking');
     })();
 
     if (!runtimeStatus.isActive && isOptimisticThinking) {
@@ -307,6 +340,7 @@ export function useSessionStatus(session: SessionStatusSource, options: UseSessi
     const rawSession = useSession(shouldSubscribeToSession ? sessionId : '');
     const sessionListWorkingStatusAnimatedTextEnabled = useSetting('sessionListWorkingStatusAnimatedTextEnabled');
     const shouldSubscribeToTranscript = options.subscribeToTranscript !== false && sessionId.length > 0;
+    const { messages: committedMessages } = useSessionMessages(sessionId, { enabled: shouldSubscribeToTranscript });
     const transcriptVersion = useSessionMessagesVersion(sessionId, shouldSubscribeToTranscript);
     void transcriptVersion;
 
@@ -337,12 +371,8 @@ export function useSessionStatus(session: SessionStatusSource, options: UseSessi
         pendingRequestObservedAt,
     }, now);
 
-    const vibingIndex = React.useMemo(() => {
-        return Math.floor(Math.random() * vibingMessages.length);
-    }, [isOnline, hasPermissions, hasUserActions, runtimeStatus.working]);
-
     return getSessionStatus(resolvedSession, now, {
-        vibingIndex,
+        contextCompactionPhase: resolveActiveContextCompactionPhase(committedMessages),
         workingTextMode: sessionListWorkingStatusAnimatedTextEnabled === false ? 'static' : 'animated',
         statusColors: theme.colors.status,
     });
@@ -483,5 +513,3 @@ export function formatLastSeen(activeAt: number, isActive: boolean = false): str
         return date.toLocaleDateString(undefined, options);
     }
 }
-
-const vibingMessages = ["Accomplishing", "Actioning", "Actualizing", "Baking", "Booping", "Brewing", "Calculating", "Cerebrating", "Channelling", "Churning", "Clauding", "Coalescing", "Cogitating", "Computing", "Combobulating", "Concocting", "Conjuring", "Considering", "Contemplating", "Cooking", "Crafting", "Creating", "Crunching", "Deciphering", "Deliberating", "Determining", "Discombobulating", "Divining", "Doing", "Effecting", "Elucidating", "Enchanting", "Envisioning", "Finagling", "Flibbertigibbeting", "Forging", "Forming", "Frolicking", "Generating", "Germinating", "Hatching", "Herding", "Honking", "Ideating", "Imagining", "Incubating", "Inferring", "Manifesting", "Marinating", "Meandering", "Moseying", "Mulling", "Mustering", "Musing", "Noodling", "Percolating", "Perusing", "Philosophising", "Pontificating", "Pondering", "Processing", "Puttering", "Puzzling", "Reticulating", "Ruminating", "Scheming", "Schlepping", "Shimmying", "Simmering", "Smooshing", "Spelunking", "Spinning", "Stewing", "Sussing", "Synthesizing", "Thinking", "Tinkering", "Transmuting", "Unfurling", "Unravelling", "Vibing", "Wandering", "Whirring", "Wibbling", "Wizarding", "Working", "Wrangling"];

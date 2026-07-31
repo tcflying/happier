@@ -323,7 +323,7 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
         expect(screen.findAllByTestId('transcript-tool-calls-preview-row')).toHaveLength(2);
     });
 
-    it('defaults to the newest three tool previews when the setting is unavailable', async () => {
+    it('defaults to a header-only group when the setting is unavailable', async () => {
         collapsedPreviewCount = null;
 
         const toolMessages = [
@@ -343,7 +343,7 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
             .map((p) => (p.props as any).children?.props?.messageId)
             .filter(Boolean);
 
-        expect(previewIds).toEqual(['m2', 'm3', 'm4']);
+        expect(previewIds).toEqual([]);
         expect(screen.findAllByTestId('transcript-tool-calls-preview-more')).toHaveLength(1);
     });
 

@@ -47,6 +47,7 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
     const [transcriptGroupToolCalls, setTranscriptGroupToolCalls] = useSettingMutable('transcriptGroupToolCalls');
     const [transcriptTurnToolCallsGroupStrategy, setTranscriptTurnToolCallsGroupStrategy] = useSettingMutable('transcriptTurnToolCallsGroupStrategy');
     const [transcriptToolCallsCollapsedPreviewCount, setTranscriptToolCallsCollapsedPreviewCount] = useSettingMutable('transcriptToolCallsCollapsedPreviewCount');
+    const [, setTranscriptToolCallsCollapsedPreviewExplicitChoice] = useSettingMutable('transcriptToolCallsCollapsedPreviewExplicitChoice');
     const [transcriptToolCallsGroupShowBackground, setTranscriptToolCallsGroupShowBackground] = useSettingMutable('transcriptToolCallsGroupShowBackground');
     const [transcriptMessageTimestampDisplayMode, setTranscriptMessageTimestampDisplayMode] = useSettingMutable('transcriptMessageTimestampDisplayMode');
     const [transcriptMessageSelectionEnabled, setTranscriptMessageSelectionEnabled] = useSettingMutable('transcriptMessageSelectionEnabled');
@@ -192,7 +193,7 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
     const normalizedCollapsedPreviewCount = clampInt(
         typeof transcriptToolCallsCollapsedPreviewCount === 'number'
             ? transcriptToolCallsCollapsedPreviewCount
-            : 5,
+            : 0,
         { min: 0, max: 15 },
     );
 
@@ -644,12 +645,13 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
                                             </View>
                                         ),
                                     }))}
-                                    onSelect={(id) => {
-                                        const parsed = Number(id);
-                                        if (!Number.isFinite(parsed)) return;
-                                        setTranscriptToolCallsCollapsedPreviewCount(clampInt(parsed, { min: 0, max: 15 }) as any);
-                                        setOpenToolDetailMenu(null);
-                                    }}
+                                        onSelect={(id) => {
+                                            const parsed = Number(id);
+                                            if (!Number.isFinite(parsed)) return;
+                                            setTranscriptToolCallsCollapsedPreviewCount(clampInt(parsed, { min: 0, max: 15 }) as any);
+                                            setTranscriptToolCallsCollapsedPreviewExplicitChoice(true as any);
+                                            setOpenToolDetailMenu(null);
+                                        }}
                                 />
 
                                 <Item

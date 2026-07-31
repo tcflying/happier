@@ -210,6 +210,15 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
         next.avatarStyle = 'meshGradientColumns';
     }
 
+    // Earlier clients persisted their former default (three preview rows) as a concrete account
+    // value. Treat it as legacy unless the user has explicitly picked a count in the new UI.
+    if (
+        input.transcriptToolCallsCollapsedPreviewCount === 3
+        && input.transcriptToolCallsCollapsedPreviewExplicitChoice !== true
+    ) {
+        next.transcriptToolCallsCollapsedPreviewCount = 0;
+    }
+
     // The tab-bar blur preference was generalized into a single "glass surfaces"
     // control governing every floating glass panel (tab bar, jump-to-bottom, …).
     if (!('glassBlurEnabled' in input) && 'tabBarBlurEnabled' in input) {

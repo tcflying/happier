@@ -123,7 +123,7 @@ import { tracking, trackMessageSent } from '@/track';
 import { isRunningOnMac } from '@/utils/platform/platform';
 import { randomUUID } from '@/platform/randomUUID';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/platform/responsive';
-import { getSessionAvatarId, getSessionName, listPendingPermissionRequests, shouldReadTranscriptForPendingRequests, shouldShowAbortButtonForSessionState, useSessionStatus, type PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
+import { getSessionAvatarId, getSessionName, listPendingPermissionRequests, shouldShowAbortButtonForSessionState, useSessionStatus, type PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { isVersionSupported, MINIMUM_CLI_VERSION } from '@/utils/system/versionUtils';
@@ -1114,11 +1114,12 @@ const SessionAgentInputWithUsageAndRequests = React.memo(function SessionAgentIn
     session,
     ...props
 }: SessionAgentInputWithUsageAndRequestsProps) {
-    const shouldReadTranscript = shouldReadTranscriptForPendingRequests(session) || props.connectionStatus?.isPulsing === true;
-    const { messages: committedMessages } = useSessionMessages(props.sessionId, { enabled: shouldReadTranscript });
+    // The activity character must keep observing the transcript even when the
+    // heartbeat-derived status temporarily reports "online" instead of "working".
+    const { messages: committedMessages } = useSessionMessages(props.sessionId, { enabled: true });
     const pendingPermissionRequests = React.useMemo(
-        () => listPendingPermissionRequests(session, shouldReadTranscript ? committedMessages : undefined),
-        [committedMessages, session, shouldReadTranscript],
+        () => listPendingPermissionRequests(session, committedMessages),
+        [committedMessages, session],
     );
     const stablePendingPermissionRequests = useStableAgentInputRequests(pendingPermissionRequests);
     const connectionStatus = React.useMemo(() => (

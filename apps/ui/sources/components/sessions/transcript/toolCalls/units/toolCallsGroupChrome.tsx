@@ -138,19 +138,19 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
     status: ToolCallsGroupStatus;
     count: number;
     expanded: boolean;
+    onExpand: () => void;
     onCollapse: () => void;
 }>) {
     const { theme } = useUnistyles();
-    const headerPressable = props.expanded;
+    const onPress = props.expanded ? props.onCollapse : props.onExpand;
 
     return (
         <Pressable
             testID="transcript-tool-calls-header"
-            onPress={headerPressable ? props.onCollapse : undefined}
-            disabled={!headerPressable}
+            onPress={onPress}
             style={({ pressed }) => [
                 chromeStyles.header,
-                headerPressable && pressed && (props.chromeMode === 'activity_feed' ? chromeStyles.headerFeedPressed : chromeStyles.headerCardsPressed),
+                pressed && (props.chromeMode === 'activity_feed' ? chromeStyles.headerFeedPressed : chromeStyles.headerCardsPressed),
             ]}
         >
             <View style={chromeStyles.headerGutter}>
@@ -170,13 +170,11 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
                         <Ionicons name="checkmark-circle" size={16} color={theme.colors.state.success.foreground} />
                     )}
                 </View>
-                {props.expanded ? (
-                    <Ionicons
-                        name="chevron-up-outline"
-                        size={16}
-                        color={theme.colors.text.secondary}
-                    />
-                ) : null}
+                <Ionicons
+                    name={props.expanded ? 'chevron-up-outline' : 'chevron-down-outline'}
+                    size={16}
+                    color={theme.colors.text.secondary}
+                />
             </View>
         </Pressable>
     );

@@ -128,6 +128,7 @@ const settingByKeyState = vi.hoisted(() => ({ current: {} as Record<string, unkn
 const participantTargetsState = vi.hoisted(() => ({ current: [] as any[] }));
 const reviewCommentDraftsState = vi.hoisted(() => ({ current: [] as any[] }));
 const sessionMessagesState = vi.hoisted(() => ({ current: [] as any[] }));
+const useSessionMessagesOptionsSpy = vi.hoisted(() => vi.fn());
 const draftHookState = vi.hoisted(() => ({
   valuesBySessionId: new Map<string, string>(),
 }));
@@ -293,7 +294,13 @@ installSessionShellCommonModuleMocks({
         useSession: () => storageState.sessions.s1,
         useIsDataReady: () => true,
         useRealtimeStatus: () => 'connected',
-        useSessionMessages: () => ({ messages: sessionMessagesState.current, isLoaded: true }),
+        useSessionMessages: (_sessionId: string, options?: { enabled?: boolean }) => {
+          useSessionMessagesOptionsSpy(options);
+          return {
+            messages: options?.enabled === false ? [] : sessionMessagesState.current,
+            isLoaded: options?.enabled !== false,
+          };
+        },
         useSessionTranscriptIds: () => ({ ids: ['m1'], isLoaded: true }),
         useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
         useWorkspaceReviewCommentsDrafts: () => reviewCommentDraftsState.current,
@@ -788,6 +795,7 @@ describe('SessionView (direct sessions)', () => {
     participantTargetsState.current = [];
     reviewCommentDraftsState.current = [];
     sessionMessagesState.current = [];
+    useSessionMessagesOptionsSpy.mockClear();
     draftHookState.valuesBySessionId.clear();
     quotaSnapshotsState.current = {};
     quotaSnapshotsState.requestedProfiles = [];
@@ -2693,6 +2701,28 @@ describe('SessionView (direct sessions)', () => {
     expect(agentInput.props.placeholder).toBe('chatFooter.directSessionControlledElsewhere');
     expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
 
+  });
+
+  it('keeps the transcript subscribed for the all-activity status character even while runtime status is online', async () => {
+    sessionMessagesState.current = [{
+      kind: 'tool-call',
+      id: 'tool-live',
+      localId: null,
+      createdAt: 2,
+      tool: {
+        name: 'Exec',
+        state: 'running',
+        input: { command: 'pnpm test' },
+        result: { output: 'tests 41/42' },
+      },
+      children: [],
+    }];
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.connectionStatus?.text).toBe('status.online');
+    expect(findAgentInput(screen).props.connectionStatus?.detailText).toBe('2');
+    expect(useSessionMessagesOptionsSpy).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
   });
 
   it('keeps the composer text when direct takeover is cancelled from the send prompt', async () => {

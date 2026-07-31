@@ -185,6 +185,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
                 status={props.status}
                 count={count}
                 expanded={expanded}
+                onExpand={onExpand}
                 onCollapse={onCollapse}
             />
 

@@ -141,4 +141,45 @@ describe('ChatList (jump-to-bottom)', () => {
 
     await screen.unmount();
   });
+
+  it('hands the jump control to the composer status row without leaving a floating duplicate', async () => {
+    legacyChatListHarnessState.sessionMessagesState = {
+      isLoaded: true,
+      messages: [
+        { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'u1' },
+        { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, text: 'a1' },
+      ],
+    };
+
+    const onJumpToBottomControlChange = vi.fn();
+    const { ChatList } = await import('./ChatList');
+    const screen = await renderScreen(
+      <ChatList
+        session={{ ...legacyChatListHarnessState.sessionState }}
+        onJumpToBottomControlChange={onJumpToBottomControlChange}
+      />,
+    );
+    requireCapturedFlatListProps();
+    await triggerLegacyChatListScroll(200);
+    legacyChatListHarnessState.sessionMessagesState = {
+      isLoaded: true,
+      messages: [
+        ...(legacyChatListHarnessState.sessionMessagesState.messages ?? []),
+        { kind: 'agent-text', id: 'a2', localId: null, createdAt: 3, text: 'a2' },
+      ],
+    };
+
+    await screen.update(
+      <ChatList
+        session={{ ...legacyChatListHarnessState.sessionState }}
+        onJumpToBottomControlChange={onJumpToBottomControlChange}
+      />,
+    );
+
+    expect(screen.findAllByTestId('transcript-jump-to-bottom')).toHaveLength(0);
+    expect(onJumpToBottomControlChange.mock.calls.some(([control]) =>
+      control && typeof control.onPress === 'function'
+    )).toBe(true);
+    await screen.unmount();
+  });
 });

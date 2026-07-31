@@ -80,6 +80,10 @@ function isTerminalConnectWebPathname(pathname: string | null | undefined): bool
     return route === TERMINAL_CONNECT_ROUTE;
 }
 
+function isSessionWebPathname(pathname: string | null | undefined): boolean {
+    return /^\/session\/[^/?#]+(?:\/|$)/.test(String(pathname ?? ''));
+}
+
 function shouldCaptureRnwUnexpectedTextNodeStacks(): boolean {
     // Dev-only diagnostics: enable via `?debugRnwTextNode=1` on web.
     // Keep this silent by default to avoid console noise.
@@ -802,6 +806,7 @@ function AppBoot(props: {
                                                     isDesktopPetOverlayWindow={isDesktopPetOverlayWindow}
                                                     isTablet={isTablet}
                                                     isTerminalConnectRoute={isTerminalConnectRoute}
+                                                    isSessionRoute={isSessionWebPathname(pathname)}
                                                     safeArea={safeArea}
                                                 />
                                             </HorizontalSafeAreaWrapper>
@@ -845,6 +850,7 @@ function RootAppShell(props: Readonly<{
     isDesktopPetOverlayWindow: boolean;
     isTablet: boolean;
     isTerminalConnectRoute: boolean;
+    isSessionRoute: boolean;
     safeArea: Readonly<{ top: number; right: number; left: number }>;
 }>) {
     const auth = useAuth();
@@ -875,7 +881,7 @@ function RootAppShell(props: Readonly<{
             {!props.isDesktopPetOverlayWindow ? <OnboardingShowcaseAutoShowMount /> : null}
             {appShellChromeHost === 'narrow-desktop-fallback' || appShellChromeHost === 'unauth-shell' ? (
                 <DesktopFallbackShellChrome safeArea={props.safeArea} />
-            ) : appShellChromeHost === 'web-top-right' ? (
+            ) : appShellChromeHost === 'web-top-right' && !props.isSessionRoute ? (
                 <View
                     pointerEvents="box-none"
                     style={{

@@ -115,6 +115,12 @@ vi.mock('@/components/sessions/panes/url/useSessionPaneUrlSync', () => ({
 vi.mock('@/components/sessions/transcript/ChatHeaderView', () => ({
   ChatHeaderView: (props: any) => React.createElement('ChatHeaderView', props, props.rightElement ?? null),
 }));
+vi.mock('@/components/navigation/HeaderUiFontScaleMenu', () => ({
+  HeaderUiFontScaleMenu: () => React.createElement('HeaderUiFontScaleMenu', { testID: 'header-ui-font-scale-menu' }),
+}));
+vi.mock('@/components/ui/feedback/AppUpdateStatusTag', () => ({
+  AppUpdateStatusTag: (props: any) => React.createElement('AppUpdateStatusTag', props),
+}));
 vi.mock('@/components/sessions/transcript/ChatList', () => ({
   ChatList: () => React.createElement('ChatList'),
 }));
@@ -480,6 +486,13 @@ describe('SessionView header action menu visibility', () => {
     const openRunsButton = findPressableByAccessibilityLabel(screen, 'session.openRuns');
 
     expect(openRunsButton).toBeUndefined();
+  });
+
+  it('places the font scale control inside the session header action row', async () => {
+    const screen = await renderSessionView();
+
+    expect(screen.findAllByTestId('header-ui-font-scale-menu')).toHaveLength(1);
+    expect(screen.findAllByTestId('session-header-app-update-status-tag').length).toBeGreaterThan(0);
   });
 
   it('uses stable display target for workspace presentation instead of live reachable target', async () => {

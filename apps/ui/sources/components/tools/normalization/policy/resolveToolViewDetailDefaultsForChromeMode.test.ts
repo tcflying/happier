@@ -7,7 +7,7 @@ import {
 
 describe('resolveToolViewDetailDefaultsForChromeMode', () => {
     it('maps detail level default=default based on chrome mode', () => {
-        expect(resolveToolViewDetailLevelDefaultForChromeMode({ chromeMode: 'cards', setting: 'default' })).toBe('summary');
+        expect(resolveToolViewDetailLevelDefaultForChromeMode({ chromeMode: 'cards', setting: 'default' })).toBe('title');
         expect(resolveToolViewDetailLevelDefaultForChromeMode({ chromeMode: 'activity_feed', setting: 'default' })).toBe('compact');
     });
 

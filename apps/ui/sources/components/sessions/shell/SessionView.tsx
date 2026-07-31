@@ -35,9 +35,13 @@ import {
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import { ChatHeaderView } from '@/components/sessions/transcript/ChatHeaderView';
 import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHeaderActionMenu';
+import { HeaderUiFontScaleMenu } from '@/components/navigation/HeaderUiFontScaleMenu';
+import { AppUpdateStatusTag } from '@/components/ui/feedback/AppUpdateStatusTag';
+import { resolveSessionStreamingPreview } from './resolveSessionStreamingPreview';
 import { SessionHeaderSubagentsButton } from '@/components/sessions/actions/SessionHeaderSubagentsButton';
 import { SessionHeaderTerminalButton } from '@/components/sessions/actions/SessionHeaderTerminalButton';
-import { ChatList, type TranscriptViewportChangeState } from '@/components/sessions/transcript/ChatList';
+import { ChatList, type TranscriptJumpToBottomControl, type TranscriptViewportChangeState } from '@/components/sessions/transcript/ChatList';
+import { JumpToBottomButton } from '@/components/sessions/transcript/scroll/JumpToBottomButton';
 import { TranscriptFirstPaintPlaceholder } from '@/components/sessions/transcript/TranscriptFirstPaintPlaceholder';
 import { TranscriptMessageSelectionProvider } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 import { TranscriptSelectionToolbarController } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbarController';
@@ -805,6 +809,8 @@ const SessionHeaderRightElement = React.memo(function SessionHeaderRightElement(
 
     return (
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <HeaderUiFontScaleMenu />
+            <AppUpdateStatusTag testID="session-header-app-update-status-tag" />
             <SessionHeaderActionMenu
                 sessionId={props.sessionId}
                 session={props.session}
@@ -1108,18 +1114,24 @@ const SessionAgentInputWithUsageAndRequests = React.memo(function SessionAgentIn
     session,
     ...props
 }: SessionAgentInputWithUsageAndRequestsProps) {
-    const shouldReadTranscript = shouldReadTranscriptForPendingRequests(session);
+    const shouldReadTranscript = shouldReadTranscriptForPendingRequests(session) || props.connectionStatus?.isPulsing === true;
     const { messages: committedMessages } = useSessionMessages(props.sessionId, { enabled: shouldReadTranscript });
     const pendingPermissionRequests = React.useMemo(
         () => listPendingPermissionRequests(session, shouldReadTranscript ? committedMessages : undefined),
         [committedMessages, session, shouldReadTranscript],
     );
     const stablePendingPermissionRequests = useStableAgentInputRequests(pendingPermissionRequests);
+    const connectionStatus = React.useMemo(() => (
+        props.connectionStatus
+            ? { ...props.connectionStatus, detailText: resolveSessionStreamingPreview(committedMessages) }
+            : undefined
+    ), [committedMessages, props.connectionStatus]);
 
     return (
         <SessionAgentInputWithUsage
             {...props}
             permissionRequests={stablePendingPermissionRequests}
+            connectionStatus={connectionStatus}
         />
     );
 });
@@ -1128,6 +1140,7 @@ type SessionAgentInputRuntimeStatusBoundaryProps = Omit<
     SessionAgentInputWithUsageAndRequestsProps,
     'connectionStatus' | 'showAbortButton'
 > & {
+    connectionStatusLeadingAction: React.ReactNode | null;
     inactiveStatusText: string | null;
     isPendingQueueWakeResuming: boolean;
     isResuming: boolean;
@@ -1139,6 +1152,7 @@ const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentI
     isPendingQueueWakeResuming,
     isResuming,
     connectedServicesRestartState,
+    connectionStatusLeadingAction,
     session,
     ...props
 }: SessionAgentInputRuntimeStatusBoundaryProps) {
@@ -1148,6 +1162,7 @@ const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentI
         subscribeToTranscript: false,
     });
     const connectionStatus = React.useMemo(() => ({
+        leadingAction: connectionStatusLeadingAction,
         text: connectedServicesRestartState?.status === 'restarting'
             || connectedServicesRestartState?.status === 'pending_confirmation'
             ? t('connectedServices.authSwitch.status.restarting')
@@ -1165,6 +1180,7 @@ const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentI
             || sessionStatus.isPulsing,
     }), [
         connectedServicesRestartState?.status,
+        connectionStatusLeadingAction,
         inactiveStatusText,
         isPendingQueueWakeResuming,
         isResuming,
@@ -1761,6 +1777,7 @@ type SessionTranscriptContentProps = Readonly<{
     jumpToSeq: ChatListProps['jumpToSeq'];
     followBottomIntentKey: ChatListProps['followBottomIntentKey'];
     onViewportChange: ChatListProps['onViewportChange'];
+    onJumpToBottomControlChange: ChatListProps['onJumpToBottomControlChange'];
     onEditPendingMessage: ChatListProps['onEditPendingMessage'];
     routeHydrationPending: ChatListProps['routeHydrationPending'];
 }>;
@@ -1782,6 +1799,7 @@ const SessionTranscriptContent = React.memo(function SessionTranscriptContent({
     jumpToSeq,
     followBottomIntentKey,
     onViewportChange,
+    onJumpToBottomControlChange,
     onEditPendingMessage,
     routeHydrationPending,
 }: SessionTranscriptContentProps) {
@@ -1864,6 +1882,7 @@ const SessionTranscriptContent = React.memo(function SessionTranscriptContent({
                     jumpToSeq={jumpToSeq}
                     followBottomIntentKey={followBottomIntentKey}
                     onViewportChange={onViewportChange}
+                    onJumpToBottomControlChange={onJumpToBottomControlChange}
                     onEditPendingMessage={onEditPendingMessage}
                     routeHydrationPending={routeHydrationPending}
                 />
@@ -3706,6 +3725,20 @@ function SessionViewLoaded({
     }, [directSessionLink, directSessionRuntime.status, directSessionTakeover, isHiddenSystemSessionSession]);
 
     const [followBottomIntentSeq, setFollowBottomIntentSeq] = React.useState(0);
+    const [jumpToBottomControl, setJumpToBottomControl] = React.useState<TranscriptJumpToBottomControl | null>(null);
+    const handleJumpToBottomControlChange = React.useCallback((control: TranscriptJumpToBottomControl | null) => {
+        setJumpToBottomControl(control);
+    }, []);
+    const jumpToBottomStatusAction = React.useMemo(() => (
+        jumpToBottomControl ? (
+            <JumpToBottomButton
+                testID="session-status-jump-to-bottom"
+                count={jumpToBottomControl.count}
+                onPress={jumpToBottomControl.onPress}
+                presentation={jumpToBottomControl.presentation}
+            />
+        ) : null
+    ), [jumpToBottomControl]);
     const markTranscriptLiveTailIntent = React.useCallback(() => {
         sync.markSessionLiveTailIntent(sessionId);
         setFollowBottomIntentSeq((current) => current + 1);
@@ -3795,6 +3828,7 @@ function SessionViewLoaded({
             jumpToSeq={jumpToSeq}
             followBottomIntentKey={followBottomIntentSeq}
             onViewportChange={handleTranscriptViewportChange}
+            onJumpToBottomControlChange={handleJumpToBottomControlChange}
             onEditPendingMessage={handleEditPendingMessage}
             routeHydrationPending={routeHydrationPending}
         />
@@ -4682,6 +4716,7 @@ function SessionViewLoaded({
             ) : null}
             <SessionAgentInputRuntimeStatusBoundary
                 session={session}
+                connectionStatusLeadingAction={jumpToBottomStatusAction}
                 sessionLatestUsage={session.latestUsage}
                 placeholder={isReadOnly ? t('session.sharing.viewOnlyMode') : t('session.inputPlaceholder')}
                 value={message}

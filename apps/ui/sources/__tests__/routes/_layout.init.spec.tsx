@@ -806,6 +806,15 @@ describe('app/_layout init resilience', () => {
         expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(0);
     });
 
+    it('keeps the global top-right controls out of a session header', async () => {
+        mockedPathname = '/session/session-1';
+
+        const screen = await renderSettledRootLayout();
+
+        expect(screen.findAllByTestId('root-shell-top-right-controls')).toHaveLength(0);
+        expect(screen.findAllByTestId('header-ui-font-scale-menu')).toHaveLength(0);
+    });
+
     it('renders fallback desktop controls and update tag for unauthenticated Tauri desktop setup flows', async () => {
         shellChromeState.isTauriDesktop = true;
         shellChromeState.isTablet = true;

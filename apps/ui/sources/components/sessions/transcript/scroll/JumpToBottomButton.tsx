@@ -19,6 +19,18 @@ export const JumpToBottomButton = React.memo(function JumpToBottomButton(props: 
         ? t('settingsSession.transcript.jumpToBottomButtonNewActivityLabel', { count: props.count })
         : label;
     const compact = props.presentation === 'activity' || rt.breakpoint === 'xs' || rt.breakpoint === 'sm' || rt.breakpoint === 'md';
+    React.useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'ArrowDown' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+            const activeElement = document.activeElement;
+            if (activeElement && activeElement !== document.body && activeElement !== document.documentElement) return;
+            event.preventDefault();
+            props.onPress();
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [props.onPress]);
     return (
         <GlassPanel
             // Match the tab bar's glass look: default solid fill (surface.base), not a
@@ -32,6 +44,7 @@ export const JumpToBottomButton = React.memo(function JumpToBottomButton(props: 
                 onPress={props.onPress}
                 accessibilityRole="button"
                 accessibilityLabel={accessibilityLabel}
+                accessibilityHint="ArrowDown"
                 style={({ pressed }) => [styles.row, compact && styles.compactRow, pressed && { opacity: 0.92 }]}
             >
                 {props.count > 0 ? (

@@ -378,6 +378,7 @@ describe('AgentInput (machine chip)', () => {
                     autocompleteSuggestions: async () => [],
                     connectionStatus: {
                         text: 'online',
+                        detailText: 'latest streamed words',
                         color: '#0a0',
                         dotColor: '#0a0',
                         isPulsing: false,
@@ -385,7 +386,9 @@ describe('AgentInput (machine chip)', () => {
                 }));
 
         const connectionStatus = screen.findByTestId('agent-input-connection-status-text');
+        const connectionStatusDetail = screen.findByTestId('agent-input-connection-status-detail');
         expect(connectionStatus).toBeTruthy();
         expect(collectText(connectionStatus?.props?.children).join(' ')).toContain('online');
+        expect(collectText(connectionStatusDetail?.props?.children).join(' ')).toContain('latest streamed words');
     });
 });

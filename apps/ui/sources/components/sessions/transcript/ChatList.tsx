@@ -716,6 +716,12 @@ export type TranscriptViewportChangeState = Readonly<{
     anchor?: SessionViewportAnchorSnapshot | null;
 }>;
 
+export type TranscriptJumpToBottomControl = Readonly<{
+    count: number;
+    onPress: () => void;
+    presentation: 'standard' | 'activity';
+}>;
+
 type ChatListProps = Readonly<{
     session: Session;
     bottomNotice?: ChatListBottomNotice | null;
@@ -727,6 +733,7 @@ type ChatListProps = Readonly<{
     jumpToSeq?: number | null;
     followBottomIntentKey?: string | number | null;
     onViewportChange?: (state: TranscriptViewportChangeState) => void;
+    onJumpToBottomControlChange?: (control: TranscriptJumpToBottomControl | null) => void;
     onEditPendingMessage?: (request: PendingMessageEditRequest) => void | Promise<void>;
     isWarmKeepAliveInstance?: boolean;
     routeHydrationPending?: boolean;
@@ -746,6 +753,7 @@ function areChatListNonSessionPropsEqual(left: ChatListProps, right: ChatListPro
         && left.jumpToSeq === right.jumpToSeq
         && left.followBottomIntentKey === right.followBottomIntentKey
         && left.onViewportChange === right.onViewportChange
+        && left.onJumpToBottomControlChange === right.onJumpToBottomControlChange
         && left.onEditPendingMessage === right.onEditPendingMessage
         && left.isWarmKeepAliveInstance === right.isWarmKeepAliveInstance
         && left.routeHydrationPending === right.routeHydrationPending;
@@ -1057,6 +1065,7 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
                 jumpToSeq={props.jumpToSeq ?? null}
                 followBottomIntentKey={props.followBottomIntentKey ?? null}
                 onViewportChange={props.onViewportChange}
+                onJumpToBottomControlChange={props.onJumpToBottomControlChange}
                 onEditPendingMessage={props.onEditPendingMessage}
                 isWarmKeepAliveInstance={props.isWarmKeepAliveInstance === true}
                 routeHydrationPending={props.routeHydrationPending === true}
@@ -1320,6 +1329,7 @@ const ChatListInternal = React.memo((props: {
     jumpToSeq?: number | null;
     followBottomIntentKey?: string | number | null;
     onViewportChange?: (state: TranscriptViewportChangeState) => void;
+    onJumpToBottomControlChange?: (control: TranscriptJumpToBottomControl | null) => void;
     onEditPendingMessage?: (request: PendingMessageEditRequest) => void | Promise<void>;
     isWarmKeepAliveInstance?: boolean;
     routeHydrationPending?: boolean;
@@ -8171,6 +8181,26 @@ const ChatListInternal = React.memo((props: {
             usesNativeFlashListBottomMaintenance,
         ]);
 
+    React.useEffect(() => {
+        if (!props.onJumpToBottomControlChange) return;
+        props.onJumpToBottomControlChange(
+            jumpToBottomAffordance.isVisible
+                ? {
+                    count: jumpToBottomAffordance.count,
+                    onPress: jumpToBottom,
+                    presentation: jumpToBottomAffordance.presentation,
+                }
+                : null,
+        );
+        return () => props.onJumpToBottomControlChange?.(null);
+    }, [
+        jumpToBottom,
+        jumpToBottomAffordance.count,
+        jumpToBottomAffordance.isVisible,
+        jumpToBottomAffordance.presentation,
+        props.onJumpToBottomControlChange,
+    ]);
+
     React.useLayoutEffect(() => {
         const followBottomIntentKey = props.followBottomIntentKey ?? null;
         if (followBottomIntentKey == null) return;
@@ -10040,7 +10070,7 @@ const ChatListInternal = React.memo((props: {
               {(olderPagination.isLoadingOlder || isLoadingOlder) && !showFirstPaintPlaceholder ? (
                   <OlderLoadProgressOverlay />
               ) : null}
-              {jumpToBottomAffordance.isVisible ? (
+              {jumpToBottomAffordance.isVisible && !props.onJumpToBottomControlChange ? (
                   <ComposerKeyboardFloatingInset
                       testID="transcript-jump-to-bottom-keyboard-offset"
                       baseBottom={12}

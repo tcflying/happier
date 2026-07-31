@@ -11,7 +11,7 @@ function readPreferredContentWidthMode(): unknown {
     try {
         return getStorage().getState().localSettings.uiContentWidthMode;
     } catch {
-        return 'compact';
+        return 'full';
     }
 }
 

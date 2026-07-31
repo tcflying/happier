@@ -8,8 +8,8 @@ export const CONTENT_WIDTH_PX_BY_MODE = Object.freeze({
 } satisfies Record<Exclude<UiContentWidthMode, 'full'>, number>);
 
 export function normalizeUiContentWidthMode(value: unknown): UiContentWidthMode {
-    if (value === 'medium' || value === 'full') return value;
-    return 'compact';
+    if (value === 'compact' || value === 'medium') return value;
+    return 'full';
 }
 
 export function resolveContentMaxWidthForMode(mode: unknown): number {

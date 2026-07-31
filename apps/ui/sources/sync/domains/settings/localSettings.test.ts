@@ -12,7 +12,7 @@ describe('localSettingsParse', () => {
         const parsed = localSettingsParse(null);
         expect(parsed.uiMultiPanePanelsEnabled).toBe(true);
         expect(parsed.uiBackdropBlurEnabled).toBe(true);
-        expect(parsed.uiContentWidthMode).toBe('compact');
+        expect(parsed.uiContentWidthMode).toBe('full');
         expect(parsed.uiItemDensity).toBe('cozy');
         expect(parsed.detailsPaneTabsBehavior).toBe('preview');
         expect(parsed.sessionsListStorageTab).toBe('persisted');

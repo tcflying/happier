@@ -24,9 +24,9 @@ internal sealed class CodexThreadStore
                    preview,
                    cwd,
                    coalesce(updated_at_ms, updated_at * 1000, 0)
-              FROM threads
+             FROM threads
              WHERE archived = 0
-             ORDER BY coalesce(recency_at_ms, recency_at * 1000, updated_at_ms, updated_at * 1000, 0) DESC
+             ORDER BY recency_at_ms DESC
              LIMIT {safeLimit}
             """);
     }

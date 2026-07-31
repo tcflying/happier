@@ -11,6 +11,7 @@ internal static class CodexSidebarAutomation
         try
         {
             var current = AutomationElement.FromPoint(new System.Windows.Point(point.X, point.Y));
+            if (!IsCodexProcess(current.Current.ProcessId)) return null;
             for (var depth = 0; current is not null && depth < 12; depth++)
             {
                 var name = current.Current.Name?.Trim();
@@ -87,6 +88,7 @@ internal static class CodexSidebarAutomation
         try
         {
             var current = AutomationElement.FromPoint(automationPoint);
+            if (!IsCodexProcess(current.Current.ProcessId)) return null;
             for (var depth = 0; current is not null && depth < 12; depth++)
             {
                 var name = current.Current.Name?.Trim();
@@ -107,6 +109,19 @@ internal static class CodexSidebarAutomation
             .OrderBy(row => row.Bounds.Width * row.Bounds.Height)
             .Select(row => row.Thread)
             .FirstOrDefault();
+    }
+
+    private static bool IsCodexProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return string.Equals(process.ProcessName, "ChatGPT", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public static bool IsCodexForegroundWindow()

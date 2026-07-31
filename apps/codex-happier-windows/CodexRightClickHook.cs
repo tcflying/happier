@@ -19,9 +19,10 @@ internal sealed class CodexRightClickHook : IDisposable
 
     private IntPtr OnHook(int code, IntPtr wParam, IntPtr lParam)
     {
-        if (code >= 0 && wParam.ToInt32() == NativeMethods.WmRButtonUp && CodexSidebarAutomation.IsCodexForegroundWindow())
+        if (code >= 0 && wParam.ToInt32() == NativeMethods.WmRButtonUp)
         {
             var data = Marshal.PtrToStructure<NativeMethods.MouseHookStruct>(lParam);
+            BridgeDiagnostics.Write("hook_right_click");
             RightClicked?.Invoke(new System.Drawing.Point(data.Point.X, data.Point.Y));
         }
         return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);

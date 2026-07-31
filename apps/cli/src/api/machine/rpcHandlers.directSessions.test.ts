@@ -191,7 +191,9 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     expect(releaseForTakeover).toHaveBeenCalledWith('sess_happy_direct');
     expect(viewerFollowRelease).toHaveBeenCalledTimes(1);
     expect(stopSession).not.toHaveBeenCalled();
-    expect(spawnSession).toHaveBeenCalledWith(
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+    const spawnedTakeoverOptions = spawnSession.mock.calls[0]?.[0];
+    expect(spawnedTakeoverOptions).toEqual(
       expect.objectContaining({
         directory: '/tmp/direct-claude-worktree',
         backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
@@ -199,9 +201,11 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
         resume: 'sess-claude-direct',
         approvedNewDirectoryCreation: true,
         transcriptStorage: 'direct',
-        environmentVariables: { CLAUDE_CONFIG_DIR: resolvedConfigDir },
+        environmentVariables: { CLAUDE_CONFIG_DIR: expect.any(String) },
       }),
     );
+    expect(await realpath(spawnedTakeoverOptions?.environmentVariables?.CLAUDE_CONFIG_DIR ?? ''))
+      .toBe(resolvedConfigDir);
 
     releaseForTakeover.mockClear();
     spawnSession.mockResolvedValueOnce({
@@ -1339,7 +1343,7 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
     });
   });
 
-  it('sets runnerActive=true and activity=running when a happy session runner is active', async () => {
+  it('sets runnerActive=true for a real marker shape with provider flavor only in metadata', async () => {
     vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', '/tmp');
     const markerDir = join('/tmp/happier-test-home', 'tmp', 'daemon-sessions');
     const markerPath = join(markerDir, `pid-${process.pid}.json`);
@@ -1350,7 +1354,6 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
       happyHomeDir: '/tmp/happier-test-home',
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      flavor: 'claude',
       metadata: { flavor: 'claude', claudeSessionId: 'sess-1' },
     }), 'utf8');
 
@@ -1389,6 +1392,8 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
       expect(res.runnerActive).toBe(true);
       expect(res.activity).toBe('running');
       expect(res.canTakeOverDirect).toBe(false);
+      expect(res.ownerHappierSessionId).toBe('sess_happy_runner');
+      expect(res.ownerPid).toBe(process.pid);
       expect(reconcileRuntimeOwnership).toHaveBeenCalledWith('sess_happy_runner', true);
       expect(backgroundRelease).toHaveBeenCalledTimes(1);
 
@@ -1449,6 +1454,47 @@ describe('registerMachineDirectSessionsRpcHandlers', () => {
       expect(res.runnerActive).toBe(false);
       expect(res.canForceStop).toBe(true);
       expect(res.trustedPid).toBe(process.pid);
+      expect(res.ownerHappierSessionId).toBe('sess_other');
+      expect(res.ownerPid).toBe(process.pid);
+    } finally {
+      await rm(markerPath, { force: true });
+    }
+  });
+
+  it('does not claim current ownership from a same-session marker linked to a different provider session', async () => {
+    vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', '/tmp');
+    const markerDir = join('/tmp/happier-test-home', 'tmp', 'daemon-sessions');
+    const markerPath = join(markerDir, `pid-${process.pid}.json`);
+    await mkdir(markerDir, { recursive: true });
+    await writeFile(markerPath, JSON.stringify({
+      pid: process.pid,
+      happySessionId: 'sess_happy_runner',
+      happyHomeDir: '/tmp/happier-test-home',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      flavor: 'claude',
+      metadata: { flavor: 'claude', claudeSessionId: 'different-remote-session' },
+    }), 'utf8');
+
+    try {
+      const registered = new Map<string, (params: any) => Promise<any>>();
+      registerMachineDirectSessionsRpcHandlers({
+        rpcHandlerManager: {
+          registerHandler: (method: string, handler: (params: any) => Promise<any>) => registered.set(method, handler),
+        } as any,
+      });
+
+      const res = await registered.get(RPC_METHODS.DAEMON_DIRECT_SESSION_STATUS_GET)!({
+        machineId: 'm1',
+        sessionId: 'sess_happy_runner',
+        providerId: 'claude',
+        remoteSessionId: 'expected-remote-session',
+        source: { kind: 'claudeConfig', configDir: '/tmp', projectId: null },
+      });
+
+      expect(res.runnerActive).toBe(false);
+      expect(res.ownerHappierSessionId).toBeNull();
+      expect(res.ownerPid).toBeNull();
     } finally {
       await rm(markerPath, { force: true });
     }

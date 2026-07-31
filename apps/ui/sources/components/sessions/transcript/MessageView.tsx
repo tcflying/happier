@@ -343,7 +343,7 @@ function RenderBlock(props: {
       />;
 
     case 'agent-event':
-      return <TranscriptEventRow event={props.message.event} sessionId={props.sessionId} />;
+      return <TranscriptEventRow event={props.message.event} sessionId={props.sessionId} createdAtMs={props.message.createdAt} />;
 
 
     default:

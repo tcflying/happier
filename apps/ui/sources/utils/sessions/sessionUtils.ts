@@ -32,6 +32,8 @@ export {
 } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 export { isFreshTimestamp };
 
+export const SESSION_WORKING_STATUS_ROTATION_MS = 2_000;
+
 export type SessionState = 'disconnected' | 'resuming' | 'thinking' | 'waiting' | 'permission_required' | 'action_required';
 
 export interface SessionStatus {
@@ -226,6 +228,7 @@ function resolveGetSessionStatusOptions(options?: GetSessionStatusOptionsInput):
 
 export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), options?: GetSessionStatusOptionsInput): SessionStatus {
     const {
+        vibingIndex,
         workingTextMode = 'animated',
         contextCompactionPhase = null,
         statusColors = DEFAULT_SESSION_STATUS_COLORS,
@@ -256,7 +259,16 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
     const workingStatusText = (() => {
         if (contextCompactionPhase !== null) return t('message.contextCompactionStarted');
         if (workingTextMode === 'static') return t('status.working');
-        return t('status.thinking');
+        const activities = t('status.thinkingActivities')
+            .split('|')
+            .map((value) => value.trim())
+            .filter(Boolean);
+        if (activities.length === 0) return t('status.thinking');
+        const index = typeof vibingIndex === 'number'
+            ? Math.abs(Math.trunc(vibingIndex)) % activities.length
+            : Math.floor(Math.random() * activities.length);
+        const activity = activities[index] ?? activities[0];
+        return activity.endsWith('…') || activity.endsWith('...') ? activity : `${activity}…`;
     })();
 
     if (!runtimeStatus.isActive && isOptimisticThinking) {
@@ -371,7 +383,19 @@ export function useSessionStatus(session: SessionStatusSource, options: UseSessi
         pendingRequestObservedAt,
     }, now);
 
+    const [vibingIndex, setVibingIndex] = React.useState(() => Math.floor(Math.random() * 1_000_000));
+    const shouldRotateWorkingStatus = runtimeStatus.working
+        && sessionListWorkingStatusAnimatedTextEnabled !== false;
+    React.useEffect(() => {
+        if (!shouldRotateWorkingStatus) return;
+        const timer = setInterval(() => {
+            setVibingIndex((current) => (current + 1) % 1_000_000);
+        }, SESSION_WORKING_STATUS_ROTATION_MS);
+        return () => clearInterval(timer);
+    }, [shouldRotateWorkingStatus]);
+
     return getSessionStatus(resolvedSession, now, {
+        vibingIndex,
         contextCompactionPhase: resolveActiveContextCompactionPhase(committedMessages),
         workingTextMode: sessionListWorkingStatusAnimatedTextEnabled === false ? 'static' : 'animated',
         statusColors: theme.colors.status,

@@ -2725,6 +2725,30 @@ describe('SessionView (direct sessions)', () => {
     expect(useSessionMessagesOptionsSpy).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
   });
 
+  it('prefers the provider raw-stream tail character over the materialized transcript fallback', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: true,
+      activity: 'running',
+      canTakeOverDirect: false,
+      canTakeOverPersist: true,
+      canForceStop: false,
+      activityTailCharacter: '新',
+    });
+    sessionMessagesState.current = [{
+      kind: 'agent-text',
+      id: 'materialized-old',
+      localId: null,
+      createdAt: 2,
+      text: 'older materialized text',
+    }];
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.connectionStatus?.detailText).toBe('新');
+  });
+
   it('keeps the composer text when direct takeover is cancelled from the send prompt', async () => {
     machineDirectSessionStatusGetSpy.mockResolvedValue({
       ok: true,

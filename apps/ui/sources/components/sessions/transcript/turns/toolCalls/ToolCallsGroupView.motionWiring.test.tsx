@@ -119,7 +119,7 @@ describe('ToolCallsGroupView (motion wiring)', () => {
         });
 
         expect(screen.findByTestId('ionicons:layers-outline')).not.toBeNull();
-        expect(screen.findByTestId('ionicons:chevron-down-outline')).toBeNull();
+        expect(screen.findByTestId('ionicons:chevron-down-outline')).not.toBeNull();
         expect(screen.findByTestId('ionicons:chevron-up-outline')).toBeNull();
 
         await screen.pressByTestIdAsync('transcript-tool-calls-preview-more');

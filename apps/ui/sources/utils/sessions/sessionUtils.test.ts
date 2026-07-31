@@ -32,7 +32,7 @@ installSessionUtilsCommonModuleMocks({
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({
-            translate: (key: string) => key,
+            translate: (key: string) => key === 'status.thinkingActivities' ? '状态甲|状态乙|状态丙' : key,
         });
     },
     storage: async () => {
@@ -489,9 +489,19 @@ describe('getSessionStatus', () => {
         const status = getSessionStatus(session, now, 0);
         expect(status.state).toBe('thinking');
         expect(status.isConnected).toBe(true);
-        expect(status.statusText).toBe('status.thinking');
+        expect(status.statusText).toBe('状态甲…');
         expect(status.shouldShowStatus).toBe(true);
         expect(status.isPulsing).toBe(true);
+    });
+
+    it('keeps the localized animated working states distinct', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const session = createBaseSession({ thinking: true, thinkingAt: now - 1_000 });
+
+        expect(getSessionStatus(session, now, { vibingIndex: 0 }).statusText).toBe('状态甲…');
+        expect(getSessionStatus(session, now, { vibingIndex: 1 }).statusText).toBe('状态乙…');
+        expect(getSessionStatus(session, now, { vibingIndex: 2 }).statusText).toBe('状态丙…');
     });
 
     it('returns thinking when the latest primary turn is in progress', async () => {
@@ -1351,6 +1361,27 @@ describe('getSessionStatus', () => {
 });
 
 describe('useSessionStatus', () => {
+    it('rotates localized animated working text while provider work remains active', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        try {
+            const { useSessionStatus, SESSION_WORKING_STATUS_ROTATION_MS } = await import('./sessionUtils');
+            const session = createBaseSession({
+                thinking: true,
+                thinkingAt: Date.now(),
+            });
+            const hook = await renderHook(() => useSessionStatus(session));
+            const initialText = hook.getCurrent().statusText;
+
+            await flushHookEffects({ cycles: 1, turns: 0, advanceTimersMs: SESSION_WORKING_STATUS_ROTATION_MS });
+
+            expect(hook.getCurrent().state).toBe('thinking');
+            expect(hook.getCurrent().statusText).not.toBe(initialText);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('refreshes when fresh thinking expires without a storage update', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_000_000);

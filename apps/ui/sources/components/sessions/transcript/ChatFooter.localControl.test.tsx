@@ -285,16 +285,18 @@ describe('ChatFooter (local control)', () => {
                 canTakeOverPersist: true,
                 takeoverInFlight: null,
                 providerLabel: 'Codex',
+                ownerHappierSessionId: 'session-current',
+                ownerPid: 1234,
                 onRequestTakeOverPersist: vi.fn(),
             },
         } as any);
 
-        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByHappier');
+        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByCurrentHappier');
         expect(screen.findByTestId('session-chatFooter-takeOverDirect')).toBeNull();
         expect(screen.findByTestId('session-chatFooter-takeOverPersist')).toBeNull();
     });
 
-    it('identifies a native provider process that currently controls a direct session', async () => {
+    it('identifies the other Happier session that currently owns the direct session', async () => {
         const screen = await renderFooter({
             controlledByUser: false,
             directControl: {
@@ -306,9 +308,11 @@ describe('ChatFooter (local control)', () => {
                 takeoverInFlight: null,
                 providerLabel: 'Codex',
                 trustedPid: 4321,
+                ownerHappierSessionId: 'session-other',
+                ownerPid: 4321,
             },
         } as any);
 
-        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByProviderProcess');
+        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByOtherHappier');
     });
 });

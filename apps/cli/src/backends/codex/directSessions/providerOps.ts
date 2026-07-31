@@ -24,6 +24,7 @@ export const codexDirectSessionProviderOps: DirectSessionProviderOps = {
     return {
       lastActivityAtMs: typeof res.lastActivityAtMs === 'number' && Number.isFinite(res.lastActivityAtMs) ? res.lastActivityAtMs : null,
       isRunning: false,
+      activityTailCharacter: res.activityTailCharacter,
     };
   },
   pageTranscript: async ({ source, remoteSessionId, direction, cursor, maxBytes, maxItems }) => {

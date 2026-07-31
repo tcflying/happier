@@ -233,8 +233,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         height: SESSION_LIST_ROW_HEIGHT_MINIMAL_NATIVE_PHONE,
     },
     sessionItemSelected: {
-        backgroundColor: theme.colors.state.neutral.background,
-        borderColor: theme.colors.state.neutral.background,
+        backgroundColor: theme.colors.state.neutral.border,
+        borderColor: theme.colors.state.neutral.border,
     },
     avatarContainer: {
         position: 'relative',
@@ -363,6 +363,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sessionTitleDisconnected: {
         color: theme.colors.text.secondary,
+    },
+    sessionTitleSelected: {
+        ...Typography.default('semiBold'),
+        color: theme.colors.text.primary,
+        fontWeight: '600',
     },
     sessionTitleLoading: {
         width: '68%',
@@ -1107,6 +1112,7 @@ const SessionItemContent = React.memo(
             useReadableNativePhoneMinimalRow ? styles.sessionTitleMinimalNativePhone : null,
             shouldMuteTitle ? null : sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
             { color: sessionTitleColor },
+            selected === true || rowSelection.isSelected ? styles.sessionTitleSelected : null,
         ];
         const renderTagChipRow = (placement: 'below' | 'inline') => (
             <View

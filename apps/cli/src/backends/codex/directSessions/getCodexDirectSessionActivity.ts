@@ -3,13 +3,14 @@ import type { DirectSessionsSource } from '@happier-dev/protocol';
 import { findCodexDirectSessionCandidateViaAppServer } from '../appServer/session/findCodexDirectSessionCandidateViaAppServer';
 import { collectCodexSessionRolloutFiles } from './collectCodexSessionRolloutFiles';
 import { resolveCodexHomesForDirectSessionsSource } from './resolveCodexHomesForDirectSessionsSource';
+import { readCodexRolloutActivityTailCharacter } from './readCodexRolloutActivityTailCharacter';
 
 export async function getCodexDirectSessionActivity(params: Readonly<{
   source: DirectSessionsSource;
   activeServerDir: string;
   remoteSessionId: string;
   env?: NodeJS.ProcessEnv;
-}>): Promise<Readonly<{ lastActivityAtMs: number | null }>> {
+}>): Promise<Readonly<{ lastActivityAtMs: number | null; activityTailCharacter: string | null }>> {
   const env = params.env ?? process.env;
   const homes = await resolveCodexHomesForDirectSessionsSource({
     source: params.source,
@@ -18,6 +19,7 @@ export async function getCodexDirectSessionActivity(params: Readonly<{
   });
 
   let maxMtimeMs: number | null = null;
+  let newestRolloutPath: string | null = null;
   for (const home of homes) {
     const rollouts = await collectCodexSessionRolloutFiles({ codexHome: home, remoteSessionId: params.remoteSessionId });
     for (const file of rollouts) {
@@ -26,6 +28,7 @@ export async function getCodexDirectSessionActivity(params: Readonly<{
       if (mtimeMs == null || mtimeMs < 0) continue;
       if (maxMtimeMs == null || mtimeMs > maxMtimeMs) {
         maxMtimeMs = mtimeMs;
+        newestRolloutPath = file.filePath;
       }
     }
 
@@ -49,5 +52,8 @@ export async function getCodexDirectSessionActivity(params: Readonly<{
     }
   }
 
-  return { lastActivityAtMs: maxMtimeMs };
+  const activityTailCharacter = newestRolloutPath
+    ? await readCodexRolloutActivityTailCharacter(newestRolloutPath)
+    : null;
+  return { lastActivityAtMs: maxMtimeMs, activityTailCharacter };
 }

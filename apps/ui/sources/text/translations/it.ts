@@ -1615,6 +1615,7 @@ export const it: TranslationStructure = {
     online: "in linea",
     working: "al lavoro...",
     thinking: "Pensando…",
+    thinkingActivities: "pensando|elaborando|calcolando|analizzando|costruendo|lavorando",
     readyForReview: "pronto per la revisione",
     offline: "non in linea",
     lastSeen: ({ time }: { time: string }) => `visto l'ultima volta ${time}`,
@@ -9888,6 +9889,8 @@ settingsSession: {
     directSessionTakeoverAvailable:
       "Questa sessione diretta è disponibile sulla tua macchina. Prendila in carico in Happier per controllarla qui.",
     directSessionControlledByHappier: "Questa sessione diretta è attualmente controllata da Happier Direct.",
+    directSessionControlledByCurrentHappier: ({ session, pid }: { session: string; pid: string | number }) => `Controllata esclusivamente da questa sessione Happier (${session}, processo ${pid}).`,
+    directSessionControlledByOtherHappier: ({ session, pid }: { session: string; pid: string | number }) => `Controllata da un'altra sessione Happier (${session}, processo ${pid}).`,
     directSessionControlledByProviderProcess: "Questa sessione diretta è attualmente controllata da {provider} (processo {pid}).",
     directSessionControlledElsewhere: "Questa sessione diretta è controllata altrove. Prendila in carico in Happier per rispondere.",
     directSessionMachineOffline:

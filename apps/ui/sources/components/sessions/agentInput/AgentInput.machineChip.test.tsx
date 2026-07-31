@@ -58,10 +58,10 @@ function collectBadRawTextNodes(node: any, parentType: string | null = null, out
 installAgentInputCommonModuleMocks({
     icons: () => ({
         Ionicons: (props: Record<string, unknown>) => (
-            mockEnv.iconsRenderAsText ? <>{'.'}</> : React.createElement('Ionicons', props, null)
+            mockEnv.iconsRenderAsText ? React.createElement('Text', props, '.') : React.createElement('Ionicons', props, null)
         ),
         Octicons: (props: Record<string, unknown>) => (
-            mockEnv.iconsRenderAsText ? <>{'.'}</> : React.createElement('Octicons', props, null)
+            mockEnv.iconsRenderAsText ? React.createElement('Text', props, '.') : React.createElement('Octicons', props, null)
         ),
     }),
     reactNative: async () => {
@@ -155,7 +155,11 @@ vi.mock('@/agents/catalog/catalog', () => ({
     AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
     DEFAULT_AGENT_ID: 'codex',
     resolveAgentIdFromFlavor: () => null,
-    getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
+    getAgentCore: () => ({
+        displayNameKey: 'agents.codex',
+        toolRendering: { hideUnknownToolsByDefault: false },
+        ui: { agentPickerIconName: 'hardware-chip-outline' },
+    }),
     getAgentBehavior: (agentId: string) => ({
         sessionUsage: {
             supportsExactContextUsageBadge: agentId !== 'codex' && agentId !== 'gemini',

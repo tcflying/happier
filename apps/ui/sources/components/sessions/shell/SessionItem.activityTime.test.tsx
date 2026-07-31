@@ -390,10 +390,6 @@ function findSessionTitleText(screen: Awaited<ReturnType<typeof renderScreen>>, 
     return screen.findAllByType('Text').find((node) => node.props.children === title);
 }
 
-function styleEntries(style: unknown): unknown[] {
-    return Array.isArray(style) ? style : [style];
-}
-
 function findWorkingSpinner(screen: Awaited<ReturnType<typeof renderScreen>>, sessionId: string) {
     return screen.findByTestId(`session-row-attention-indicator-spinner-${sessionId}`);
 }
@@ -898,14 +894,11 @@ describe('SessionItem activity time', () => {
         );
 
         const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
-        const titleStyleEntries = styleEntries(findSessionTitleText(screen, 'Session')?.props.style);
-        const explicitTitleColorStyle = titleStyleEntries[titleStyleEntries.length - 1] as { color?: unknown } | undefined;
         expect(titleStyle.color).toBe(lightTheme.colors.text.secondary);
-        expect(explicitTitleColorStyle).toMatchObject({ color: titleStyle.color });
-        expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(explicitTitleColorStyle?.color);
+        expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(titleStyle.color);
     });
 
-    it('can use the active title color for all active connected session rows', async () => {
+    it('keeps active connected session rows secondary when they are not selected', async () => {
         mockSessionListIdentityDisplay = 'agentLogo';
         mockSessionListActiveColorMode = 'allActive';
         mockSessionStatus = {
@@ -936,7 +929,7 @@ describe('SessionItem activity time', () => {
         );
 
         const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
-        expect(titleStyle.color).toBe(lightTheme.colors.text.primary);
+        expect(titleStyle.color).toBe(lightTheme.colors.text.secondary);
         expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(titleStyle.color);
     });
 
@@ -1509,7 +1502,7 @@ describe('SessionItem activity time', () => {
         expect(screen.getTextContent()).toContain('1m');
     });
 
-    it('keeps the selected row background when a session is selected', async () => {
+    it('uses a stronger selected background and reserves bold primary text for the selected session', async () => {
         mockSessionStatus = {
             state: 'waiting',
             isConnected: true,
@@ -1541,8 +1534,10 @@ describe('SessionItem activity time', () => {
         });
         const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_selected')?.props.style);
         const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
-        expect(rowStyle.backgroundColor).toBe(lightTheme.colors.state.neutral.background);
-        expect(titleStyle.fontWeight).not.toBe('600');
+        expect(rowStyle.backgroundColor).toBe(lightTheme.colors.state.neutral.border);
+        expect(rowStyle.borderColor).toBe(lightTheme.colors.state.neutral.border);
+        expect(titleStyle.color).toBe(lightTheme.colors.text.primary);
+        expect(titleStyle.fontWeight).toBe('600');
     });
 
     it('keeps attention-state session titles at the regular weight', async () => {
@@ -1572,6 +1567,7 @@ describe('SessionItem activity time', () => {
         );
 
         const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+        expect(titleStyle.color).toBe(lightTheme.colors.text.secondary);
         expect(titleStyle.fontWeight).not.toBe('600');
     });
 

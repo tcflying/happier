@@ -1108,10 +1108,12 @@ type SessionAgentInputWithUsageAndRequestsProps = Omit<
     'permissionRequests'
 > & {
     session: Session;
+    rawActivityTailCharacter?: string | null;
 };
 
 const SessionAgentInputWithUsageAndRequests = React.memo(function SessionAgentInputWithUsageAndRequests({
     session,
+    rawActivityTailCharacter,
     ...props
 }: SessionAgentInputWithUsageAndRequestsProps) {
     // The activity character must keep observing the transcript even when the
@@ -1124,9 +1126,12 @@ const SessionAgentInputWithUsageAndRequests = React.memo(function SessionAgentIn
     const stablePendingPermissionRequests = useStableAgentInputRequests(pendingPermissionRequests);
     const connectionStatus = React.useMemo(() => (
         props.connectionStatus
-            ? { ...props.connectionStatus, detailText: resolveSessionStreamingPreview(committedMessages) }
+            ? {
+                ...props.connectionStatus,
+                detailText: rawActivityTailCharacter ?? resolveSessionStreamingPreview(committedMessages),
+            }
             : undefined
-    ), [committedMessages, props.connectionStatus]);
+    ), [committedMessages, props.connectionStatus, rawActivityTailCharacter]);
 
     return (
         <SessionAgentInputWithUsage
@@ -3717,6 +3722,8 @@ function SessionViewLoaded({
             canTakeOverPersist: status?.canTakeOverPersist ?? false,
             providerLabel: directSessionLink.providerId === 'codex' ? 'Codex' : directSessionLink.providerId,
             trustedPid: status?.trustedPid ?? null,
+            ownerPid: status?.ownerPid ?? null,
+            ownerHappierSessionId: status?.ownerHappierSessionId ?? null,
             takeoverInFlight: directSessionTakeover.takeoverInFlight,
             onRequestTakeOverDirect: (status?.canTakeOverDirect ?? false)
                 ? () => { void directSessionTakeover.requestTakeover('direct'); }
@@ -4722,6 +4729,7 @@ function SessionViewLoaded({
             ) : null}
             <SessionAgentInputRuntimeStatusBoundary
                 session={session}
+                rawActivityTailCharacter={directSessionRuntime.status?.activityTailCharacter ?? null}
                 connectionStatusLeadingAction={jumpToBottomStatusAction}
                 sessionLatestUsage={session.latestUsage}
                 placeholder={isReadOnly

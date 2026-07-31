@@ -254,7 +254,10 @@ export const DirectSessionStatusGetResponseSchema = z.union([
       canTakeOverPersist: z.boolean(),
       canForceStop: z.boolean(),
       trustedPid: z.number().int().min(1).nullish(),
+      ownerPid: z.number().int().min(1).nullish(),
+      ownerHappierSessionId: z.string().min(1).nullish(),
       lastKnownActivityAtMs: z.number().int().min(0).optional(),
+      activityTailCharacter: z.string().min(1).max(8).nullish(),
     })
     .passthrough(),
   z

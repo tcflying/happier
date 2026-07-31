@@ -15,10 +15,30 @@ import {
     readTerminalComposerDraftBlockedStateAtMs,
 } from '@/components/sessions/terminalComposer/terminalComposerDraftBlockedEvent';
 import { useTerminalComposerClearAction } from '@/components/sessions/terminalComposer/useTerminalComposerClearAction';
+import { useNowMs } from '@/hooks/time/useNowMs';
 
 const EVENT_ICON_SIZE = 18;
 const EVENT_SPINNER_SIZE = 20;
 const EVENT_ICON_CONTAINER_SIZE = 20;
+
+function normalizeEventCreatedAtMs(value: number | null | undefined, fallbackMs: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return fallbackMs;
+    return value < 10_000_000_000 ? value * 1_000 : value;
+}
+
+const ContextCompactionProgressText = React.memo(function ContextCompactionProgressText(props: {
+    startedAtMs?: number | null;
+}) {
+    const nowMs = useNowMs(1_000);
+    const startedAtMsRef = React.useRef(normalizeEventCreatedAtMs(props.startedAtMs, nowMs));
+    const elapsedSeconds = Math.max(0, Math.floor((nowMs - startedAtMsRef.current) / 1_000));
+
+    return (
+        <Text selectable style={styles.text} testID="transcript-event-context-compaction-live-progress">
+            {t('message.contextCompactionStarted')} · {t('tools.common.elapsedSeconds', { seconds: String(elapsedSeconds) })}
+        </Text>
+    );
+});
 
 function formatLimitReachedTime(timestamp: number): string {
     try {
@@ -273,6 +293,7 @@ const TerminalComposerClearActionButton = React.memo(function TerminalComposerCl
 export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: {
     event: AgentEvent;
     sessionId?: string | null;
+    createdAtMs?: number | null;
 }) {
     const { theme } = useUnistyles();
     const settings = useSettings();
@@ -282,6 +303,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     let text = formatUnknownEventDetails(props.event);
     let detailText: string | undefined;
     let isLoading = false;
+    let showContextCompactionProgress = false;
     let testID: string | undefined;
 
     if (props.event.type === 'switch') {
@@ -315,6 +337,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
         testID = `transcript-event-context-compaction-${isPaused ? 'paused' : props.event.phase}`;
         if (props.event.phase === 'started' || props.event.phase === 'progress') {
             isLoading = true;
+            showContextCompactionProgress = true;
             text = t('message.contextCompactionStarted');
         } else if (props.event.phase === 'failed') {
             iconName = 'warning-outline';
@@ -415,9 +438,13 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
                     )}
                 </View>
                 <View style={styles.textColumn} testID={testID ? `${testID}-body` : undefined}>
-                    <Text selectable style={styles.text}>
-                        {text}
-                    </Text>
+                    {showContextCompactionProgress ? (
+                        <ContextCompactionProgressText startedAtMs={props.createdAtMs} />
+                    ) : (
+                        <Text selectable style={styles.text}>
+                            {text}
+                        </Text>
+                    )}
                     {detailText ? (
                         <Text selectable style={styles.detailText} testID={testID ? `${testID}-detail` : undefined}>
                             {detailText}

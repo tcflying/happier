@@ -282,14 +282,16 @@ describe('ChatFooter (local control)', () => {
                 runnerActive: true,
                 activity: 'running',
                 canTakeOverDirect: false,
-                canTakeOverPersist: false,
+                canTakeOverPersist: true,
                 takeoverInFlight: null,
                 providerLabel: 'Codex',
+                onRequestTakeOverPersist: vi.fn(),
             },
         } as any);
 
         expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByHappier');
         expect(screen.findByTestId('session-chatFooter-takeOverDirect')).toBeNull();
+        expect(screen.findByTestId('session-chatFooter-takeOverPersist')).toBeNull();
     });
 
     it('identifies a native provider process that currently controls a direct session', async () => {

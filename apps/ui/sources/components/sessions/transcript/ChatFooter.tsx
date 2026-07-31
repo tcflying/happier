@@ -169,12 +169,16 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
         const switchingToDirect = props.directControl.takeoverInFlight === 'direct';
         const switchingToPersisted = props.directControl.takeoverInFlight === 'persisted';
         const showDirectAction =
+            !props.directControl.runnerActive
+            &&
             !switchingToDirect
             && !switchingToPersisted
             && props.directControl.machineOnline
             && props.directControl.canTakeOverDirect
             && typeof props.directControl.onRequestTakeOverDirect === 'function';
         const showPersistAction =
+            !props.directControl.runnerActive
+            &&
             !switchingToDirect
             && !switchingToPersisted
             && props.directControl.machineOnline

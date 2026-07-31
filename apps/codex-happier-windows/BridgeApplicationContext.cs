@@ -29,24 +29,40 @@ internal sealed class BridgeApplicationContext : ApplicationContext
             ContextMenuStrip = trayMenu,
         };
         _hook = new CodexRightClickHook();
-        _hook.RightClicked += point => _ = HandleRightClickAsync(point);
+        _hook.RightClicked += point =>
+        {
+            var title = CodexSidebarAutomation.FindTitleAtPoint(point);
+            if (title is null)
+            {
+                BridgeDiagnostics.Write("right_click_ignored");
+                return;
+            }
+            BridgeDiagnostics.Write("right_click_dispatched");
+            _ = Task.Run(() => HandleRightClickAsync(point, title));
+        };
+        BridgeDiagnostics.Write("started");
         ShowBalloon("Happier Codex Bridge 已启动", "在 Codex 左侧会话上点鼠标右键，即可导入到 Happier 直连。");
     }
 
-    private async Task HandleRightClickAsync(System.Drawing.Point point)
+    private async Task HandleRightClickAsync(System.Drawing.Point point, string title)
     {
         if (_handlingClick) return;
         _handlingClick = true;
         try
         {
-            var threads = _codex.ListRecent();
-            var thread = CodexSidebarAutomation.FindThreadAtPoint(threads, point);
-            if (thread is null) return;
+            var thread = ThreadMatcher.FindByTitle(_codex.ListRecent(), title);
+            if (thread is null)
+            {
+                BridgeDiagnostics.Write("thread_not_resolved");
+                return;
+            }
+            BridgeDiagnostics.Write("thread_resolved");
             await Task.Delay(120);
             _dispatcher.BeginInvoke(() => ShowImportMenu(point, thread));
         }
         catch (Exception error)
         {
+            BridgeDiagnostics.Write("right_click_failed", error.Message);
             ShowBalloon("无法读取 Codex 会话", error.Message, ToolTipIcon.Error);
         }
         finally
@@ -57,6 +73,7 @@ internal sealed class BridgeApplicationContext : ApplicationContext
 
     private void ShowImportMenu(System.Drawing.Point point, CodexThread thread)
     {
+        BridgeDiagnostics.Write("menu_shown");
         var menu = new ContextMenuStrip();
         var item = menu.Items.Add("导入到 Happier 直连");
         item.ToolTipText = thread.Name;

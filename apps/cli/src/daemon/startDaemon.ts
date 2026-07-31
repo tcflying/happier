@@ -22,6 +22,7 @@ import { createConnectedServiceCredentialApi } from '@/api/connectedServices/con
 import { resolveRoutedUsageLimitRecoveryResumePromptMode } from '@/session/usageLimitRecoveryControls/resolveRoutedUsageLimitRecoveryResumePromptMode';
 import type { ApiMachineClient } from '@/api/apiMachine';
 import { fetchAccountProfile } from '@/api/accountProfile';
+import { ensureDirectSessionLink } from '@/api/directSessions/linking/ensureDirectSessionLink';
 import { applyInitialTranscriptAfterSeqToAttachPayload } from '@/daemon/sessionEncryption/applyInitialTranscriptAfterSeqToAttachPayload';
 import { TrackedSession } from './types';
 import { MachineMetadata, DaemonState, type Metadata } from '@/api/types';
@@ -6132,13 +6133,13 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       isShuttingDown: () => shutdownInitiated || connectedServiceQuotaProducersQuiesced,
       handleSessionRunnerRestart: async (request: RestartSessionRunnerRequestV1) => {
         const tracked = getCurrentChildren().find((child) => child.happySessionId === request.sessionId) ?? null;
-          const result = await restartSessionRunnerOnCurrentRuntime({
-            request,
-            tracked,
-            currentIdentity: resolveCurrentSessionRunnerLaunchIdentity(),
-            requestRestart: requestVersionRuntimeRefreshWithDeferral,
-            resolveActivityDisabledReason: resolveSessionRunnerActivityDisabledReason,
-          });
+        const result = await restartSessionRunnerOnCurrentRuntime({
+          request,
+          tracked,
+          currentIdentity: resolveCurrentSessionRunnerLaunchIdentity(),
+          requestRestart: requestVersionRuntimeRefreshWithDeferral,
+          resolveActivityDisabledReason: resolveSessionRunnerActivityDisabledReason,
+        });
         return RestartSessionRunnerResultV1Schema.parse(result);
       },
       handleSessionRunnerRestartAll: async (request) => {
@@ -6164,6 +6165,27 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           daemonId: runtimeId,
           observedAtMs: Date.now(),
         });
+      },
+      handleCodexDirectSessionLinkEnsure: async ({ remoteSessionId, title, directory }) => {
+        try {
+          const result = await ensureDirectSessionLink({
+            credentials,
+            machineId,
+            providerId: 'codex',
+            remoteSessionId,
+            titleHint: title,
+            ...(directory ? { directoryHint: directory } : {}),
+            codexBackendMode: 'appServer',
+            source: { kind: 'codexHome', home: 'user' },
+          });
+          return { ok: true, sessionId: result.sessionId, created: result.created };
+        } catch (error) {
+          return {
+            ok: false,
+            errorCode: 'direct_session_link_failed',
+            errorMessage: error instanceof Error ? error.message : 'Unknown error',
+          };
+        }
       },
       handleConnectedServiceUsageLimitWaitResumeCancel: cancelConnectedServiceUsageLimitWaitResumeForSession,
       handleSessionConnectedServiceAuthSwitch: async (input) => {

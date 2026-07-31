@@ -410,6 +410,7 @@ export function createDaemonControlApp({
   persistOpenCodeBrokerLoadHandshakeObservation = persistOpenCodeBrokerLoadHandshakeObservationDefault,
   resolveOpenCodeBrokerLoadHandshakeStatus = resolveOpenCodeBrokerLoadHandshakeStatusDefault,
   handleMigrateOldSessionRunners,
+  handleCodexDirectSessionLinkEnsure,
   runtimeAuthRecoveryScheduler,
   isShuttingDown,
   requestSelfRestart,
@@ -512,6 +513,17 @@ export function createDaemonControlApp({
   }>) => Promise<ClaudeSubscriptionAuthTokensRefreshResponse>;
   requestSelfRestart?: (request?: DaemonSelfRestartRequest) => Promise<unknown>;
   handleMigrateOldSessionRunners?: () => Promise<OldSessionRunnerMigrationResult>;
+  handleCodexDirectSessionLinkEnsure?: (input: Readonly<{
+    remoteSessionId: string;
+    title: string;
+    directory?: string;
+  }>) => Promise<Readonly<{
+    ok: boolean;
+    sessionId?: string;
+    created?: boolean;
+    errorCode?: string;
+    errorMessage?: string;
+  }>>;
 }): FastifyInstance {
   void machineId;
   const normalizedRuntimeId = runtimeId.trim();
@@ -762,6 +774,44 @@ export function createDaemonControlApp({
       ...(normalizedRuntimeId ? { runtimeId: normalizedRuntimeId } : {}),
       ...(DAEMON_DIST_CLOSURE_FINGERPRINT_PATTERN.test(distClosureFingerprint) ? { distClosureFingerprint } : {}),
     };
+  });
+
+  typed.post('/codex/direct-session-link', {
+    schema: {
+      body: z.object({
+        remoteSessionId: z.string().trim().min(1).max(256),
+        title: z.string().trim().min(1).max(512),
+        directory: z.string().trim().min(1).max(32_768).optional(),
+      }),
+      response: {
+        200: z.object({
+          ok: z.boolean(),
+          sessionId: z.string().optional(),
+          created: z.boolean().optional(),
+          errorCode: z.string().optional(),
+          errorMessage: z.string().optional(),
+        }),
+        401: authSchema401,
+        501: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('codex_direct_session_link_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    if (!handleCodexDirectSessionLinkEnsure) {
+      reply.code(501);
+      return {
+        ok: false as const,
+        errorCode: 'codex_direct_session_link_handler_unavailable' as const,
+      };
+    }
+    return await handleCodexDirectSessionLinkEnsure({
+      remoteSessionId: request.body.remoteSessionId,
+      title: request.body.title,
+      ...(request.body.directory ? { directory: request.body.directory } : {}),
+    });
   });
 
   typed.post('/connected-service-auth/session/switch', {
@@ -2398,6 +2448,7 @@ export function startDaemonControlServer({
   handleExecutionRunConnectedServiceMaterialize,
   handleExecutionRunConnectedServiceRelease,
   handleMigrateOldSessionRunners,
+  handleCodexDirectSessionLinkEnsure,
   runtimeAuthRecoveryScheduler,
   isShuttingDown,
   requestSelfRestart,
@@ -2492,6 +2543,17 @@ export function startDaemonControlServer({
   }>) => Promise<ClaudeSubscriptionAuthTokensRefreshResponse>;
   requestSelfRestart?: (request?: DaemonSelfRestartRequest) => Promise<unknown>;
   handleMigrateOldSessionRunners?: () => Promise<OldSessionRunnerMigrationResult>;
+  handleCodexDirectSessionLinkEnsure?: (input: Readonly<{
+    remoteSessionId: string;
+    title: string;
+    directory?: string;
+  }>) => Promise<Readonly<{
+    ok: boolean;
+    sessionId?: string;
+    created?: boolean;
+    errorCode?: string;
+    errorMessage?: string;
+  }>>;
 }): Promise<{ port: number; stop: () => Promise<void> }> {
   return new Promise((resolve) => {
     const app = createDaemonControlApp({
@@ -2521,6 +2583,7 @@ export function startDaemonControlServer({
       handleExecutionRunConnectedServiceMaterialize,
       handleExecutionRunConnectedServiceRelease,
       handleMigrateOldSessionRunners,
+      handleCodexDirectSessionLinkEnsure,
       runtimeAuthRecoveryScheduler,
       isShuttingDown,
       requestSelfRestart,

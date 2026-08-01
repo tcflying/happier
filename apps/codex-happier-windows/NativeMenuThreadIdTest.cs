@@ -31,6 +31,47 @@ internal static class NativeMenuThreadIdTest
         {
             var nativeMenu = NativePopupMenuLocator.WaitForAsync(new Point(102, 102), host.Id, TimeSpan.FromSeconds(4)).GetAwaiter().GetResult();
             if (nativeMenu is null) throw new InvalidOperationException("找不到跨进程测试用原生弹出菜单窗口");
+            using var sidecar = new HappierMenuSidecar(nativeMenu.Bounds);
+            using var hook = new CodexRightClickHook();
+            sidecar.Show();
+            Application.DoEvents();
+            if (sidecar.Bounds.IntersectsWith(nativeMenu.Bounds))
+            {
+                throw new InvalidOperationException("Happier 追加行遮挡了原生菜单");
+            }
+            if (!NativeMethods.IsWindowVisible(nativeMenu.Handle))
+            {
+                throw new InvalidOperationException("显示 Happier 追加行时关闭了原生菜单");
+            }
+
+            var sidecarClicked = false;
+            hook.LeftClickIntercepted = point =>
+            {
+                if (!sidecar.Bounds.Contains(point)) return false;
+                sidecarClicked = true;
+                return true;
+            };
+            NativeMethods.GetCursorPos(out var originalCursor);
+            var sidecarCenter = new Point(sidecar.Left + sidecar.Width / 2, sidecar.Top + sidecar.Height / 2);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(50);
+                NativeMethods.SetCursorPos(sidecarCenter.X, sidecarCenter.Y);
+                NativeMethods.mouse_event(NativeMethods.MouseEventLeftDown, 0, 0, 0, UIntPtr.Zero);
+                NativeMethods.mouse_event(NativeMethods.MouseEventLeftUp, 0, 0, 0, UIntPtr.Zero);
+            });
+            for (var attempt = 0; attempt < 100 && !sidecarClicked; attempt++)
+            {
+                Application.DoEvents();
+                Thread.Sleep(10);
+            }
+            NativeMethods.SetCursorPos(originalCursor.X, originalCursor.Y);
+            if (!sidecarClicked) throw new InvalidOperationException("Happier 追加行没有截获自己的点击");
+            if (!NativeMethods.IsWindowVisible(nativeMenu.Handle))
+            {
+                throw new InvalidOperationException("点击 Happier 追加行时原生菜单被提前关闭");
+            }
+            sidecar.Hide();
             var capturedThreadId = CodexNativeMenuThreadIdReader.Read(nativeMenu.Handle);
             if (!string.Equals(capturedThreadId, expectedThreadId, StringComparison.Ordinal))
             {

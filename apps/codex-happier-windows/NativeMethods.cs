@@ -15,6 +15,7 @@ internal static class NativeMethods
     internal const uint MouseEventRightUp = 0x0010;
     internal const uint MouseEventLeftDown = 0x0002;
     internal const uint MouseEventLeftUp = 0x0004;
+    internal const uint GaRoot = 2;
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Point
@@ -63,6 +64,12 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr WindowFromPoint(Point point);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

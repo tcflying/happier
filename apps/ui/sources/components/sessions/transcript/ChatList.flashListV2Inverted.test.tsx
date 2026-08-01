@@ -879,7 +879,10 @@ describe('ChatList (FlashList v2 inverted pilot)', () => {
             const nextExtraData = screen.requireCapturedFlashListProps().extraData;
             expect(fileFlashListRefHandle.clearLayoutCacheOnUpdate).toHaveBeenCalledTimes(1);
             expect(nextExtraData).toBe(previousExtraData);
-            expect(nextExtraData).toMatchObject({ selectionVersion: expect.any(Number) });
+            expect(nextExtraData).toMatchObject({
+                selectionVersion: expect.any(Number),
+                toolRouteRevision: expect.any(Number),
+            });
             expect(nextExtraData).not.toHaveProperty('rowLayoutMutationVersion');
         });
 

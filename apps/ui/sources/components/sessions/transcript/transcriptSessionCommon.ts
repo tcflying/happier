@@ -10,6 +10,7 @@ import {
     useSessionForkSupportSource,
     useSessionMessagesById,
     useSessionMessagesReducerState,
+    useSessionMessagesReducerVersion,
     useSessionWorkspacePath,
     useSetting,
 } from '@/sync/domains/state/storage';
@@ -74,6 +75,7 @@ export type TranscriptToolChromeCommon = Pick<TranscriptSessionCommonSettings,
 export type TranscriptToolRouteCommon = Readonly<{
     messagesById: Readonly<Record<string, Message>>;
     reducerState: ReducerState | null;
+    reducerVersion?: number;
 }>;
 
 export type TranscriptSessionCommon = Readonly<{
@@ -104,6 +106,7 @@ export function useTranscriptSessionCommon(sessionId: string): TranscriptSession
     const workspacePath = useSessionWorkspacePath(sessionId);
     const messagesById = useSessionMessagesById(sessionId);
     const reducerState = useSessionMessagesReducerState(sessionId);
+    const reducerVersion = useSessionMessagesReducerVersion(sessionId);
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
     const debugInformationEnabled = useSessionDebugInformationEnabled();
 
@@ -182,7 +185,8 @@ export function useTranscriptSessionCommon(sessionId: string): TranscriptSession
     const toolRoute = React.useMemo<TranscriptToolRouteCommon>(() => ({
             messagesById,
             reducerState,
-        }), [messagesById, reducerState]);
+            reducerVersion,
+        }), [messagesById, reducerState, reducerVersion]);
 
     return React.useMemo<TranscriptSessionCommon>(() => ({
         fork,

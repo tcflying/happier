@@ -75,3 +75,27 @@ export function markRunningToolsUnavailable(params: Readonly<{
         params.changed.add(messageId);
     }
 }
+
+export function markRunningStreamedToolsCompleted(params: Readonly<{
+    state: ReducerState;
+    completedAt: number;
+    changed: Set<string>;
+}>): void {
+    const completedAt = Math.trunc(params.completedAt);
+    if (!Number.isFinite(completedAt)) return;
+
+    for (const [messageId, message] of params.state.messages.entries()) {
+        const tool = message.tool;
+        if (!tool) continue;
+        if (tool.state !== 'running') continue;
+        if (tool.startedAt === null) continue;
+        if (tool.createdAt > completedAt) continue;
+        if (tool.result === undefined) continue;
+        if (tool.permission?.status === 'pending') continue;
+        if (hasLinkedSubagentSidechainActivity({ state: params.state, messageId, tool })) continue;
+
+        tool.state = 'completed';
+        tool.completedAt = completedAt;
+        params.changed.add(messageId);
+    }
+}

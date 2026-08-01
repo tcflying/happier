@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 
-import { useSessionMessagesReducerState } from '@/sync/domains/state/storage';
+import {
+    useSessionMessagesReducerState,
+    useSessionMessagesReducerVersion,
+} from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 
 afterEach(() => {
@@ -37,11 +40,15 @@ describe('useSessionMessagesReducerState', () => {
                 },
             }));
 
-            const hook = await renderHook(() => useSessionMessagesReducerState('s-1') as any, {
+            const hook = await renderHook(() => ({
+                reducerState: useSessionMessagesReducerState('s-1') as any,
+                reducerVersion: useSessionMessagesReducerVersion('s-1'),
+            }), {
                 flushOptions: { cycles: 1, turns: 4 },
             });
 
-            expect(hook.getCurrent()?.value).toBe(0);
+            expect(hook.getCurrent().reducerState?.value).toBe(0);
+            expect(hook.getCurrent().reducerVersion).toBe(0);
 
             await act(async () => {
                 reducerState.value = 1;
@@ -59,7 +66,8 @@ describe('useSessionMessagesReducerState', () => {
                 await flushHookEffects({ cycles: 1, turns: 4 });
             });
 
-            expect(hook.getCurrent()?.value).toBe(1);
+            expect(hook.getCurrent().reducerState?.value).toBe(1);
+            expect(hook.getCurrent().reducerVersion).toBe(1);
 
             await hook.unmount();
         } finally {

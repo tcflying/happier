@@ -27,6 +27,7 @@ type KeyedStreamFlushArgs<TArgs extends KeyedStreamArgs> = Readonly<{
 export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArgs>(params: Readonly<{
   provider: ACPProvider;
   createSessionForStream: (args: TArgs) => StreamedTranscriptWriterSession;
+  makeLocalId?: (args: TArgs) => string;
   initialCheckpointDelayMs?: number | null;
   checkpointIntervalMs?: number | null;
   checkpointMinChars?: number | null;
@@ -43,9 +44,11 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
     const durableCommitsRequireExplicitEnable = typeof params.durableCommitsRequireExplicitEnable === 'function'
       ? params.durableCommitsRequireExplicitEnable(args)
       : params.durableCommitsRequireExplicitEnable;
+    const makeLocalId = params.makeLocalId;
     const writer = createStreamedTranscriptWriter({
       provider: params.provider,
       session: params.createSessionForStream(args),
+      ...(makeLocalId ? { makeLocalId: () => makeLocalId(args) } : {}),
       initialCheckpointDelayMs: params.initialCheckpointDelayMs,
       checkpointIntervalMs: params.checkpointIntervalMs,
       checkpointMinChars: params.checkpointMinChars,

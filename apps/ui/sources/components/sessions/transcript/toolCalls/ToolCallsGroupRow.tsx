@@ -70,7 +70,13 @@ export const ToolCallsGroupRowWithSessionCommon = React.memo(function ToolCallsG
         return props.toolMessageIds
             .map((messageId) => byId.get(messageId) ?? null)
             .filter((message): message is ToolCallMessage => message?.kind === 'tool-call');
-    }, [props.getMessageById, props.toolMessageIds, toolMessagesRaw]);
+    }, [
+        props.getMessageById,
+        props.toolMessageIds,
+        props.toolRouteCommon.reducerState,
+        props.toolRouteCommon.reducerVersion,
+        toolMessagesRaw,
+    ]);
 
     const toolMessagesForSession = React.useMemo(() => {
         if (toolMessages.length === 0) return toolMessages;

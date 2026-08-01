@@ -692,6 +692,13 @@ export function useSessionMessagesReducerState(sessionId: string) {
   return snapshot.reducerState;
 }
 
+export function useSessionMessagesReducerVersion(sessionId: string): number {
+  return getStorage()((state) => {
+    const session = state.sessionMessages[sessionId];
+    return (session as any)?.reducerVersion ?? 0;
+  });
+}
+
 export function useSessionLatestThinkingMessageId(sessionId: string): string | null {
   return getStorage()(
     useShallow((state) => {

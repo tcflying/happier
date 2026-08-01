@@ -96,14 +96,14 @@ function mixedWorkspaceItems(): SessionListIndexItem[] {
     ];
 }
 
-function pinnedItems(): SessionListIndexItem[] {
+function pinnedItems(storageKind: 'persisted' | 'direct' = 'persisted'): SessionListIndexItem[] {
     return [
         { type: 'header', title: 'Pinned', headerKind: 'pinned', groupKey: PINNED_GROUP_KEY_V1 },
         {
             type: 'session',
             sessionId: 'pinned-a',
             serverId: 'server-a',
-            storageKind: 'persisted',
+            storageKind,
             groupKey: PINNED_GROUP_KEY_V1,
             groupKind: 'pinned',
             pinned: true,
@@ -112,7 +112,7 @@ function pinnedItems(): SessionListIndexItem[] {
             type: 'session',
             sessionId: 'pinned-b',
             serverId: 'server-a',
-            storageKind: 'persisted',
+            storageKind,
             groupKey: PINNED_GROUP_KEY_V1,
             groupKind: 'pinned',
             pinned: true,
@@ -254,6 +254,40 @@ describe('resolveSessionListInstruction', () => {
             kind: 'line',
             targetId: treeRowId.session('server-a', 'pinned-b'),
             edge: 'top',
+            depth: 0,
+        });
+    });
+
+    it.each([
+        { name: 'session folders are disabled', storageKind: 'persisted' as const, foldersFeatureEnabled: false },
+        { name: 'the pinned session is direct', storageKind: 'direct' as const, foldersFeatureEnabled: true },
+    ])('keeps pinned reordering available when $name', ({ storageKind, foldersFeatureEnabled }) => {
+        const tree = buildSessionListTreeRows({
+            items: pinnedItems(storageKind),
+            rowBoundsById: new Map<string, WindowBounds>([
+                [treeRowId.session('server-a', 'pinned-a'), bounds(40)],
+                [treeRowId.session('server-a', 'pinned-b'), bounds(80)],
+            ]),
+        });
+
+        const result = resolveSessionListInstruction({
+            tree,
+            source: buildSessionListDragSource({ tree, sourceRowId: treeRowId.session('server-a', 'pinned-a') }),
+            pointer: pointer(118),
+            foldersFeatureEnabled,
+        });
+
+        expect(result.instruction).toEqual({
+            kind: 'reorder-after',
+            targetId: treeRowId.session('server-a', 'pinned-b'),
+            containerId: PINNED_GROUP_KEY_V1,
+            parentId: null,
+            depth: 0,
+        });
+        expect(result.visual).toEqual({
+            kind: 'line',
+            targetId: treeRowId.session('server-a', 'pinned-b'),
+            edge: 'bottom',
             depth: 0,
         });
     });

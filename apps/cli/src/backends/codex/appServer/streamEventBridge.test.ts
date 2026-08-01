@@ -332,6 +332,24 @@ describe('createCodexAppServerStreamEventBridge', () => {
         ]);
 
         expect(
+            bridge.onNotification({
+                method: 'item/commandExecution/outputDelta',
+                params: {
+                    threadId: 'thread_1',
+                    turnId: 'turn_1',
+                    itemId: 'cmd_1',
+                    delta: 'first line\n',
+                },
+            }),
+        ).toEqual([
+            {
+                type: 'tool-output-delta',
+                callId: 'cmd_1',
+                output: { _stream: true, stdoutChunk: 'first line\n' },
+            },
+        ]);
+
+        expect(
             bridge.onServerRequest({
                 method: 'item/commandExecution/requestApproval',
                 params: {
@@ -494,6 +512,24 @@ describe('createCodexAppServerStreamEventBridge', () => {
 
         expect(
             bridge.onNotification({
+                method: 'item/mcpToolCall/progress',
+                params: {
+                    threadId: 'thread_1',
+                    turnId: 'turn_1',
+                    itemId: 'tool_1',
+                    message: 'page loaded',
+                },
+            }),
+        ).toEqual([
+            {
+                type: 'tool-output-delta',
+                callId: 'tool_1',
+                output: { _stream: true, stdoutChunk: 'page loaded' },
+            },
+        ]);
+
+        expect(
+            bridge.onNotification({
                 method: 'item/started',
                 params: {
                     item: {
@@ -617,6 +653,24 @@ describe('createCodexAppServerStreamEventBridge', () => {
                     auto_approved: true,
                     changes,
                 },
+            },
+        ]);
+
+        expect(
+            bridge.onNotification({
+                method: 'item/fileChange/outputDelta',
+                params: {
+                    threadId: 'thread_1',
+                    turnId: 'turn_1',
+                    itemId: 'patch_1',
+                    delta: 'patching\n',
+                },
+            }),
+        ).toEqual([
+            {
+                type: 'tool-output-delta',
+                callId: 'patch_1',
+                output: { _stream: true, stdoutChunk: 'patching\n' },
             },
         ]);
 

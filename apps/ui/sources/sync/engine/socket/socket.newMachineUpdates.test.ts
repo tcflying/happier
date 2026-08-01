@@ -570,7 +570,7 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         });
     });
 
-    it('keeps live stream segments out of provider-owned direct session transcripts', async () => {
+    it('applies live stream segments to provider-owned direct session transcripts', async () => {
         const sessionId = 'direct_stream_session';
         markSessionVisible(sessionId);
         storage.getState().applySessions([{
@@ -602,7 +602,12 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
             applyMessages,
         });
 
-        expect(applyMessages).not.toHaveBeenCalled();
+        expect(applyMessages).toHaveBeenCalledTimes(1);
+        expect(applyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
+            localId: 'segment-direct',
+            role: 'agent',
+            content: [{ type: 'text', text: 'provider-owned final reply' }],
+        });
     });
 
     it('drops hidden non-coalesced encrypted stream segments before decrypting', async () => {
@@ -862,7 +867,7 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         await vi.runAllTimersAsync();
     });
 
-    it('drops a queued live segment when the session becomes provider-owned before flush', async () => {
+    it('keeps a queued live segment when the session becomes provider-owned before flush', async () => {
         vi.useFakeTimers();
         const sessionId = 'stream_to_direct_session';
         enableTranscriptStreamingCoalescingForTest();
@@ -912,7 +917,11 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
 
         await vi.runAllTimersAsync();
 
-        expect(applyMessages).toHaveBeenCalledTimes(1);
+        expect(applyMessages).toHaveBeenCalledTimes(2);
+        expect(applyMessages.mock.calls[1]?.[1]?.[0]).toMatchObject({
+            localId: 'segment-queued-before-direct',
+            content: [{ type: 'text', text: 'queued before direct' }],
+        });
     });
 
     it('requires encryption before applying encrypted stream segments', async () => {

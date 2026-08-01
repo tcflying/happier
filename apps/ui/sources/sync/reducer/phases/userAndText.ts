@@ -7,7 +7,10 @@ import { mergeThinkingText, normalizeThinkingChunk } from '../helpers/thinkingTe
 import { drainAndApplyOrphanToolResultsToMessage } from '../helpers/drainAndApplyOrphanToolResultsToMessage';
 import { readStreamSegmentMetaV1 } from '../helpers/streamSegmentMeta';
 import { upsertStreamSegmentSnapshotMessage } from '../helpers/upsertStreamSegmentSnapshotMessage';
-import { markRunningToolsUnavailable } from '../helpers/markRunningToolsUnavailable';
+import {
+    markRunningStreamedToolsCompleted,
+    markRunningToolsUnavailable,
+} from '../helpers/markRunningToolsUnavailable';
 import { hasSyntheticNoResponseMeta } from '../../domains/messages/syntheticNoResponseMessageMeta';
 import { normalizeTranscriptSeq, transcriptBlockIndexFromContentIndex } from '../../domains/messages/transcriptOrdering';
 
@@ -142,6 +145,13 @@ export function runUserAndTextPhase(params: Readonly<{
 
                         if (upsert.accepted && hasVisibleText) {
                             setThinkingCursor(null, 'agent-text-stream-segment');
+                        }
+                        if (streamSegmentMeta?.segmentState === 'complete') {
+                            markRunningStreamedToolsCompleted({
+                                state,
+                                completedAt: streamSegmentMeta.updatedAtMs ?? msg.createdAt,
+                                changed,
+                            });
                         }
                         continue;
 	                    }

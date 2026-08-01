@@ -877,9 +877,6 @@ function hasLiveTranscriptConsumerForDeferredTranscriptStreamSegments(
 
 async function applyDeferredTranscriptStreamSegment(entry: DeferredTranscriptStreamSegmentEntry): Promise<void> {
     if (!entry.shouldContinue()) return;
-    if (readDirectSessionLink(entry.getSession(entry.update.sessionId)?.metadata)) {
-        return;
-    }
     const hasLiveTranscriptConsumer = isSessionFullContentConsumerActiveForRealtime(
         entry.update.sessionId,
         entry.sourceServerId,
@@ -896,10 +893,7 @@ async function applyDeferredTranscriptStreamSegment(entry: DeferredTranscriptStr
         getSessionEncryption: entry.getSessionEncryption,
         getSession: entry.getSession,
         applyMessages: (sessionId, messages) => socketMessageApplyCoalescer.enqueue(sessionId, messages, {
-            shouldContinue: () => (
-                entry.shouldContinue()
-                && !readDirectSessionLink(entry.getSession(sessionId)?.metadata)
-            ),
+            shouldContinue: entry.shouldContinue,
         }),
         isSessionActivelyViewed: () => true,
         skipWhenHidden: false,
@@ -2042,10 +2036,6 @@ export function handleEphemeralSocketUpdate(params: {
         if (!shouldContinue()) return Promise.resolve();
         return Promise.resolve(updateDirectSessionTranscript?.(updateData));
     } else if (updateData.type === 'transcript-stream-segment') {
-        if (readDirectSessionLink(getSession(updateData.sessionId)?.metadata)) {
-            dropDeferredTranscriptStreamSegments(updateData.sessionId);
-            return Promise.resolve();
-        }
         const needsLiveTranscript = isSessionFullContentConsumerActiveForRealtime(updateData.sessionId, sourceServerId);
         const entry: DeferredTranscriptStreamSegmentEntry = {
             update: updateData,

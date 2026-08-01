@@ -64,6 +64,7 @@ import {
     createCodexAppServerStreamEventBridge,
     type CodexAppServerStreamUpdate,
 } from './streamEventBridge';
+import { buildCodexStreamSegmentLocalIdFromStreamKey } from './streamedTranscriptIdentity';
 import type { AgentMessage } from '@/agent';
 import { resolveSessionMediaDedupeKey } from '@/session/sessionMedia/sessionMediaDedupeKey';
 import {
@@ -1180,11 +1181,30 @@ export function createCodexAppServerRuntime(params: Readonly<{
     }>({
         provider: 'codex',
         createSessionForStream: () => params.transcriptSession ?? params.session,
+        makeLocalId: ({ streamKey }) => buildCodexStreamSegmentLocalIdFromStreamKey(streamKey),
         initialCheckpointDelayMs: CODEX_TRANSCRIPT_INITIAL_CHECKPOINT_DELAY_MS,
     });
     const assistantTextByItemId = new Map<string, string>();
     const reasoningTextByItemId = new Map<string, string>();
     const latestAssistantItemIdByStreamScope = new Map<string, string>();
+    const toolOutputDeltaSequenceByCallId = new Map<string, number>();
+    const activeStreamToolOutputSidechainByCallId = new Map<string, string | null>();
+    const activeStreamToolCallsByCallId = new Map<string, Readonly<{
+        name: string;
+        sidechainId: string | null;
+    }>>();
+
+    const sendCommittedTranscriptMessage = async (
+        body: ACPMessageData,
+        opts: { localId: string; meta?: Record<string, unknown> },
+    ): Promise<void> => {
+        const transcriptSession = params.transcriptSession;
+        if (typeof transcriptSession?.sendAgentMessageCommitted === 'function') {
+            await transcriptSession.sendAgentMessageCommitted('codex', body, opts);
+            return;
+        }
+        await params.session.sendAgentMessageCommitted('codex', body, opts);
+    };
 
     const readLiveAccountIdentity = async (): Promise<CodexLiveAccountIdentity> => {
         const client = await ensureClient();
@@ -2038,8 +2058,34 @@ export function createCodexAppServerRuntime(params: Readonly<{
             return;
         }
 
+        if (update.type === 'tool-output-delta') {
+            activeStreamToolOutputSidechainByCallId.set(update.callId, context.sidechainId);
+            const sequence = (toolOutputDeltaSequenceByCallId.get(update.callId) ?? 0) + 1;
+            toolOutputDeltaSequenceByCallId.set(update.callId, sequence);
+            const now = Date.now();
+            const id = `codex-tool-output:${update.callId}`;
+            const body: ACPMessageData = {
+                type: 'tool-result',
+                callId: update.callId,
+                output: update.output,
+                id,
+                ...(context.sidechainId ? { sidechainId: context.sidechainId } : {}),
+            };
+            const transcriptSession = params.transcriptSession ?? params.session;
+            transcriptSession.sendAgentMessageEphemeral?.('codex', body, {
+                localId: `${id}:${sequence}`,
+                createdAt: now,
+                updatedAt: now,
+            });
+            return;
+        }
+
         if (update.type === 'tool-call') {
             await flushItemTranscriptBoundary(context.sidechainId);
+            activeStreamToolCallsByCallId.set(update.callId, {
+                name: update.name,
+                sidechainId: context.sidechainId,
+            });
             if (update.toolKind === 'mcp' && isChangeTitleToolNameAlias(update.name)) {
                 const title = readHappierTitleToolTitle(update.input);
                 if (title) {
@@ -2059,6 +2105,22 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     });
                 }
             }
+            const toolCallId = `codex-tool-call:${update.callId}`;
+            const toolCallBody: ACPMessageData = {
+                type: 'tool-call',
+                name: update.name,
+                callId: update.callId,
+                input: update.input,
+                id: toolCallId,
+                ...(context.sidechainId ? { sidechainId: context.sidechainId } : {}),
+            };
+            const transcriptSession = params.transcriptSession ?? params.session;
+            const now = Date.now();
+            transcriptSession.sendAgentMessageEphemeral?.('codex', toolCallBody, {
+                localId: toolCallId,
+                createdAt: now,
+                updatedAt: now,
+            });
             if (context.sidechainId) {
                 params.session.sendAgentMessage('codex', {
                     type: 'tool-call',
@@ -2069,18 +2131,18 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     sidechainId: context.sidechainId,
                 });
             } else {
-                params.session.sendCodexMessage({
-                    type: 'tool-call',
-                    name: update.name,
-                    callId: update.callId,
-                    input: update.input,
-                    id: randomUUID(),
-                });
+                await sendCommittedTranscriptMessage(
+                    toolCallBody,
+                    { localId: toolCallId },
+                );
             }
             return;
         }
 
         if (update.type === 'tool-result') {
+            activeStreamToolCallsByCallId.delete(update.callId);
+            activeStreamToolOutputSidechainByCallId.delete(update.callId);
+            toolOutputDeltaSequenceByCallId.delete(update.callId);
             const completedTitleName = pendingHappierTitleToolNamesByCallId.get(update.callId) ?? null;
             pendingHappierTitleToolNamesByCallId.delete(update.callId);
             if (context.sidechainId) {
@@ -2092,12 +2154,16 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     sidechainId: context.sidechainId,
                 });
             } else {
-                params.session.sendCodexMessage({
-                    type: 'tool-call-result',
-                    callId: update.callId,
-                    output: update.output,
-                    id: randomUUID(),
-                });
+                const toolResultId = `codex-tool-result:${update.callId}`;
+                await sendCommittedTranscriptMessage(
+                    {
+                        type: 'tool-result',
+                        callId: update.callId,
+                        output: update.output,
+                        id: toolResultId,
+                    },
+                    { localId: toolResultId },
+                );
             }
             if (completedTitleName && didHappierTitleToolSucceed(update.output) && threadId && !context.sidechainId) {
                 try {
@@ -2114,6 +2180,60 @@ export function createCodexAppServerRuntime(params: Readonly<{
     };
 
     const flushStreamState = async (reason: 'turn-end' | 'abort'): Promise<void> => {
+        const danglingToolCalls = [...activeStreamToolCallsByCallId.entries()];
+        const danglingToolCallIds = new Set(danglingToolCalls.map(([callId]) => callId));
+        const orphanToolOutputs = [...activeStreamToolOutputSidechainByCallId.entries()]
+            .filter(([callId]) => !danglingToolCallIds.has(callId));
+        activeStreamToolCallsByCallId.clear();
+        activeStreamToolOutputSidechainByCallId.clear();
+        for (const [callId, tool] of danglingToolCalls) {
+            const output = {
+                status: reason === 'turn-end' ? 'completed' : 'cancelled',
+                synthetic: true,
+            };
+            if (tool.sidechainId) {
+                params.session.sendAgentMessage('codex', {
+                    type: 'tool-call-result',
+                    callId,
+                    output,
+                    id: randomUUID(),
+                    sidechainId: tool.sidechainId,
+                });
+                continue;
+            }
+            const toolResultId = `codex-tool-result:${callId}`;
+            await sendCommittedTranscriptMessage(
+                {
+                    type: 'tool-result',
+                    callId,
+                    output,
+                    id: toolResultId,
+                },
+                { localId: toolResultId },
+            );
+        }
+        for (const [callId, sidechainId] of orphanToolOutputs) {
+            const now = Date.now();
+            const id = `codex-tool-output:${callId}`;
+            (params.transcriptSession ?? params.session).sendAgentMessageEphemeral?.(
+                'codex',
+                {
+                    type: 'tool-result',
+                    callId,
+                    output: {
+                        status: reason === 'turn-end' ? 'completed' : 'cancelled',
+                        synthetic: true,
+                    },
+                    id,
+                    ...(sidechainId ? { sidechainId } : {}),
+                },
+                {
+                    localId: `${id}:complete`,
+                    createdAt: now,
+                    updatedAt: now,
+                },
+            );
+        }
         assistantTextByItemId.clear();
         reasoningTextByItemId.clear();
         latestAssistantItemIdByStreamScope.clear();
@@ -2121,6 +2241,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         nativeReviewCompletionTextByStreamScope.clear();
         rawAssistantFinalByItemKey.clear();
         pendingHappierTitleToolNamesByCallId.clear();
+        toolOutputDeltaSequenceByCallId.clear();
         await itemTranscriptBridge.flushAll({
             reason,
             ...(reason === 'abort' ? { interruptedReason: 'app-server-turn-interrupted' } : {}),
@@ -3063,9 +3184,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         });
                     });
                     registerActiveTurnStreamNotificationHandler(client, 'item/agentMessage/delta');
+                    registerActiveTurnStreamNotificationHandler(client, 'item/plan/delta');
                     registerActiveTurnStreamNotificationHandler(client, 'turn/diff/updated');
                     registerActiveTurnStreamNotificationHandler(client, 'item/reasoning/summaryTextDelta');
                     registerActiveTurnStreamNotificationHandler(client, 'item/reasoning/textDelta');
+                    registerActiveTurnStreamNotificationHandler(client, 'item/commandExecution/outputDelta');
+                    registerActiveTurnStreamNotificationHandler(client, 'item/fileChange/outputDelta');
+                    registerActiveTurnStreamNotificationHandler(client, 'item/mcpToolCall/progress');
                     registerActiveTurnStreamNotificationHandler(client, 'item/started');
                     registerActiveTurnStreamNotificationHandler(client, 'item/completed');
                     registerActiveTurnStreamNotificationHandler(client, 'rawResponseItem/completed');

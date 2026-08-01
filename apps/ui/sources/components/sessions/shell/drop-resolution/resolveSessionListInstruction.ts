@@ -35,6 +35,15 @@ function resolveEligibilityBlock(params: Readonly<{
     return 'unsupported-item';
 }
 
+function isSameContainerReorder(
+    source: SessionListTreeDragSource,
+    result: TreeDropResult,
+): boolean {
+    const instruction = result.instruction;
+    return (instruction.kind === 'reorder-before' || instruction.kind === 'reorder-after')
+        && instruction.containerId === source.metadata.containerId;
+}
+
 export function resolveSessionListInstruction(params: Readonly<{
     tree: SessionListTreeModel;
     source: SessionListTreeDragSource;
@@ -43,12 +52,6 @@ export function resolveSessionListInstruction(params: Readonly<{
     folderSortMode?: SessionListFolderSortMode;
     maxDepth?: number;
 }>): SessionListTreeDropResult {
-    const eligibilityBlock = resolveEligibilityBlock({
-        source: params.source,
-        foldersFeatureEnabled: params.foldersFeatureEnabled,
-    });
-    if (eligibilityBlock) return blocked(eligibilityBlock);
-
     const resolved: TreeDropResult = resolveTreeInstruction({
         rows: params.tree.rows,
         dropZones: params.tree.dropZones,
@@ -83,10 +86,20 @@ export function resolveSessionListInstruction(params: Readonly<{
         },
     });
 
-    return resolveSessionListFolderSortModeDropResult({
+    const resolvedForSortMode = resolveSessionListFolderSortModeDropResult({
         tree: params.tree,
         source: params.source,
         result: resolved,
         folderSortMode: params.folderSortMode ?? DEFAULT_SESSION_LIST_FOLDER_SORT_MODE,
     });
+
+    if (!isSameContainerReorder(params.source, resolvedForSortMode)) {
+        const eligibilityBlock = resolveEligibilityBlock({
+            source: params.source,
+            foldersFeatureEnabled: params.foldersFeatureEnabled,
+        });
+        if (eligibilityBlock) return blocked(eligibilityBlock);
+    }
+
+    return resolvedForSortMode;
 }

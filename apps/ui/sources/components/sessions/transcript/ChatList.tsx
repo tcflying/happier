@@ -2839,9 +2839,11 @@ const ChatListInternal = React.memo((props: {
     // tail while sync silently catches up, which is exactly when the surface must show.
     const isCatchingUpNewer = useSessionCatchingUpNewer(props.sessionId);
     const showCatchUpOverlay = isCatchingUpNewer;
+    const toolRouteRevision = props.toolRouteCommon.reducerVersion ?? 0;
     const transcriptListExtraData = React.useMemo(() => ({
         selectionVersion: transcriptMessageSelection.selectionVersion,
-    }), [transcriptMessageSelection.selectionVersion]);
+        toolRouteRevision,
+    }), [toolRouteRevision, transcriptMessageSelection.selectionVersion]);
 
     // N3.1: the inverted pilot rides the flash_v2 machinery with orientation as an
     // orthogonal axis — every `=== 'flash_v2'` gate below stays authoritative; the

@@ -9,11 +9,34 @@ namespace HappierCodexBridge;
 internal static class Program
 {
     [STAThread]
-    private static async Task<int> Main(string[] args)
+    private static int Main(string[] args)
+        => RunAsync(args).GetAwaiter().GetResult();
+
+    private static async Task<int> RunAsync(string[] args)
     {
         if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
         {
             return SelfTests.Run();
+        }
+
+        if (args.Contains("--native-menu-id-test", StringComparer.OrdinalIgnoreCase))
+        {
+            return NativeMenuThreadIdTest.Run();
+        }
+
+        if (args.Contains("--native-menu-id-test-host", StringComparer.OrdinalIgnoreCase))
+        {
+            return NativeMenuThreadIdTest.RunHost(args);
+        }
+
+        if (args.Contains("--menu-dismiss-test", StringComparer.OrdinalIgnoreCase))
+        {
+            return BridgeMenuDismissTest.Run();
+        }
+
+        if (args.Contains("--right-click-suppression-test", StringComparer.OrdinalIgnoreCase))
+        {
+            return RightClickSuppressionTest.Run();
         }
 
         if (args.Contains("--install", StringComparer.OrdinalIgnoreCase))
@@ -49,6 +72,7 @@ internal static class Program
 
         var idIndex = Array.FindIndex(args, value => string.Equals(value, "--import-thread", StringComparison.OrdinalIgnoreCase));
         var titleIndex = Array.FindIndex(args, value => string.Equals(value, "--import-title", StringComparison.OrdinalIgnoreCase));
+        var displayTitleIndex = Array.FindIndex(args, value => string.Equals(value, "--import-display-title", StringComparison.OrdinalIgnoreCase));
         if ((idIndex >= 0 && idIndex + 1 < args.Length) || (titleIndex >= 0 && titleIndex + 1 < args.Length))
         {
             var codex = new CodexThreadStore();
@@ -57,6 +81,10 @@ internal static class Program
             {
                 Console.Error.WriteLine("THREAD_NOT_FOUND");
                 return 3;
+            }
+            if (displayTitleIndex >= 0 && displayTitleIndex + 1 < args.Length)
+            {
+                thread = thread with { Name = args[displayTitleIndex + 1].Trim() };
             }
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
             var result = await new HappierDaemonClient(http).LinkAsync(thread, CancellationToken.None);

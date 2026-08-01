@@ -17,8 +17,14 @@ internal static class SelfTests
           """) is { HttpPort: 4567, ControlToken: "secret", LastHeartbeatAt: 99 }, "daemon state 应正确解析");
         Require(DaemonStateLocator.TryParse("C:\\daemon.state.json", "{}") is null, "缺少认证字段的 state 必须拒绝");
         Require(CodexThreadStore.SelectDisplayName(null, " 用户标题 ", "预览", "id") == "用户标题", "线程标题应作为 UI 显示名回退");
+        Require(
+            CodexNativeMenuThreadIdReader.ParseThreadId("019fb8c7-3c74-71b0-8198-8c357f82c6e1") == "019fb8c7-3c74-71b0-8198-8c357f82c6e1",
+            "应解析纯 Codex 会话 ID");
+        Require(
+            CodexNativeMenuThreadIdReader.ParseThreadId("codex://threads/019FB8C7-3C74-71B0-8198-8C357F82C6E1") == "019fb8c7-3c74-71b0-8198-8c357f82c6e1",
+            "应解析 Codex 深度链接并规范化大小写");
 
-        Console.WriteLine("SELF_TESTS=7/7");
+        Console.WriteLine("SELF_TESTS=9/9");
         return 0;
     }
 

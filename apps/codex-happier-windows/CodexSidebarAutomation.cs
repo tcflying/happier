@@ -7,15 +7,19 @@ namespace HappierCodexBridge;
 internal static class CodexSidebarAutomation
 {
     public static string? FindTitleAtPoint(DrawingPoint point)
+        => FindTargetAtPoint(point)?.Title;
+
+    public static CodexSidebarTarget? FindTargetAtPoint(DrawingPoint point)
     {
         try
         {
             var current = AutomationElement.FromPoint(new System.Windows.Point(point.X, point.Y));
-            if (!IsCodexProcess(current.Current.ProcessId)) return null;
+            var processId = current.Current.ProcessId;
+            if (!IsCodexProcess(processId)) return null;
             for (var depth = 0; current is not null && depth < 12; depth++)
             {
                 var name = current.Current.Name?.Trim();
-                if (!string.IsNullOrWhiteSpace(name) && name.Length <= 512) return name;
+                if (!string.IsNullOrWhiteSpace(name) && name.Length <= 512) return new CodexSidebarTarget(name, processId);
                 current = TreeWalker.ControlViewWalker.GetParent(current);
             }
         }

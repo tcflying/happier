@@ -12,7 +12,8 @@ internal sealed class BridgeApplicationContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly CodexRightClickHook _hook;
     private readonly Control _dispatcher = new();
-    private bool _handlingClick;
+    private ContextMenuStrip? _bridgeMenu;
+    private int _allowNextNativeRightClick;
 
     public BridgeApplicationContext()
     {
@@ -29,57 +30,109 @@ internal sealed class BridgeApplicationContext : ApplicationContext
             ContextMenuStrip = trayMenu,
         };
         _hook = new CodexRightClickHook();
-        _hook.RightClicked += point =>
+        _hook.PointerPressed += point =>
         {
-            var title = CodexSidebarAutomation.FindTitleAtPoint(point);
-            if (title is null)
+            var menu = _bridgeMenu;
+            if (menu is null || !menu.Visible || menu.Bounds.Contains(point)) return;
+            _dispatcher.BeginInvoke(() =>
             {
-                BridgeDiagnostics.Write("right_click_ignored");
-                return;
+                if (ReferenceEquals(_bridgeMenu, menu)) menu.Close();
+            });
+        };
+        _hook.RightClickIntercepted = point =>
+        {
+            if (Interlocked.Exchange(ref _allowNextNativeRightClick, 0) == 1)
+            {
+                BridgeDiagnostics.Write("native_menu_replayed");
+                return false;
             }
-            BridgeDiagnostics.Write("right_click_dispatched");
-            _ = Task.Run(() => HandleRightClickAsync(point, title));
+            try
+            {
+                var target = CodexSidebarAutomation.FindTargetAtPoint(point);
+                if (target is null)
+                {
+                    BridgeDiagnostics.Write("right_click_ignored");
+                    return false;
+                }
+                var pending = new PendingCodexImport(target.Title, target.ProcessId, point);
+                _dispatcher.BeginInvoke(() => ShowBridgeMenu(pending));
+                BridgeDiagnostics.Write("bridge_menu_scheduled");
+                return true;
+            }
+            catch (Exception error)
+            {
+                BridgeDiagnostics.Write("right_click_failed", error.Message);
+                return false;
+            }
         };
         BridgeDiagnostics.Write("started");
         ShowBalloon("Happier Codex Bridge 已启动", "在 Codex 左侧会话上点鼠标右键，即可导入到 Happier 直连。");
     }
 
-    private async Task HandleRightClickAsync(System.Drawing.Point point, string title)
+    private void ShowBridgeMenu(PendingCodexImport target)
     {
-        if (_handlingClick) return;
-        _handlingClick = true;
+        _bridgeMenu?.Close();
+        var menu = new ContextMenuStrip();
+        _bridgeMenu = menu;
+        menu.Items.Add("导入到 Happier 直连", null, (_, _) =>
+        {
+            menu.Close();
+            _ = CaptureAndImportAsync(target);
+        });
+        menu.Closed += (_, _) => _dispatcher.BeginInvoke(() =>
+        {
+            if (ReferenceEquals(_bridgeMenu, menu)) _bridgeMenu = null;
+            menu.Dispose();
+        });
+        menu.Show(target.Point);
+        BridgeDiagnostics.Write("bridge_menu_shown");
+    }
+
+    private async Task CaptureAndImportAsync(PendingCodexImport target)
+    {
         try
         {
-            var thread = ThreadMatcher.FindByTitle(_codex.ListRecent(), title);
-            if (thread is null)
+            await Task.Delay(125);
+            ReplayNativeRightClick(target.Point);
+            var nativeMenu = await NativePopupMenuLocator.WaitForAsync(target.Point, target.ProcessId, TimeSpan.FromSeconds(2));
+            if (nativeMenu is null)
             {
-                BridgeDiagnostics.Write("thread_not_resolved");
+                BridgeDiagnostics.Write("native_menu_not_found");
+                ShowBalloon("无法读取 Codex 会话 ID", "没有找到 Codex 原生右键菜单。", ToolTipIcon.Error);
                 return;
             }
-            BridgeDiagnostics.Write("thread_resolved");
-            await Task.Delay(120);
-            _dispatcher.BeginInvoke(() => ShowImportMenu(point, thread));
+            var threadId = CodexNativeMenuThreadIdReader.Read(nativeMenu.Handle);
+            BridgeDiagnostics.Write("thread_id_captured");
+            _ = Task.Run(() => ImportByIdAsync(threadId, target.Title));
         }
         catch (Exception error)
         {
-            BridgeDiagnostics.Write("right_click_failed", error.Message);
-            ShowBalloon("无法读取 Codex 会话", error.Message, ToolTipIcon.Error);
-        }
-        finally
-        {
-            _handlingClick = false;
+            BridgeDiagnostics.Write("thread_id_capture_failed", error.Message);
+            ShowBalloon("无法读取 Codex 会话 ID", error.Message, ToolTipIcon.Error);
         }
     }
 
-    private void ShowImportMenu(System.Drawing.Point point, CodexThread thread)
+    private void ReplayNativeRightClick(System.Drawing.Point point)
     {
-        BridgeDiagnostics.Write("menu_shown");
-        var menu = new ContextMenuStrip();
-        var item = menu.Items.Add("导入到 Happier 直连");
-        item.ToolTipText = thread.Name;
-        item.Click += async (_, _) => await ImportAsync(thread);
-        menu.Closed += (_, _) => menu.Dispose();
-        menu.Show(point);
+        Interlocked.Exchange(ref _allowNextNativeRightClick, 1);
+        NativeMethods.SetCursorPos(point.X, point.Y);
+        NativeMethods.mouse_event(NativeMethods.MouseEventRightDown, 0, 0, 0, UIntPtr.Zero);
+        NativeMethods.mouse_event(NativeMethods.MouseEventRightUp, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    private async Task ImportByIdAsync(string threadId, string displayTitle)
+    {
+        try
+        {
+            var source = _codex.FindById(threadId)
+                ?? throw new InvalidOperationException($"Codex 数据库里找不到会话 {threadId}");
+            await ImportAsync(source with { Name = displayTitle });
+        }
+        catch (Exception error)
+        {
+            BridgeDiagnostics.Write("import_by_id_failed", error.Message);
+            ShowBalloon("导入失败", error.Message, ToolTipIcon.Error);
+        }
     }
 
     private async Task ImportAsync(CodexThread thread)
@@ -88,11 +141,15 @@ internal sealed class BridgeApplicationContext : ApplicationContext
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             var result = await _happier.LinkAsync(thread, timeout.Token);
+            BridgeDiagnostics.Write(
+                "import_succeeded",
+                $"threadId={thread.Id};sessionId={result.SessionId};created={result.Created};title={thread.Name}");
             ShowBalloon(result.Created ? "已导入到 Happier" : "Happier 已有该会话", thread.Name);
             HappierDaemonClient.OpenSession(result.SessionId!);
         }
         catch (Exception error)
         {
+            BridgeDiagnostics.Write("import_failed", error.Message);
             ShowBalloon("导入失败", error.Message, ToolTipIcon.Error);
         }
     }
@@ -126,6 +183,7 @@ internal sealed class BridgeApplicationContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         _hook.Dispose();
+        _bridgeMenu?.Dispose();
         _tray.Visible = false;
         _tray.Dispose();
         _dispatcher.Dispose();

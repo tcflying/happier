@@ -7,6 +7,19 @@ internal sealed record CodexThread(
     string? Cwd,
     long UpdatedAt);
 
+internal sealed record CodexSidebarTarget(
+    string Title,
+    int ProcessId);
+
+internal sealed record NativePopupMenu(
+    IntPtr Handle,
+    System.Drawing.Rectangle Bounds);
+
+internal sealed record PendingCodexImport(
+    string Title,
+    int ProcessId,
+    System.Drawing.Point Point);
+
 internal sealed record VisibleThreadRow(
     CodexThread Thread,
     System.Windows.Rect Bounds);

@@ -74,6 +74,8 @@ import type {
   TranscriptToolRouteCommon,
 } from '@/components/sessions/transcript/transcriptSessionCommon';
 import { useTranscriptSessionCommon } from '@/components/sessions/transcript/transcriptSessionCommon';
+import { stripMarkdownImagesBackedBySessionMedia } from '@/components/sessions/transcript/stripMarkdownImagesBackedBySessionMedia';
+import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 
 type StreamSegmentStateForRendering = 'streaming' | 'complete' | 'interrupted';
 const TRANSCRIPT_SELECTION_CHECKBOX_ANCHOR_TOP = 0;
@@ -389,8 +391,10 @@ function UserTextBlock(props: {
   const isStructuredOnly = structuredNode != null;
 
   const parsedSessionMediaMeta = React.useMemo(
-    () => parseSessionMediaMessageMeta(props.message.meta),
-    [props.message.meta],
+    () => parseSessionMediaMessageMeta(props.message.meta, {
+      allowTrustedDirectMedia: readDirectSessionLink(props.metadata) !== null,
+    }),
+    [props.message.meta, props.metadata],
   );
   const attachmentsMeta = parsedSessionMediaMeta.legacyAttachments;
   const sessionMediaInlineImages = parsedSessionMediaMeta.inlineImages;
@@ -426,7 +430,11 @@ function UserTextBlock(props: {
     if (attachmentsMeta) return stripLegacyAttachmentsBlock(props.message.text);
     return props.message.text;
   }, [attachmentsMeta, isVoiceAgentTurn, props.message.displayText, props.message.text, unsupportedContentText]);
-  const renderedMarkdownText = markdownText ?? props.message.displayText ?? props.message.text;
+  const rawRenderedMarkdownText = markdownText ?? props.message.displayText ?? props.message.text;
+  const renderedMarkdownText = React.useMemo(
+    () => stripMarkdownImagesBackedBySessionMedia(rawRenderedMarkdownText, sessionMediaInlineImages),
+    [rawRenderedMarkdownText, sessionMediaInlineImages],
+  );
 
   const linkedWorkspaceFiles = React.useMemo(
     () => extractWorkspaceFileMentions(renderedMarkdownText),
@@ -780,8 +788,10 @@ function AgentTextBlock(props: {
   });
   const isStructuredOnly = structuredNode != null;
   const parsedSessionMediaMeta = React.useMemo(
-    () => parseSessionMediaMessageMeta(props.message.meta),
-    [props.message.meta],
+    () => parseSessionMediaMessageMeta(props.message.meta, {
+      allowTrustedDirectMedia: readDirectSessionLink(props.metadata) !== null,
+    }),
+    [props.message.meta, props.metadata],
   );
   const sessionMediaInlineImages = parsedSessionMediaMeta.inlineImages;
   const handleOpenMediaPath = React.useCallback((filePath: string) => {
@@ -809,6 +819,10 @@ function AgentTextBlock(props: {
   const markdown = (!unsupportedContentMeta && props.message.isThinking)
     ? unwrapLegacyThinkingWrapper(markdownSource)
     : markdownSource;
+  const renderedMarkdown = React.useMemo(
+    () => stripMarkdownImagesBackedBySessionMedia(markdown, sessionMediaInlineImages),
+    [markdown, sessionMediaInlineImages],
+  );
   const deriveThinkingSummary = (text: string) => {
     const trimmed = String(text ?? '').trim();
     if (!trimmed) return '';
@@ -985,8 +999,8 @@ function AgentTextBlock(props: {
     : null;
   const linkedWorkspaceFiles = React.useMemo(() => {
     if (shouldRenderStreamingPlain) return [];
-    return extractWorkspaceFileMentions(markdown);
-  }, [markdown, shouldRenderStreamingPlain]);
+    return extractWorkspaceFileMentions(renderedMarkdown);
+  }, [renderedMarkdown, shouldRenderStreamingPlain]);
 
   return (
     <Pressable
@@ -1082,7 +1096,7 @@ function AgentTextBlock(props: {
                 </Text>
               ) : (
                 <MarkdownView
-                  markdown={markdown}
+                  markdown={renderedMarkdown}
                   onOptionPress={handleOptionPress}
                   onOptionLongPress={handleOptionLongPress}
                   onLinkPress={handleMarkdownLinkPress}

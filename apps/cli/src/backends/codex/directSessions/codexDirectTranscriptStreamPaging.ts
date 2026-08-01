@@ -113,6 +113,7 @@ async function collectReadAfterRecords(params: Readonly<{
 
     for (const line of page.items) {
       const projected = projectCodexRolloutLineToTranscriptRecords({
+        codexHome: params.codexHome,
         stream,
         lineStartOffsetBytes: line.startOffsetBytes,
         lineNextOffsetBytes: Math.min(fileSize, line.endOffsetBytes + 1),
@@ -276,6 +277,7 @@ export async function pageCodexRolloutStreams(params: Readonly<{
     const semanticTracker = createCodexRolloutSemanticTracker();
     for (const line of page.items) {
       const projected = projectCodexRolloutLineToTranscriptRecords({
+        codexHome: params.codexHome,
         stream,
         lineStartOffsetBytes: line.startOffsetBytes,
         lineNextOffsetBytes: Math.min(fileSize, line.endOffsetBytes + 1),

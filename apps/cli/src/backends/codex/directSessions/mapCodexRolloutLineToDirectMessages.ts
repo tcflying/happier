@@ -6,6 +6,7 @@ import {
   buildCodexStreamSegmentLocalId,
   readCodexRolloutResponseItemId,
 } from '../appServer/streamedTranscriptIdentity';
+import { extractCodexDirectMarkdownImages } from './extractCodexDirectMarkdownImages';
 
 function shouldFilterHarnessBlob(text: string): boolean {
   const t = text.trim();
@@ -42,6 +43,7 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
   lineValue: unknown;
   actions: ReadonlyArray<CodexRolloutAction>;
   sidechainId?: string | null;
+  providerMediaRoot?: string | null;
 }>): DirectTranscriptRawMessageV1[] {
   const createdAtMs = extractEnvelopeTimestampMs(params.lineValue);
   const responseItemId = readCodexRolloutResponseItemId(params.lineValue);
@@ -60,12 +62,30 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
 
     if (action.type === 'user-text') {
       if (shouldFilterHarnessBlob(action.text)) continue;
+      const directMedia = params.providerMediaRoot
+        ? extractCodexDirectMarkdownImages({
+            markdown: action.text,
+            providerMediaRoot: params.providerMediaRoot,
+          }).map((item) => ({
+            ...item,
+            role: 'input' as const,
+            category: 'attachment' as const,
+          }))
+        : [];
       out.push({
         id: stableId,
         localId: stableId,
         createdAtMs,
         raw: {
           role: 'user',
+          ...(directMedia.length > 0 ? {
+            meta: {
+              happierDirectMedia: {
+                kind: 'direct_session_media.v1',
+                payload: { media: directMedia },
+              },
+            },
+          } : {}),
           content: { type: 'text', text: action.text },
         },
       });
@@ -76,24 +96,37 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
       const streamLocalId = responseItemId
         ? buildCodexStreamSegmentLocalId('assistant', responseItemId)
         : stableId;
+      const directMedia = params.providerMediaRoot
+        ? extractCodexDirectMarkdownImages({
+            markdown: action.text,
+            providerMediaRoot: params.providerMediaRoot,
+          })
+        : [];
+      const meta: Record<string, unknown> = {
+        ...(responseItemId ? {
+          happierStreamSegmentV1: {
+            v: 1,
+            segmentKind: 'assistant',
+            segmentLocalId: streamLocalId,
+            segmentState: 'complete',
+            startedAtMs: createdAtMs,
+            updatedAtMs: createdAtMs,
+          },
+        } : {}),
+        ...(directMedia.length > 0 ? {
+          happierDirectMedia: {
+            kind: 'direct_session_media.v1',
+            payload: { media: directMedia },
+          },
+        } : {}),
+      };
       out.push({
         id: stableId,
         localId: streamLocalId,
         createdAtMs,
         raw: {
           role: 'agent',
-          ...(responseItemId ? {
-            meta: {
-              happierStreamSegmentV1: {
-                v: 1,
-                segmentKind: 'assistant',
-                segmentLocalId: streamLocalId,
-                segmentState: 'complete',
-                startedAtMs: createdAtMs,
-                updatedAtMs: createdAtMs,
-              },
-            },
-          } : {}),
+          ...(Object.keys(meta).length > 0 ? { meta } : {}),
           content: {
             type: 'codex',
             data: {

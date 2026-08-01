@@ -41,6 +41,7 @@ export function compareCodexProjectedRecordsOldestFirst(
 }
 
 export function projectCodexRolloutLineToTranscriptRecords(params: Readonly<{
+  codexHome: string;
   stream: CodexDirectTranscriptRolloutStream;
   lineStartOffsetBytes: number;
   lineNextOffsetBytes: number;
@@ -62,6 +63,7 @@ export function projectCodexRolloutLineToTranscriptRecords(params: Readonly<{
     lineValue: params.lineValue,
     actions: normalizedActions,
     sidechainId: params.stream.sidechainId,
+    providerMediaRoot: params.codexHome,
   });
   return {
     discoveredChildThreadIds: [...discoveredChildThreadIds],

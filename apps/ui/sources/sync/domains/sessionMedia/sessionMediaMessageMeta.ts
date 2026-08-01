@@ -27,7 +27,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function readEnvelope(meta: unknown, key: 'happier' | 'happierMedia' | 'happierAttachments'): HappierMetaEnvelope | null {
+function readEnvelope(meta: unknown, key: 'happier' | 'happierMedia' | 'happierAttachments' | 'happierDirectMedia'): HappierMetaEnvelope | null {
     if (!isRecord(meta)) return null;
     const envelope = meta[key];
     if (!isRecord(envelope)) return null;
@@ -55,6 +55,15 @@ function isSafeSessionMediaPath(path: string): boolean {
     return true;
 }
 
+function isTrustedDirectSessionMediaPath(path: string): boolean {
+    const normalized = path.replace(/\\/g, '/');
+    if (normalized.startsWith('file://')) return false;
+    if (normalized.startsWith('//')) return false;
+    if (normalized.split('/').includes('..')) return false;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(normalized) && !/^[a-zA-Z]:\//.test(normalized)) return false;
+    return normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized);
+}
+
 function isSessionMediaRole(value: unknown): value is 'input' | 'output' {
     return value === 'input' || value === 'output';
 }
@@ -63,7 +72,10 @@ function isSessionMediaCategory(value: unknown): value is 'attachment' | 'genera
     return value === 'attachment' || value === 'generated' || value === 'tool-artifact';
 }
 
-function normalizeSessionMediaItem(value: unknown): SessionMediaInlineImageSummary | null {
+function normalizeSessionMediaItem(
+    value: unknown,
+    pathPolicy: 'workspace-relative' | 'trusted-direct' = 'workspace-relative',
+): SessionMediaInlineImageSummary | null {
     if (!isRecord(value)) return null;
     if (value.mediaKind !== 'image') return null;
 
@@ -72,7 +84,11 @@ function normalizeSessionMediaItem(value: unknown): SessionMediaInlineImageSumma
     const sizeBytes = typeof value.sizeBytes === 'number' && Number.isFinite(value.sizeBytes)
         ? Math.max(0, value.sizeBytes)
         : null;
-    if (!name || !path || sizeBytes == null || !isSafeSessionMediaPath(path)) return null;
+    if (!name || !path || sizeBytes == null) return null;
+    const validPath = pathPolicy === 'trusted-direct'
+        ? isTrustedDirectSessionMediaPath(path)
+        : isSafeSessionMediaPath(path);
+    if (!validPath) return null;
 
     const mimeType = readNonEmptyString(value.mimeType);
     const sha256 = readNonEmptyString(value.sha256);
@@ -106,6 +122,16 @@ function parseSessionMediaEnvelope(envelope: HappierMetaEnvelope | null): readon
     });
 }
 
+function parseDirectSessionMediaEnvelope(envelope: HappierMetaEnvelope | null): readonly SessionMediaInlineImageSummary[] {
+    if (envelope?.kind !== 'direct_session_media.v1') return [];
+    const payload = envelope.payload;
+    if (!isRecord(payload) || !Array.isArray(payload.media)) return [];
+    return payload.media.flatMap((item) => {
+        const normalized = normalizeSessionMediaItem(item, 'trusted-direct');
+        return normalized ? [normalized] : [];
+    });
+}
+
 export function normalizeAttachmentMetaToSessionMedia(
     attachments: AttachmentsMessageMetaV1['attachments'],
 ): readonly SessionMediaInlineImageSummary[] {
@@ -131,14 +157,20 @@ function parseLegacyAttachmentsMeta(meta: unknown): AttachmentsMessageMetaV1 | n
     return parsed.data;
 }
 
-export function parseSessionMediaMessageMeta(meta: unknown): ParsedSessionMediaMessageMeta {
+export function parseSessionMediaMessageMeta(
+    meta: unknown,
+    options: Readonly<{ allowTrustedDirectMedia?: boolean }> = {},
+): ParsedSessionMediaMessageMeta {
     const primaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happier'));
     const secondaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happierMedia'));
+    const directMedia = options.allowTrustedDirectMedia === true
+        ? parseDirectSessionMediaEnvelope(readEnvelope(meta, 'happierDirectMedia'))
+        : [];
     const legacyAttachments = parseLegacyAttachmentsMeta(meta);
     const legacyMedia = legacyAttachments ? normalizeAttachmentMetaToSessionMedia(legacyAttachments.attachments) : [];
 
     return {
-        inlineImages: [...primaryMedia, ...secondaryMedia, ...legacyMedia],
+        inlineImages: [...primaryMedia, ...secondaryMedia, ...directMedia, ...legacyMedia],
         legacyAttachments,
     };
 }

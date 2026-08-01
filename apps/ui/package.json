@@ -19,6 +19,7 @@
     "ios:connected-device": "yarn ios -d",
     "submit": "eas submit --platform ios",
     "web": "yarn -s ensure:workspace:built && cross-env EXPO_UNSTABLE_WEB_MODAL=1 expo start --web",
+    "web:fast": "yarn -s ensure:workspace:built && node ./scripts/fastWebPreview.mjs",
     "test": "yarn -s test:unit",
     "test:unit": "yarn -s ensure:workspace:built && node ./scripts/runVitestShards.mjs --config vitest.config.ts",
     "test:integration": "yarn -s ensure:workspace:built && vitest run --config vitest.integration.config.ts",

@@ -489,6 +489,58 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(screen.findByTestId(`message-session-media-inline-image:${path}`)).not.toBeNull();
     });
 
+    it.each([
+        ['user-text', 'input'],
+        ['agent-text', 'output'],
+    ] as const)('renders direct-session local Markdown images through the safe media preview for %s messages', async (kind, role) => {
+        const { MessageView } = await import('./MessageView');
+
+        const path = `C:/Users/alice/.codex/visualizations/${role}-proof.png`;
+        const remoteImage = 'https://example.test/remote.png';
+        const message: any = {
+            kind,
+            id: `${role}-media-message`,
+            localId: kind === 'user-text' ? `${role}-local` : null,
+            createdAt: 1,
+            text: `before\n\n![local proof](${path})\n\n![remote proof](${remoteImage})\n\nafter`,
+            ...(kind === 'agent-text' ? { isThinking: false } : {}),
+            meta: {
+                happierDirectMedia: {
+                    kind: 'direct_session_media.v1',
+                    payload: {
+                        media: [{
+                            role,
+                            category: 'generated',
+                            mediaKind: 'image',
+                            name: `${role}-proof.png`,
+                            path,
+                            mimeType: 'image/png',
+                            sizeBytes: 0,
+                        }],
+                    },
+                },
+            },
+        };
+        const metadata = {
+            directSessionV1: {
+                v: 1,
+                providerId: 'codex',
+                machineId: 'machine-1',
+                remoteSessionId: 'thread-1',
+                source: { kind: 'codexHome', home: 'user' },
+            },
+        };
+
+        const screen = await renderScreen(<MessageView message={message} metadata={metadata as any} sessionId="s1" />);
+        const markdownViews = screen.findAllByType('MarkdownView' as any);
+
+        expect(markdownViews).toHaveLength(1);
+        expect(markdownViews[0]!.props.markdown).not.toContain(path);
+        expect(markdownViews[0]!.props.markdown).not.toContain('file://');
+        expect(markdownViews[0]!.props.markdown).toContain(`![remote proof](${remoteImage})`);
+        expect(screen.findByTestId(`message-session-media-inline-image:${path}`)).not.toBeNull();
+    });
+
     it('renders media-only assistant rows with empty text', async () => {
         const { MessageView } = await import('./MessageView');
 

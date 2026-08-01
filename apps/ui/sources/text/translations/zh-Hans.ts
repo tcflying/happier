@@ -1266,6 +1266,8 @@ export const zhHans: TranslationStructure = {
     error: "错误",
     online: "在线",
     working: "正在工作...",
+    thinking: "正在思考…",
+    thinkingActivities: "正在完成|正在执行|正在落实|正在准备|正在启动|正在酝酿|正在计算|正在动脑|正在串联|正在处理|正在汇聚|正在推敲|正在运算|正在组合|正在构思|正在生成|正在考虑|正在沉思|正在烹制|正在打磨|正在创造|正在解析|正在解读|正在研判|正在确定|正在推演|正在阐明|正在规划|正在锻造|正在成形|正在产出|正在孵化|正在构想|正在想象|正在培育|正在推断|正在实现|正在整理|正在琢磨|正在深思|正在探索|正在沉淀|正在权衡|正在处理|正在解谜|正在复盘|正在谋划|正在整合|正在运转|正在综合|正在思考|正在调试|正在转化|正在展开|正在梳理|正在巡检|正在运算|正在施展|正在工作|正在协调",
     readyForReview: "已可审核",
     offline: "离线",
     lastSeen: ({ time }: { time: string }) => `最后活跃时间 ${time}`,
@@ -4163,6 +4165,8 @@ export const zhHans: TranslationStructure = {
       large: "大",
       xlarge: "特大",
       xxlarge: "超特大",
+      double: "2×",
+      triple: "3×",
     },
     itemDensity: "项目密度",
     itemDensityDescription: "选择应用内列表行和设置项的显示大小",
@@ -9186,6 +9190,13 @@ settingsSession: {
     detachLocalTerminal: "断开终端",
     directSessionTakeoverAvailable:
       "此直连会话可在你的机器上使用。可在 Happier 中接管它并在这里控制。",
+    directSessionControlledByHappier: "此直连会话当前由 Happier 直连运行器操作。",
+    directSessionControlledByCurrentHappier: ({ session, pid }: { session: string; pid: string | number }) =>
+      `当前由本 Happier 会话独占（会话 ${session}，进程 ${pid}）。`,
+    directSessionControlledByOtherHappier: ({ session, pid }: { session: string; pid: string | number }) =>
+      `当前由另一个 Happier 会话操作（会话 ${session}，进程 ${pid}）。`,
+    directSessionControlledByProviderProcess: "此直连会话当前由 {provider}（进程 {pid}）操作。",
+    directSessionControlledElsewhere: "此直连会话正由其他运行器操作；请先在 Happier 中接管后再发送。",
     directSessionMachineOffline:
       "此直连会话当前不可用，因为机器已离线。",
     switchingToDirectTakeover: "正在接管此直连会话…",

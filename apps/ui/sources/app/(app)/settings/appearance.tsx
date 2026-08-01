@@ -32,24 +32,14 @@ import {
 } from '@/theme/profiles/themeProfilePersistence';
 import type { ThemeProfileMode, ThemeProfilesLocalStateV1 } from '@/theme/profiles/themeProfileTypes';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
+import {
+    isUiFontScalePresetId,
+    resolveUiFontScalePresetId,
+    UI_FONT_SCALE_PRESETS,
+} from '@/components/ui/text/uiFontScalePresets';
 
-const UI_FONT_SCALE_PRESETS = {
-    xxsmall: 0.8,
-    xsmall: 0.85,
-    small: 0.93,
-    default: 1,
-    large: 1.1,
-    xlarge: 1.2,
-    xxlarge: 1.3,
-} as const;
-
-type UiFontScalePresetId = keyof typeof UI_FONT_SCALE_PRESETS;
 type UiItemDensity = LocalSettings['uiItemDensity'];
 type DetailsPaneTabsBehavior = LocalSettings['detailsPaneTabsBehavior'];
-
-const isUiFontScalePresetId = (value: string): value is UiFontScalePresetId => (
-    Object.prototype.hasOwnProperty.call(UI_FONT_SCALE_PRESETS, value)
-);
 
 const isUiItemDensity = (value: string): value is UiItemDensity => (
     value === 'comfortable' || value === 'cozy' || value === 'compact'
@@ -131,6 +121,9 @@ export default React.memo(function AppearanceSettingsScreen() {
             { id: 'large', title: t('settingsAppearance.textSizeOptions.large') },
             { id: 'xlarge', title: t('settingsAppearance.textSizeOptions.xlarge') },
             { id: 'xxlarge', title: t('settingsAppearance.textSizeOptions.xxlarge') },
+            { id: 'oneAndHalf', title: '1.5×' },
+            { id: 'double', title: t('settingsAppearance.textSizeOptions.double') },
+            { id: 'triple', title: t('settingsAppearance.textSizeOptions.triple') },
         ];
     }, []);
 
@@ -213,19 +206,10 @@ export default React.memo(function AppearanceSettingsScreen() {
         ];
     }, []);
 
-    const selectedTextSizeId = React.useMemo(() => {
-        const entries = Object.entries(UI_FONT_SCALE_PRESETS) as Array<[UiFontScalePresetId, number]>;
-        let best: UiFontScalePresetId = 'default';
-        let bestDist = Number.POSITIVE_INFINITY;
-        for (const [id, scale] of entries) {
-            const dist = Math.abs((uiFontScale ?? 1) - scale);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = id;
-            }
-        }
-        return best;
-    }, [uiFontScale]);
+    const selectedTextSizeId = React.useMemo(
+        () => resolveUiFontScalePresetId(uiFontScale),
+        [uiFontScale],
+    );
 
     const selectUiFontSize = React.useCallback((itemId: string) => {
         if (!isUiFontScalePresetId(itemId)) return;

@@ -106,11 +106,14 @@ describe('TranscriptEventRow', () => {
                     lifecycleId: 'compact_1',
                     provider: 'codex',
                 }}
+                createdAtMs={Date.now() - 5_000}
             />,
         );
 
         expect(screen.findByType(ActivityIndicator)).toBeTruthy();
         expect(screen.findByProps({ testID: 'transcript-event-context-compaction-started' })).toBeTruthy();
+        expect(screen.findByTestId('transcript-event-context-compaction-live-progress')).toBeTruthy();
+        expect(screen.getTextContent()).toMatch(/[45]s/);
     });
 
     it('renders completed context compaction events as a persisted event row', async () => {
@@ -186,7 +189,12 @@ describe('TranscriptEventRow', () => {
         const serialized = JSON.stringify(screen.tree.toJSON());
         expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch' })).toBeTruthy();
         expect(screen.findByProps({ testID: 'session-event-connected-service-account-switch' })).toBeTruthy();
-        expect(serialized).toContain('Switched Codex group Happier from team@happier.dev to leeroy.brun@gmail.com');
+        expect(serialized).toContain(t('message.connectedServiceGroupAccountSwitch', {
+            provider: 'Codex',
+            group: 'Happier',
+            from: 'team@happier.dev',
+            to: 'leeroy.brun@gmail.com',
+        }));
         expect(serialized).not.toContain('from group');
         expect(serialized).not.toContain('to profile');
     });
@@ -585,7 +593,9 @@ describe('TranscriptEventRow', () => {
         expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
         expect(serialized).toContain(t('connectedServices.authSwitch.switchFailed'));
         expect(serialized).toContain('hot_apply_failed');
-        expect(serialized).not.toContain(t('connectedServices.authSwitch.confirmAction'));
+        expect(screen.findAllByType('Text' as any).some(
+            (node) => node.props.children === t('connectedServices.authSwitch.confirmAction'),
+        )).toBe(false);
     });
 
     it('renders direct live switch attempts as running-session auth switches, not restart or command copy', async () => {
@@ -609,9 +619,11 @@ describe('TranscriptEventRow', () => {
 
         const serialized = JSON.stringify(screen.tree.toJSON());
         expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
-        expect(serialized).toContain('Authentication switched in the running session');
+        expect(serialized).toContain(t('connectedServices.authSwitch.status.liveApplied'));
         expect(serialized).not.toContain(t('connectedServices.authSwitch.status.restarting'));
-        expect(serialized).not.toContain(t('connectedServices.authSwitch.confirmAction'));
+        expect(screen.findAllByType('Text' as any).some(
+            (node) => node.props.children === t('connectedServices.authSwitch.confirmAction'),
+        )).toBe(false);
     });
 
     it('renders credential-refresh switch attempts distinctly from restart-resume attempts', async () => {
@@ -632,7 +644,7 @@ describe('TranscriptEventRow', () => {
 
         const serialized = JSON.stringify(screen.tree.toJSON());
         expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
-        expect(serialized).toContain('Authentication refreshed');
+        expect(serialized).toContain(t('connectedServices.authSwitch.status.credentialsRefreshed'));
         expect(serialized).not.toContain(t('connectedServices.authSwitch.status.restarting'));
     });
 

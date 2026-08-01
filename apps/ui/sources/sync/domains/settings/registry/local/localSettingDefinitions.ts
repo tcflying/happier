@@ -157,7 +157,7 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
     },
     uiContentWidthMode: {
         schema: z.enum(['compact', 'medium', 'full']),
-        default: 'compact',
+        default: 'full',
         description: 'Preferred maximum width for main app content',
         storageScope: 'local',
     },

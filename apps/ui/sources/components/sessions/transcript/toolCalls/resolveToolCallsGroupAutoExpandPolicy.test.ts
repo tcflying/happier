@@ -14,6 +14,14 @@ describe('resolveToolCallsGroupAutoExpandPolicy', () => {
         })).toBe(false);
     });
 
+    it('does not auto-expand when the configured collapsed preview is header-only', () => {
+        expect(shouldAutoExpandToolCallsGroupForShortTranscript({
+            toolMessageCount: 3,
+            collapsedPreviewCount: 0,
+            maxTurnEntriesPerListItem: 8,
+        })).toBe(false);
+    });
+
     it('keeps the short-transcript fallback for small hidden tool groups just above the preview band', () => {
         // preview=5 → upper band = max(5*2, 6) = 10; a 10-tool group is still small enough to expand.
         expect(shouldAutoExpandToolCallsGroupForShortTranscript({

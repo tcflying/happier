@@ -143,7 +143,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
     }, [expanded, previewCount, props.toolMessages]);
 
     const hiddenCount = expanded ? 0 : Math.max(0, count - previewMessages.length);
-    const showExpandButton = !expanded && hiddenCount > 0;
+    const showExpandButton = !expanded && previewCount > 0 && hiddenCount > 0;
     const showCollapsedPreview = previewMessages.length > 0;
     const { setExpanded } = props;
     const onCollapse = React.useCallback(() => setExpanded(false), [setExpanded]);
@@ -185,6 +185,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
                 status={props.status}
                 count={count}
                 expanded={expanded}
+                onExpand={onExpand}
                 onCollapse={onCollapse}
             />
 

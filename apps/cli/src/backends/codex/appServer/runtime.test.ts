@@ -490,6 +490,9 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        }',
         '        if (text === "bridge-streams") {',
         '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/plan/delta", params: { itemId: "plan_1", delta: "Plan " } }) + "\\n");',
+        '            }, 5);',
+        '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { itemId: "msg_1", delta: "Hello " } }) + "\\n");',
         '            }, 6);',
         '            setTimeout(() => {',
@@ -499,16 +502,25 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '                process.stdout.write(JSON.stringify({ method: "item/started", params: { item: { id: "cmd_1", type: "commandExecution", command: "ls -la", cwd: "/repo" } } }) + "\\n");',
         '            }, 8);',
         '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/commandExecution/outputDelta", params: { itemId: "cmd_1", delta: "live output\\n" } }) + "\\n");',
+        '            }, 9);',
+        '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "cmd_1", type: "commandExecution", stdout: "done", exitCode: 0 } } }) + "\\n");',
         '            }, 9);',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/started", params: { item: { id: "tool_1", type: "mcpToolCall", server: "playwright", tool: "browser_navigate", arguments: { url: "https://example.com" } } } }) + "\\n");',
         '            }, 10);',
         '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/mcpToolCall/progress", params: { itemId: "tool_1", message: "navigation progress" } }) + "\\n");',
+        '            }, 10);',
+        '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "tool_1", type: "mcpToolCall", result: { Ok: { status: "ok" } } } } }) + "\\n");',
         '            }, 11);',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/started", params: { item: { id: "patch_1", type: "fileChange", auto_approved: true, changes: [{ path: "src/file.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1,2 @@\\n-old line\\n+old line\\n+new line\\n" }] } } }) + "\\n");',
+        '            }, 12);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/fileChange/outputDelta", params: { itemId: "patch_1", delta: "patching\\n" } }) + "\\n");',
         '            }, 12);',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "patch_1", type: "fileChange", stdout: "patched", success: true } } }) + "\\n");',
@@ -519,6 +531,33 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "msg_1", type: "agentMessage", text: "Hello world" } } }) + "\\n");',
         '            }, 15);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 20);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-streams-dangling-command") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { item: { id: "dangling_cmd_1", type: "commandExecution", command: "echo live", cwd: "/repo" } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/commandExecution/outputDelta", params: { itemId: "dangling_cmd_1", delta: "live output\\n" } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 20);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-streams-orphan-output") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { item: { id: "parent_tool_1", type: "mcpToolCall", server: "functions", tool: "exec", arguments: { command: "echo live" } } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/commandExecution/outputDelta", params: { itemId: "terminal_child_1", delta: "child live output\\n" } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "parent_tool_1", type: "mcpToolCall", result: { Ok: { status: "ok" } } } } }) + "\\n");',
+        '            }, 12);',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
         '            }, 20);',
@@ -3401,28 +3440,56 @@ describe('createCodexAppServerRuntime', () => {
         expect(assistantMessages.some((msg) => msg.includes('world'))).toBe(true);
         expect(thinkingMessages.some((msg) => msg.includes('thinking'))).toBe(true);
         expect(thinkingMessages.some((msg) => msg.includes('hard'))).toBe(true);
+        expect(committedCalls).toEqual(
+            expect.arrayContaining([
+                [
+                    'codex',
+                    expect.objectContaining({ type: 'tool-call', callId: 'cmd_1', name: 'CodexBash', input: { command: 'ls -la', cwd: '/repo' } }),
+                    { localId: 'codex-tool-call:cmd_1' },
+                ],
+                [
+                    'codex',
+                    expect.objectContaining({ type: 'tool-result', callId: 'cmd_1', output: { stdout: 'done', exitCode: 0 } }),
+                    { localId: 'codex-tool-result:cmd_1' },
+                ],
+                [
+                    'codex',
+                    expect.objectContaining({ type: 'tool-call', callId: 'tool_1', name: 'mcp__playwright__browser_navigate', input: { url: 'https://example.com' } }),
+                    { localId: 'codex-tool-call:tool_1' },
+                ],
+                [
+                    'codex',
+                    expect.objectContaining({ type: 'tool-result', callId: 'tool_1', output: { status: 'ok' } }),
+                    { localId: 'codex-tool-result:tool_1' },
+                ],
+                [
+                    'codex',
+                    expect.objectContaining({
+                        type: 'tool-call',
+                        callId: 'patch_1',
+                        name: 'CodexPatch',
+                        input: {
+                            auto_approved: true,
+                            changes: [
+                                {
+                                    path: 'src/file.ts',
+                                    kind: { type: 'update', move_path: null },
+                                    diff: '@@ -1 +1,2 @@\n-old line\n+old line\n+new line\n',
+                                },
+                            ],
+                        },
+                    }),
+                    { localId: 'codex-tool-call:patch_1' },
+                ],
+                [
+                    'codex',
+                    expect.objectContaining({ type: 'tool-result', callId: 'patch_1', output: { stdout: 'patched', success: true } }),
+                    { localId: 'codex-tool-result:patch_1' },
+                ],
+            ]),
+        );
         expect(session.sendCodexMessage.mock.calls).toEqual(
             expect.arrayContaining([
-                [expect.objectContaining({ type: 'tool-call', callId: 'cmd_1', name: 'CodexBash', input: { command: 'ls -la', cwd: '/repo' } })],
-                [expect.objectContaining({ type: 'tool-call-result', callId: 'cmd_1', output: { stdout: 'done', exitCode: 0 } })],
-                [expect.objectContaining({ type: 'tool-call', callId: 'tool_1', name: 'mcp__playwright__browser_navigate', input: { url: 'https://example.com' } })],
-                [expect.objectContaining({ type: 'tool-call-result', callId: 'tool_1', output: { status: 'ok' } })],
-                [expect.objectContaining({
-                    type: 'tool-call',
-                    callId: 'patch_1',
-                    name: 'CodexPatch',
-                    input: {
-                        auto_approved: true,
-                        changes: [
-                            {
-                                path: 'src/file.ts',
-                                kind: { type: 'update', move_path: null },
-                                diff: '@@ -1 +1,2 @@\n-old line\n+old line\n+new line\n',
-                            },
-                        ],
-                    },
-                })],
-                [expect.objectContaining({ type: 'tool-call-result', callId: 'patch_1', output: { stdout: 'patched', success: true } })],
                 [expect.objectContaining({
                     type: 'tool-call',
                     name: 'Diff',
@@ -3439,6 +3506,7 @@ describe('createCodexAppServerRuntime', () => {
                 [expect.objectContaining({ type: 'tool-call-result', output: { status: 'completed' } })],
             ]),
         );
+        await runtime.reset();
     });
 
     it('commits native review completion text without duplicating identical assistant finals', async () => {
@@ -3694,11 +3762,161 @@ describe('createCodexAppServerRuntime', () => {
 
         expect(transcriptSession.sendAgentMessageEphemeral).toHaveBeenCalled();
         expect(transcriptSession.sendAgentMessageCommitted).toHaveBeenCalled();
+        expect(transcriptSession.sendAgentMessageEphemeral.mock.calls).toContainEqual([
+            'codex',
+            { type: 'message', message: 'Hello ' },
+            expect.objectContaining({ localId: 'codex-stream:assistant:msg_1' }),
+        ]);
+        expect(transcriptSession.sendAgentMessageEphemeral.mock.calls).toContainEqual([
+            'codex',
+            { type: 'message', message: 'Plan ' },
+            expect.objectContaining({ localId: 'codex-stream:assistant:plan_1' }),
+        ]);
+        expect(transcriptSession.sendAgentMessageEphemeral.mock.calls).toContainEqual([
+            'codex',
+            {
+                type: 'tool-call',
+                callId: 'cmd_1',
+                name: 'CodexBash',
+                input: { command: 'ls -la', cwd: '/repo' },
+                id: 'codex-tool-call:cmd_1',
+            },
+            expect.objectContaining({ localId: 'codex-tool-call:cmd_1' }),
+        ]);
+        expect(transcriptSession.sendAgentMessageEphemeral.mock.calls).toContainEqual([
+            'codex',
+            {
+                type: 'tool-result',
+                callId: 'cmd_1',
+                output: { _stream: true, stdoutChunk: 'live output\n' },
+                id: 'codex-tool-output:cmd_1',
+            },
+            expect.objectContaining({ localId: expect.stringMatching(/^codex-tool-output:cmd_1:/u) }),
+        ]);
+        expect(transcriptSession.sendAgentMessageEphemeral.mock.calls).toContainEqual([
+            'codex',
+            expect.objectContaining({
+                type: 'tool-result',
+                callId: 'tool_1',
+                output: { _stream: true, stdoutChunk: 'navigation progress' },
+            }),
+            expect.objectContaining({ localId: expect.stringMatching(/^codex-tool-output:tool_1:/u) }),
+        ]);
+        expect(transcriptSession.sendAgentMessageEphemeral.mock.calls).toContainEqual([
+            'codex',
+            expect.objectContaining({
+                type: 'tool-result',
+                callId: 'patch_1',
+                output: { _stream: true, stdoutChunk: 'patching\n' },
+            }),
+            expect.objectContaining({ localId: expect.stringMatching(/^codex-tool-output:patch_1:/u) }),
+        ]);
+        expect(transcriptSession.sendAgentMessageCommitted.mock.calls).toContainEqual([
+            'codex',
+            {
+                type: 'tool-call',
+                callId: 'cmd_1',
+                name: 'CodexBash',
+                input: { command: 'ls -la', cwd: '/repo' },
+                id: 'codex-tool-call:cmd_1',
+            },
+            { localId: 'codex-tool-call:cmd_1' },
+        ]);
+        expect(transcriptSession.sendAgentMessageCommitted.mock.calls).toContainEqual([
+            'codex',
+            {
+                type: 'tool-result',
+                callId: 'cmd_1',
+                output: { stdout: 'done', exitCode: 0 },
+                id: 'codex-tool-result:cmd_1',
+            },
+            { localId: 'codex-tool-result:cmd_1' },
+        ]);
+        expect(session.sendCodexMessage).not.toHaveBeenCalledWith(
+            expect.objectContaining({ callId: 'cmd_1' }),
+        );
         const committedSegmentStates = transcriptSession.sendAgentMessageCommitted.mock.calls
             .map(([, , opts]) => opts?.meta?.happierStreamSegmentV1?.segmentState);
         expect(committedSegmentStates).toContain('streaming');
         expect(committedSegmentStates).toContain('complete');
         expect(session.sendAgentMessageCommitted).not.toHaveBeenCalled();
+        await runtime.reset();
+    });
+
+    it('finalizes a streamed command tool at turn end when Codex omits item/completed', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-dangling-stream-tool-');
+
+        const session = {
+            updateMetadata: vi.fn(),
+            sendAgentMessageEphemeral: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-streams-dangling-command');
+
+        expect(session.sendAgentMessageEphemeral.mock.calls).toContainEqual([
+            'codex',
+            expect.objectContaining({
+                type: 'tool-result',
+                callId: 'dangling_cmd_1',
+                output: { _stream: true, stdoutChunk: 'live output\n' },
+            }),
+            expect.any(Object),
+        ]);
+        expect(session.sendAgentMessageCommitted.mock.calls).toContainEqual([
+            'codex',
+            {
+                type: 'tool-result',
+                callId: 'dangling_cmd_1',
+                output: { status: 'completed', synthetic: true },
+                id: 'codex-tool-result:dangling_cmd_1',
+            },
+            { localId: 'codex-tool-result:dangling_cmd_1' },
+        ]);
+        await runtime.reset();
+    });
+
+    it('finalizes an orphan command output stream ephemerally without persisting a duplicate tool', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-orphan-output-');
+
+        const session = {
+            updateMetadata: vi.fn(),
+            sendAgentMessageEphemeral: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-streams-orphan-output');
+        await runtime.reset();
+
+        expect(session.sendAgentMessageEphemeral.mock.calls).toContainEqual([
+            'codex',
+            {
+                type: 'tool-result',
+                callId: 'terminal_child_1',
+                output: { status: 'completed', synthetic: true },
+                id: 'codex-tool-output:terminal_child_1',
+            },
+            expect.objectContaining({ localId: 'codex-tool-output:terminal_child_1:complete' }),
+        ]);
+        expect(session.sendAgentMessageCommitted.mock.calls).not.toContainEqual([
+            'codex',
+            expect.objectContaining({ callId: 'terminal_child_1' }),
+            expect.any(Object),
+        ]);
     });
 
     it('does not append the full final assistant text into streaming drafts when the final text diverges from earlier deltas', async () => {

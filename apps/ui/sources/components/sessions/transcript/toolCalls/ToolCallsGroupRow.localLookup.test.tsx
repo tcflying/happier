@@ -17,6 +17,7 @@ import type {
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let messageById: Record<string, any> = {};
+const emptyStoredMessages: any[] = [];
 let renderedToolCallsGroupViewProps: any[] = [];
 let renderedToolCallsGroupViewWithCommonProps: any[] = [];
 
@@ -24,11 +25,14 @@ installTranscriptCommonModuleMocks({
     storage: async () => {
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
-            useMessagesByIds: (_sessionId: string, messageIds: readonly string[]) =>
-                messageIds.map((id) => messageById[id]).filter(Boolean),
+            useMessagesByIds: (_sessionId: string, messageIds: readonly string[]) => {
+                const messages = messageIds.map((id) => messageById[id]).filter(Boolean);
+                return messages.length > 0 ? messages : emptyStoredMessages;
+            },
             useSessionForkSupportSource: () => null,
             useSessionMessagesById: () => ({}),
             useSessionMessagesReducerState: () => null,
+            useSessionMessagesReducerVersion: () => 0,
             useSessionWorkspacePath: () => null,
             useSetting: () => null,
         });
@@ -181,6 +185,90 @@ describe('ToolCallsGroupRow', () => {
         }),
       ]),
     );
+  });
+
+  it('re-reads local streamed tools when the direct transcript reducer state advances', async () => {
+    let localToolMessage = {
+      kind: 'tool-call',
+      id: 'tool-local-stream',
+      localId: 'tool-local-stream',
+      createdAt: 1,
+      tool: {
+        id: 'terminal-child-1',
+        name: 'Bash',
+        state: 'running',
+        input: { command: 'echo live' },
+        completedAt: null as number | null,
+      },
+      children: [],
+    };
+    const getMessageById = (messageId: string) => (
+      messageId === 'tool-local-stream' ? localToolMessage : null
+    );
+    const common = {
+      forkCommon: {
+        executionRunsEnabled: false,
+        sessionForkSupportSource: null,
+        sessionReplayEnabled: false,
+        sessionReplayMaxSeedChars: 120_000,
+        sessionReplayStrategy: 'recent_messages',
+        sessionReplaySummaryRunnerV1: null,
+      },
+      messageDisplayCommon: {
+        sessionThinkingDisplayMode: 'inline',
+        sessionThinkingInlineChrome: 'plain',
+        sessionThinkingInlinePresentation: 'summary',
+        transcriptMessageTimestampDisplayMode: 'never',
+        transcriptStreamingMarkdownRenderingEnabled: false,
+        transcriptStreamingPartialOutputEnabled: true,
+        transcriptStreamingSettleDelayMs: 0,
+        transcriptStreamingSmoothingEnabled: false,
+        transcriptMessageSelectionEnabled: true,
+        transcriptMessageSendToSessionEnabled: false,
+        debugInformationEnabled: false,
+        workspacePath: null,
+      },
+      toolChromeCommon: {
+        toolViewTimelineChromeMode: 'cards',
+        transcriptToolCallsCollapsedPreviewCount: 1,
+        transcriptToolCallsGroupShowBackground: false,
+      },
+    };
+    const { ToolCallsGroupRowWithSessionCommon } = await import('./ToolCallsGroupRow');
+    const localToolMessageIds = ['tool-local-stream'];
+    const stableReducerState = {} as any;
+    const renderRow = (reducerVersion: number) => React.createElement(
+      ToolCallsGroupRowWithSessionCommon as any,
+      {
+        sessionId: 's1',
+        toolCallsGroupId: 'group-local-stream',
+        toolMessageIds: localToolMessageIds,
+        metadata: null,
+        expanded: false,
+        onSetExpanded: () => {},
+        interaction: { canSendMessages: true, canApprovePermissions: true },
+        getMessageById,
+        ...common,
+        toolRouteCommon: { messagesById: {}, reducerState: stableReducerState, reducerVersion },
+      },
+    );
+
+    const screen = await renderScreen(renderRow(1));
+    expect(getRenderedToolCallsGroupViewProps().at(-1)?.status).toBe('running');
+
+    localToolMessage = {
+      ...localToolMessage,
+      tool: {
+        ...localToolMessage.tool,
+        state: 'completed',
+        completedAt: 2,
+      },
+    };
+    renderedToolCallsGroupViewProps = [];
+    renderedToolCallsGroupViewWithCommonProps = [];
+    await screen.update(renderRow(2));
+
+    expect(getRenderedToolCallsGroupViewProps().at(-1)?.status).toBe('completed');
   });
 
   it('keeps pending-permission tool calls visible when the session is inactive (coerced to failed)', async () => {

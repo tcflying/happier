@@ -21,25 +21,5 @@ export function resolveSessionRowTitleColorRole(input: Readonly<{
     attentionState: SessionRowAttentionState;
     titleTone: SessionRowTitleTone;
 }>): SessionRowTitleColorRole {
-    if (input.selected) return 'primary';
-    if (!input.isConnected) return 'secondary';
-
-    if (input.mode === 'allActive') {
-        return input.isSessionActive || input.titleTone !== 'quiet' ? 'primary' : 'secondary';
-    }
-
-    if (input.mode === 'attentionOnly') {
-        return isUserAttentionState(input.attentionState) ? 'primary' : 'secondary';
-    }
-
-    return input.titleTone === 'quiet' ? 'secondary' : 'primary';
-}
-
-function isUserAttentionState(attentionState: SessionRowAttentionState): boolean {
-    return attentionState === 'unread'
-        || attentionState === 'pending'
-        || attentionState === 'ready'
-        || attentionState === 'failed'
-        || attentionState === 'permission_required'
-        || attentionState === 'action_required';
+    return input.selected ? 'primary' : 'secondary';
 }

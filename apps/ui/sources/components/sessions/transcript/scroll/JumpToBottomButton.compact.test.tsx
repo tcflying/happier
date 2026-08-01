@@ -90,4 +90,12 @@ describe('JumpToBottomButton compact layout', () => {
 
         expect(screen.findByTestId('jump')?.props.accessibilityLabel).toBe('settingsSession.transcript.jumpToBottomButtonLabel');
     });
+
+    it('accepts ArrowDown when the composer selection is already at the end', async () => {
+        const { isTextControlSelectionAtEnd } = await import('./JumpToBottomButton');
+
+        expect(isTextControlSelectionAtEnd('draft', 5, 5)).toBe(true);
+        expect(isTextControlSelectionAtEnd('draft', 2, 2)).toBe(false);
+        expect(isTextControlSelectionAtEnd('draft', 5, 4)).toBe(false);
+    });
 });

@@ -48,6 +48,7 @@ export const ToolCallsGroupUnitHeaderRowWithSessionCommon = React.memo(function 
     const chromeMode = toolCallsGroupChromeModeForVariant(variant);
     const { setExpanded } = props;
     const onCollapse = React.useCallback(() => setExpanded(false), [setExpanded]);
+    const onExpand = React.useCallback(() => setExpanded(true), [setExpanded]);
 
     const status = resolveToolCallsGroupStatus({
         toolMessages: props.toolMessages,
@@ -72,6 +73,7 @@ export const ToolCallsGroupUnitHeaderRowWithSessionCommon = React.memo(function 
                         status={status}
                         count={props.toolMessages.length}
                         expanded={props.expanded}
+                        onExpand={onExpand}
                         onCollapse={onCollapse}
                     />
                 </ToolCallsGroupUnitRowFrame>

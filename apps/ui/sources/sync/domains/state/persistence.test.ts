@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsDefaults, settingsParse } from '../settings/settings';
+import { localSettingsDefaults } from '../settings/localSettings';
 import type { ServerAccountScope } from '../scope/serverAccountScope';
 
 const store = vi.hoisted(() => new Map<string, string>());
@@ -50,6 +51,8 @@ import {
     loadPendingSettings,
     savePendingSettings,
     loadSettings,
+    loadLocalSettings,
+    saveLocalSettings,
     loadSessionDrafts,
     saveSessionDrafts,
     loadSessionPermissionModes,
@@ -113,6 +116,12 @@ describe('persistence', () => {
         clearPersistence();
 
         expect([...store.keys()]).toEqual([]);
+    });
+
+    it('roundtrips the 3x UI font scale in local settings', () => {
+        saveLocalSettings({ ...localSettingsDefaults, uiFontScale: 3 });
+
+        expect(loadLocalSettings().uiFontScale).toBe(3);
     });
 
     describe('session model modes', () => {

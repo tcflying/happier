@@ -73,6 +73,37 @@ describe('useDirectSessionRuntime', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('polls running direct sessions again after the 250ms active cadence', async () => {
+    vi.useFakeTimers();
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      activity: 'running',
+      runnerActive: true,
+      activityTailCharacter: '甲',
+    });
+    refreshSessionMessagesSpy.mockResolvedValue(undefined);
+
+    const harness = await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(machineDirectSessionStatusGetSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(249);
+    });
+    expect(machineDirectSessionStatusGetSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(machineDirectSessionStatusGetSpy).toHaveBeenCalledTimes(2);
+    await harness.unmount();
   });
 
   it('does not emit an unhandled rejection when status fails before transcript refresh completes', async () => {

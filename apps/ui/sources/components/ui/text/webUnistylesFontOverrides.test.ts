@@ -31,12 +31,12 @@ describe('webUnistylesFontOverrides', () => {
         expect(appended).toBe(2);
 
         const css = overrideEl.textContent ?? '';
-        expect(css).toContain(`.${'unistyles_a1'}`);
+        expect(css).toContain(`.${'unistyles_a1'}:not([data-happier-ui-font-scale="disabled"])`);
         expect(css).toContain(`font-size: calc(16px * var(${HAPPIER_UI_FONT_SCALE_CSS_VAR}))`);
         expect(css).toContain(`line-height: calc(24px * var(${HAPPIER_UI_FONT_SCALE_CSS_VAR}))`);
         expect(css).toContain(`letter-spacing: calc(0.15px * var(${HAPPIER_UI_FONT_SCALE_CSS_VAR}))`);
 
-        expect(css).toContain(`.${'unistyles_b2'}`);
+        expect(css).toContain(`.${'unistyles_b2'}:not([data-happier-ui-font-scale="disabled"])`);
         expect(css).toContain(`font-size: calc(14px * var(${HAPPIER_UI_FONT_SCALE_CSS_VAR}))`);
     });
 

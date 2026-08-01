@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { calculateDeviceDimensions, determineDeviceType, calculateHeaderHeight } from './deviceCalculations';
+import {
+    calculateDeviceDimensions,
+    determineDeviceType,
+    calculateHeaderHeight,
+    calculateUiFontScaledHeaderHeight,
+} from './deviceCalculations';
 
 describe('responsive utilities', () => {
     describe('calculateDeviceDimensions', () => {
@@ -209,6 +214,42 @@ describe('responsive utilities', () => {
                 platform: 'ios',
                 isLandscape: false,
                 isMacCatalyst: true
+            })).toBe(56);
+        });
+    });
+
+    describe('calculateUiFontScaledHeaderHeight', () => {
+        it('keeps web header spacing in sync with 2x and 3x text', () => {
+            expect(calculateUiFontScaledHeaderHeight({
+                baseHeight: 56,
+                platform: 'web',
+                uiFontScale: 2,
+            })).toBe(112);
+            expect(calculateUiFontScaledHeaderHeight({
+                baseHeight: 56,
+                platform: 'web',
+                uiFontScale: 3,
+            })).toBe(168);
+        });
+
+        it('does not shrink touch targets or change native header sizing', () => {
+            expect(calculateUiFontScaledHeaderHeight({
+                baseHeight: 56,
+                platform: 'web',
+                uiFontScale: 0.8,
+            })).toBe(56);
+            expect(calculateUiFontScaledHeaderHeight({
+                baseHeight: 44,
+                platform: 'ios',
+                uiFontScale: 3,
+            })).toBe(44);
+        });
+
+        it('falls back to the base height for invalid scale values', () => {
+            expect(calculateUiFontScaledHeaderHeight({
+                baseHeight: 56,
+                platform: 'web',
+                uiFontScale: Number.NaN,
             })).toBe(56);
         });
     });

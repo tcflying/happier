@@ -25,12 +25,17 @@ const settingValues: Record<string, unknown> = {
     transcriptToolCallsCollapsedPreviewCount: 5,
     transcriptToolCallsGroupShowBackground: true,
 };
+const stableMessagesById = {};
+const stableReducerState = {} as any;
+let reducerVersion = 0;
 
 vi.mock('@/sync/domains/state/storage', () => ({
     useSessionForkSupportSource: () => null,
-    useSessionMessagesById: () => ({}),
-    useSessionMessagesReducerState: () => null,
+    useSessionMessagesById: () => stableMessagesById,
+    useSessionMessagesReducerState: () => stableReducerState,
+    useSessionMessagesReducerVersion: () => reducerVersion,
     useSessionWorkspacePath: () => '/repo',
+    useLocalSetting: () => false,
     useSetting: (key: string) => settingValues[key],
 }));
 
@@ -41,6 +46,24 @@ describe('useTranscriptSessionCommon', () => {
 
         expect(hook.getCurrent().messageDisplay.transcriptMessageSelectionEnabled).toBe(false);
         expect(hook.getCurrent().messageDisplay.transcriptMessageSendToSessionEnabled).toBe(true);
+
+        await hook.unmount();
+        standardCleanup();
+    });
+
+    it('refreshes tool route common when the in-place reducer version advances', async () => {
+        reducerVersion = 1;
+        const { useTranscriptSessionCommon } = await import('./transcriptSessionCommon');
+        const hook = await renderHook(() => useTranscriptSessionCommon('s1'));
+        const firstToolRoute = hook.getCurrent().toolRoute;
+
+        expect(firstToolRoute.reducerVersion).toBe(1);
+
+        reducerVersion = 2;
+        await hook.rerender();
+
+        expect(hook.getCurrent().toolRoute.reducerVersion).toBe(2);
+        expect(hook.getCurrent().toolRoute).not.toBe(firstToolRoute);
 
         await hook.unmount();
         standardCleanup();

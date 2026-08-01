@@ -35,9 +35,13 @@ import {
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import { ChatHeaderView } from '@/components/sessions/transcript/ChatHeaderView';
 import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHeaderActionMenu';
+import { HeaderUiFontScaleMenu } from '@/components/navigation/HeaderUiFontScaleMenu';
+import { AppUpdateStatusTag } from '@/components/ui/feedback/AppUpdateStatusTag';
+import { resolveSessionStreamingPreview } from './resolveSessionStreamingPreview';
 import { SessionHeaderSubagentsButton } from '@/components/sessions/actions/SessionHeaderSubagentsButton';
 import { SessionHeaderTerminalButton } from '@/components/sessions/actions/SessionHeaderTerminalButton';
-import { ChatList, type TranscriptViewportChangeState } from '@/components/sessions/transcript/ChatList';
+import { ChatList, type TranscriptJumpToBottomControl, type TranscriptViewportChangeState } from '@/components/sessions/transcript/ChatList';
+import { JumpToBottomButton } from '@/components/sessions/transcript/scroll/JumpToBottomButton';
 import { TranscriptFirstPaintPlaceholder } from '@/components/sessions/transcript/TranscriptFirstPaintPlaceholder';
 import { TranscriptMessageSelectionProvider } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 import { TranscriptSelectionToolbarController } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbarController';
@@ -119,7 +123,7 @@ import { tracking, trackMessageSent } from '@/track';
 import { isRunningOnMac } from '@/utils/platform/platform';
 import { randomUUID } from '@/platform/randomUUID';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/platform/responsive';
-import { getSessionAvatarId, getSessionName, listPendingPermissionRequests, shouldReadTranscriptForPendingRequests, shouldShowAbortButtonForSessionState, useSessionStatus, type PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
+import { getSessionAvatarId, getSessionName, listPendingPermissionRequests, shouldShowAbortButtonForSessionState, useSessionStatus, type PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { isVersionSupported, MINIMUM_CLI_VERSION } from '@/utils/system/versionUtils';
@@ -805,6 +809,8 @@ const SessionHeaderRightElement = React.memo(function SessionHeaderRightElement(
 
     return (
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <HeaderUiFontScaleMenu />
+            <AppUpdateStatusTag testID="session-header-app-update-status-tag" />
             <SessionHeaderActionMenu
                 sessionId={props.sessionId}
                 session={props.session}
@@ -1102,24 +1108,36 @@ type SessionAgentInputWithUsageAndRequestsProps = Omit<
     'permissionRequests'
 > & {
     session: Session;
+    rawActivityTailCharacter?: string | null;
 };
 
 const SessionAgentInputWithUsageAndRequests = React.memo(function SessionAgentInputWithUsageAndRequests({
     session,
+    rawActivityTailCharacter,
     ...props
 }: SessionAgentInputWithUsageAndRequestsProps) {
-    const shouldReadTranscript = shouldReadTranscriptForPendingRequests(session);
-    const { messages: committedMessages } = useSessionMessages(props.sessionId, { enabled: shouldReadTranscript });
+    // The activity character must keep observing the transcript even when the
+    // heartbeat-derived status temporarily reports "online" instead of "working".
+    const { messages: committedMessages } = useSessionMessages(props.sessionId, { enabled: true });
     const pendingPermissionRequests = React.useMemo(
-        () => listPendingPermissionRequests(session, shouldReadTranscript ? committedMessages : undefined),
-        [committedMessages, session, shouldReadTranscript],
+        () => listPendingPermissionRequests(session, committedMessages),
+        [committedMessages, session],
     );
     const stablePendingPermissionRequests = useStableAgentInputRequests(pendingPermissionRequests);
+    const connectionStatus = React.useMemo(() => (
+        props.connectionStatus
+            ? {
+                ...props.connectionStatus,
+                detailText: rawActivityTailCharacter ?? resolveSessionStreamingPreview(committedMessages),
+            }
+            : undefined
+    ), [committedMessages, props.connectionStatus, rawActivityTailCharacter]);
 
     return (
         <SessionAgentInputWithUsage
             {...props}
             permissionRequests={stablePendingPermissionRequests}
+            connectionStatus={connectionStatus}
         />
     );
 });
@@ -1128,6 +1146,7 @@ type SessionAgentInputRuntimeStatusBoundaryProps = Omit<
     SessionAgentInputWithUsageAndRequestsProps,
     'connectionStatus' | 'showAbortButton'
 > & {
+    connectionStatusLeadingAction: React.ReactNode | null;
     inactiveStatusText: string | null;
     isPendingQueueWakeResuming: boolean;
     isResuming: boolean;
@@ -1139,6 +1158,7 @@ const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentI
     isPendingQueueWakeResuming,
     isResuming,
     connectedServicesRestartState,
+    connectionStatusLeadingAction,
     session,
     ...props
 }: SessionAgentInputRuntimeStatusBoundaryProps) {
@@ -1148,6 +1168,7 @@ const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentI
         subscribeToTranscript: false,
     });
     const connectionStatus = React.useMemo(() => ({
+        leadingAction: connectionStatusLeadingAction,
         text: connectedServicesRestartState?.status === 'restarting'
             || connectedServicesRestartState?.status === 'pending_confirmation'
             ? t('connectedServices.authSwitch.status.restarting')
@@ -1165,6 +1186,7 @@ const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentI
             || sessionStatus.isPulsing,
     }), [
         connectedServicesRestartState?.status,
+        connectionStatusLeadingAction,
         inactiveStatusText,
         isPendingQueueWakeResuming,
         isResuming,
@@ -1761,6 +1783,7 @@ type SessionTranscriptContentProps = Readonly<{
     jumpToSeq: ChatListProps['jumpToSeq'];
     followBottomIntentKey: ChatListProps['followBottomIntentKey'];
     onViewportChange: ChatListProps['onViewportChange'];
+    onJumpToBottomControlChange: ChatListProps['onJumpToBottomControlChange'];
     onEditPendingMessage: ChatListProps['onEditPendingMessage'];
     routeHydrationPending: ChatListProps['routeHydrationPending'];
 }>;
@@ -1782,6 +1805,7 @@ const SessionTranscriptContent = React.memo(function SessionTranscriptContent({
     jumpToSeq,
     followBottomIntentKey,
     onViewportChange,
+    onJumpToBottomControlChange,
     onEditPendingMessage,
     routeHydrationPending,
 }: SessionTranscriptContentProps) {
@@ -1864,6 +1888,7 @@ const SessionTranscriptContent = React.memo(function SessionTranscriptContent({
                     jumpToSeq={jumpToSeq}
                     followBottomIntentKey={followBottomIntentKey}
                     onViewportChange={onViewportChange}
+                    onJumpToBottomControlChange={onJumpToBottomControlChange}
                     onEditPendingMessage={onEditPendingMessage}
                     routeHydrationPending={routeHydrationPending}
                 />
@@ -3695,6 +3720,10 @@ function SessionViewLoaded({
             activity: status?.activity ?? 'unknown',
             canTakeOverDirect: status?.canTakeOverDirect ?? false,
             canTakeOverPersist: status?.canTakeOverPersist ?? false,
+            providerLabel: directSessionLink.providerId === 'codex' ? 'Codex' : directSessionLink.providerId,
+            trustedPid: status?.trustedPid ?? null,
+            ownerPid: status?.ownerPid ?? null,
+            ownerHappierSessionId: status?.ownerHappierSessionId ?? null,
             takeoverInFlight: directSessionTakeover.takeoverInFlight,
             onRequestTakeOverDirect: (status?.canTakeOverDirect ?? false)
                 ? () => { void directSessionTakeover.requestTakeover('direct'); }
@@ -3704,8 +3733,51 @@ function SessionViewLoaded({
                 : undefined,
         } as const;
     }, [directSessionLink, directSessionRuntime.status, directSessionTakeover, isHiddenSystemSessionSession]);
+    const directSessionOwnerStatusBadge = React.useMemo<AgentInputStatusBadge | null>(() => {
+        if (!directSessionLink) return null;
+        const status = directSessionRuntime.status;
+        const ownerHappierSessionId = status?.ownerHappierSessionId?.trim() ?? '';
+        const ownerPid = status?.ownerPid ?? status?.trustedPid ?? null;
+        if (!ownerHappierSessionId || typeof ownerPid !== 'number') return null;
+        const isCurrentOwner = status?.runnerActive === true;
+        const label = isCurrentOwner
+            ? t('chatFooter.directSessionControlledByCurrentHappier', {
+                session: ownerHappierSessionId,
+                pid: ownerPid,
+            })
+            : t('chatFooter.directSessionControlledByOtherHappier', {
+                session: ownerHappierSessionId,
+                pid: ownerPid,
+            });
+        return {
+            key: 'direct-session-owner',
+            label,
+            accessibilityLabel: label,
+            testID: 'session-direct-owner-status-badge',
+            tone: isCurrentOwner ? 'complete' : 'warning',
+            emphasis: 'quiet',
+            icon: (tint: string) => <Ionicons name="person-circle-outline" size={12} color={tint} />,
+        };
+    }, [directSessionLink, directSessionRuntime.status]);
+    const isDirectSessionControlledByCurrentHappier = directSessionLink !== null
+        && directSessionRuntime.status?.runnerActive === true;
+    const isDirectSessionControlLocked = directSessionLink !== null && !isDirectSessionControlledByCurrentHappier;
 
     const [followBottomIntentSeq, setFollowBottomIntentSeq] = React.useState(0);
+    const [jumpToBottomControl, setJumpToBottomControl] = React.useState<TranscriptJumpToBottomControl | null>(null);
+    const handleJumpToBottomControlChange = React.useCallback((control: TranscriptJumpToBottomControl | null) => {
+        setJumpToBottomControl(control);
+    }, []);
+    const jumpToBottomStatusAction = React.useMemo(() => (
+        jumpToBottomControl ? (
+            <JumpToBottomButton
+                testID="session-status-jump-to-bottom"
+                count={jumpToBottomControl.count}
+                onPress={jumpToBottomControl.onPress}
+                presentation={jumpToBottomControl.presentation}
+            />
+        ) : null
+    ), [jumpToBottomControl]);
     const markTranscriptLiveTailIntent = React.useCallback(() => {
         sync.markSessionLiveTailIntent(sessionId);
         setFollowBottomIntentSeq((current) => current + 1);
@@ -3795,6 +3867,7 @@ function SessionViewLoaded({
             jumpToSeq={jumpToSeq}
             followBottomIntentKey={followBottomIntentSeq}
             onViewportChange={handleTranscriptViewportChange}
+            onJumpToBottomControlChange={handleJumpToBottomControlChange}
             onEditPendingMessage={handleEditPendingMessage}
             routeHydrationPending={routeHydrationPending}
         />
@@ -3903,6 +3976,7 @@ function SessionViewLoaded({
             intentionalRestartSignals,
         });
         const agentInputStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
+            ...(directSessionOwnerStatusBadge ? [directSessionOwnerStatusBadge] : []),
             ...sessionStatusBadges,
             ...sessionConnectedServicesAuthSwitch.statusBadges,
             ...(pendingMessageEdit
@@ -3919,6 +3993,7 @@ function SessionViewLoaded({
                 : []),
         ], [
             cancelPendingMessageEdit,
+            directSessionOwnerStatusBadge,
             pendingMessageEdit,
             sessionConnectedServicesAuthSwitch.statusBadges,
             sessionStatusBadges,
@@ -4682,8 +4757,14 @@ function SessionViewLoaded({
             ) : null}
             <SessionAgentInputRuntimeStatusBoundary
                 session={session}
+                rawActivityTailCharacter={directSessionRuntime.status?.activityTailCharacter ?? null}
+                connectionStatusLeadingAction={jumpToBottomStatusAction}
                 sessionLatestUsage={session.latestUsage}
-                placeholder={isReadOnly ? t('session.sharing.viewOnlyMode') : t('session.inputPlaceholder')}
+                placeholder={isReadOnly
+                    ? t('session.sharing.viewOnlyMode')
+                    : isDirectSessionControlLocked
+                        ? t('chatFooter.directSessionControlledElsewhere')
+                        : t('session.inputPlaceholder')}
                 value={message}
                 onChangeText={setDraftValue}
                 sessionId={sessionId}
@@ -4725,7 +4806,7 @@ function SessionViewLoaded({
                 onActiveStatusBadgeKeyChange={setActiveStatusBadgeKey}
                 connectedServicesRestartState={sessionConnectedServicesAuthSwitch.restartState}
                 onSend={handleAgentInputSend}
-                isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isUploadingAttachments}
+                isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isDirectSessionControlLocked || isUploadingAttachments}
                 isSending={isComposerSendPending}
                 onMicPress={micButtonState.onMicPress}
                 isMicActive={micButtonState.isMicActive}
@@ -4738,7 +4819,7 @@ function SessionViewLoaded({
                 autocompletePrefixes={SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES}
                 autocompleteSuggestions={handleAutocompleteSuggestions}
                 onAutocompleteSuggestionSelect={handleAutocompleteSuggestionSelect}
-                disabled={isReadOnly}
+                disabled={isReadOnly || isDirectSessionControlLocked}
                 alwaysShowContextSize={alwaysShowContextSize}
                 extraActionChips={agentInputExtraActionChips}
             />

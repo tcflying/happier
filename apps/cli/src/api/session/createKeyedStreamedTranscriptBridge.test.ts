@@ -51,6 +51,7 @@ describe('createKeyedStreamedTranscriptBridge', () => {
     }>({
       provider: 'codex',
       createSessionForStream: () => session,
+      makeLocalId: ({ streamKey }) => `codex-stream:${streamKey}`,
       initialCheckpointDelayMs: 200,
       checkpointIntervalMs: 2_000,
       checkpointMinChars: 256,
@@ -62,6 +63,7 @@ describe('createKeyedStreamedTranscriptBridge', () => {
     await settleSnapshots();
 
     expect(liveCalls).toHaveLength(1);
+    expect(liveCalls[0]?.localId).toBe('codex-stream:item-1');
     expect(durableCalls).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(200);

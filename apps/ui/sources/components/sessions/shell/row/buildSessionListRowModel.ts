@@ -13,6 +13,7 @@ import {
     getSessionName,
     getSessionStatus,
     getSessionSubtitle,
+    resolveActiveContextCompactionPhase,
     SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
     isFreshTimestamp,
 } from '@/utils/sessions/sessionUtils';
@@ -267,8 +268,10 @@ export function buildSessionListRowModel(input: BuildSessionListRowModelInput): 
     const activityLabel = typeof activityTimestamp === 'number' && activityTimestamp > 0
         ? formatShortRelativeTimeAt(activityTimestamp, settings.relativeNowMs)
         : '';
+    const committedMessages = listCommittedMessages(input.state ?? {});
     const status = getSessionStatus(resolvedSession, settings.runtimeNowMs, {
         workingTextMode: settings.workingTextMode,
+        contextCompactionPhase: resolveActiveContextCompactionPhase(committedMessages),
         statusColors: settings.statusColors,
     });
     const pendingCount = readPendingCount(input.state ?? {}, resolvedSession);

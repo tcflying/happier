@@ -127,7 +127,10 @@ function appendToolGroupUnits(params: Readonly<{
 }>): void {
     if (params.toolMessageIds.length === 0) return;
 
-    const toolMessageIds = [...params.toolMessageIds];
+    const toolMessageIds = params.toolMessageIds.filter((messageId) => (
+        params.getMessageById(messageId)?.kind === 'tool-call'
+    ));
+    if (toolMessageIds.length === 0) return;
     const firstToolMessageId = toolMessageIds[0]!;
     const expanded = params.isGroupExpanded(toolMessageIds);
     const createdAt = normalizeCreatedAt(params.getMessageById(firstToolMessageId));
@@ -153,7 +156,7 @@ function appendToolGroupUnits(params: Readonly<{
         ...capMetadataFields,
     });
 
-    if (!expanded && hiddenCount > 0) {
+    if (!expanded && hiddenCount > 0 && params.collapsedPreviewCount > 0) {
         params.output.push({
             kind: 'tool-group-expand',
             id: `${params.groupId}#expand`,

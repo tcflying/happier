@@ -9,5 +9,13 @@ describe('resolveCodeEditorFontMetrics', () => {
         expect(m.lineHeight).toBe(50);
         expect(m.scale).toBeCloseTo(2.5, 5);
     });
+
+    it('preserves the 3x in-app font scale', () => {
+        const metrics = resolveCodeEditorFontMetrics({ uiFontScale: 3, osFontScale: 1 });
+
+        expect(metrics.scale).toBe(3);
+        expect(metrics.fontSize).toBe(39);
+        expect(metrics.lineHeight).toBe(60);
+    });
 });
 

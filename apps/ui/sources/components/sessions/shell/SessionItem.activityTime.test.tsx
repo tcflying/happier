@@ -390,10 +390,6 @@ function findSessionTitleText(screen: Awaited<ReturnType<typeof renderScreen>>, 
     return screen.findAllByType('Text').find((node) => node.props.children === title);
 }
 
-function styleEntries(style: unknown): unknown[] {
-    return Array.isArray(style) ? style : [style];
-}
-
 function findWorkingSpinner(screen: Awaited<ReturnType<typeof renderScreen>>, sessionId: string) {
     return screen.findByTestId(`session-row-attention-indicator-spinner-${sessionId}`);
 }
@@ -721,7 +717,7 @@ describe('SessionItem activity time', () => {
         expect(screen.getTextContent()).not.toContain('1m');
     });
 
-    it('uses a tighter fixed row height in very compact mode', async () => {
+    it('uses a tighter minimum row height in very compact web mode', async () => {
         const { SessionItem } = await importSessionItemForTest();
 
         const screen = await renderScreen(
@@ -740,13 +736,14 @@ describe('SessionItem activity time', () => {
         );
 
         const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_height')?.props.style);
-        expect(rowStyle.height).toBe(34);
+        expect(rowStyle.height).toBe('auto');
+        expect(rowStyle.minHeight).toBe(34);
         expect(rowStyle.paddingHorizontal).toBe(8);
 
         expect(screen.findByTestId('session-row-attention-indicator-sess_compact_height')).toBeNull();
     });
 
-    it('renders an 18px micro avatar in very compact web rows', async () => {
+    it('keeps very compact web rows growable above their 34px minimum', async () => {
         platformOs = 'web';
         const { SessionItem } = await importSessionItemForTest();
 
@@ -766,12 +763,51 @@ describe('SessionItem activity time', () => {
         );
 
         const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_avatar_web')?.props.style);
-        expect(rowStyle.height).toBe(34);
+        expect(rowStyle.height).toBe('auto');
+        expect(rowStyle.minHeight).toBe(34);
         expect(screen.findAllByType(AvatarMock)[0].props).toMatchObject({
             id: 'avatar',
             size: 18,
         });
         expect(findRowContentStyle(screen, 'sess_compact_avatar_web').marginLeft).toBe(8);
+    });
+
+    it('keeps default and compact web rows growable above their density minimums', async () => {
+        platformOs = 'web';
+        const { SessionItem } = await importSessionItemForTest();
+
+        const defaultScreen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_default_growable_web')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+            />,
+        );
+        const defaultStyle = flattenStyle(defaultScreen.findByTestId('session-list-item-sess_default_growable_web')?.props.style);
+        expect(defaultStyle.height).toBe('auto');
+        expect(defaultStyle.minHeight).toBe(84);
+
+        const compactScreen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_growable_web')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+            />,
+        );
+        const compactStyle = flattenStyle(compactScreen.findByTestId('session-list-item-sess_compact_growable_web')?.props.style);
+        expect(compactStyle.height).toBe('auto');
+        expect(compactStyle.minHeight).toBe(58);
     });
 
     it('uses a 20px micro avatar for very compact native phone rows', async () => {
@@ -858,14 +894,11 @@ describe('SessionItem activity time', () => {
         );
 
         const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
-        const titleStyleEntries = styleEntries(findSessionTitleText(screen, 'Session')?.props.style);
-        const explicitTitleColorStyle = titleStyleEntries[titleStyleEntries.length - 1] as { color?: unknown } | undefined;
         expect(titleStyle.color).toBe(lightTheme.colors.text.secondary);
-        expect(explicitTitleColorStyle).toMatchObject({ color: titleStyle.color });
-        expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(explicitTitleColorStyle?.color);
+        expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(titleStyle.color);
     });
 
-    it('can use the active title color for all active connected session rows', async () => {
+    it('keeps active connected session rows secondary when they are not selected', async () => {
         mockSessionListIdentityDisplay = 'agentLogo';
         mockSessionListActiveColorMode = 'allActive';
         mockSessionStatus = {
@@ -896,7 +929,7 @@ describe('SessionItem activity time', () => {
         );
 
         const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
-        expect(titleStyle.color).toBe(lightTheme.colors.text.primary);
+        expect(titleStyle.color).toBe(lightTheme.colors.text.secondary);
         expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(titleStyle.color);
     });
 
@@ -1016,7 +1049,8 @@ describe('SessionItem activity time', () => {
         const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_web')?.props.style);
         const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
 
-        expect(rowStyle.height).toBe(34);
+        expect(rowStyle.height).toBe('auto');
+        expect(rowStyle.minHeight).toBe(34);
         expect(titleStyle.fontSize).toBe(12);
         expect(titleStyle.lineHeight).toBe(16);
     });
@@ -1468,7 +1502,7 @@ describe('SessionItem activity time', () => {
         expect(screen.getTextContent()).toContain('1m');
     });
 
-    it('keeps the selected row background when a session is selected', async () => {
+    it('uses a stronger selected background and reserves bold primary text for the selected session', async () => {
         mockSessionStatus = {
             state: 'waiting',
             isConnected: true,
@@ -1498,6 +1532,43 @@ describe('SessionItem activity time', () => {
         expect(screen.findByTestId('session-list-item-sess_selected')?.props.accessibilityState).toMatchObject({
             selected: true,
         });
+        const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_selected')?.props.style);
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+        expect(rowStyle.backgroundColor).toBe(lightTheme.colors.state.neutral.border);
+        expect(rowStyle.borderColor).toBe(lightTheme.colors.state.neutral.border);
+        expect(titleStyle.color).toBe(lightTheme.colors.text.primary);
+        expect(titleStyle.fontWeight).toBe('600');
+    });
+
+    it('keeps attention-state session titles at the regular weight', async () => {
+        mockSessionStatus = {
+            state: 'thinking',
+            isConnected: true,
+            statusText: 'working',
+            shouldShowStatus: true,
+            statusColor: '#007AFF',
+            statusDotColor: '#007AFF',
+            isPulsing: true,
+        };
+
+        const { SessionItem } = await importSessionItemForTest();
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_working_regular')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+        expect(titleStyle.color).toBe(lightTheme.colors.text.secondary);
+        expect(titleStyle.fontWeight).not.toBe('600');
     });
 
     it('uses row-model ownership data without subscribing to profile or full session state', async () => {

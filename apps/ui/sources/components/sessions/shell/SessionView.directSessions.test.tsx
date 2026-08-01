@@ -128,6 +128,7 @@ const settingByKeyState = vi.hoisted(() => ({ current: {} as Record<string, unkn
 const participantTargetsState = vi.hoisted(() => ({ current: [] as any[] }));
 const reviewCommentDraftsState = vi.hoisted(() => ({ current: [] as any[] }));
 const sessionMessagesState = vi.hoisted(() => ({ current: [] as any[] }));
+const useSessionMessagesOptionsSpy = vi.hoisted(() => vi.fn());
 const draftHookState = vi.hoisted(() => ({
   valuesBySessionId: new Map<string, string>(),
 }));
@@ -293,7 +294,13 @@ installSessionShellCommonModuleMocks({
         useSession: () => storageState.sessions.s1,
         useIsDataReady: () => true,
         useRealtimeStatus: () => 'connected',
-        useSessionMessages: () => ({ messages: sessionMessagesState.current, isLoaded: true }),
+        useSessionMessages: (_sessionId: string, options?: { enabled?: boolean }) => {
+          useSessionMessagesOptionsSpy(options);
+          return {
+            messages: options?.enabled === false ? [] : sessionMessagesState.current,
+            isLoaded: options?.enabled !== false,
+          };
+        },
         useSessionTranscriptIds: () => ({ ids: ['m1'], isLoaded: true }),
         useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
         useWorkspaceReviewCommentsDrafts: () => reviewCommentDraftsState.current,
@@ -788,6 +795,7 @@ describe('SessionView (direct sessions)', () => {
     participantTargetsState.current = [];
     reviewCommentDraftsState.current = [];
     sessionMessagesState.current = [];
+    useSessionMessagesOptionsSpy.mockClear();
     draftHookState.valuesBySessionId.clear();
     quotaSnapshotsState.current = {};
     quotaSnapshotsState.requestedProfiles = [];
@@ -849,7 +857,7 @@ describe('SessionView (direct sessions)', () => {
     machineDirectSessionStatusGetSpy.mockResolvedValue({
       ok: true,
       machineOnline: true,
-      runnerActive: false,
+      runnerActive: true,
       activity: 'running',
       canTakeOverDirect: true,
       canTakeOverPersist: true,
@@ -2675,39 +2683,121 @@ describe('SessionView (direct sessions)', () => {
     }
   });
 
-  it('prompts for takeover on send and submits after taking over the direct session', async () => {
-    showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
+  it('disables the composer while a direct session is controlled outside Happier', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: false,
+      activity: 'running',
+      canTakeOverDirect: true,
+      canTakeOverPersist: true,
+      canForceStop: false,
+      trustedPid: 4321,
+      ownerPid: 4321,
+      ownerHappierSessionId: 'session-other',
+    });
     const screen = await renderSessionView();
 
     const agentInput = findAgentInput(screen);
-    await act(async () => {
-      agentInput.props.onChangeText('continue this session');
+    expect(agentInput.props.disabled).toBe(true);
+    expect(agentInput.props.isSendDisabled).toBe(true);
+    expect(agentInput.props.placeholder).toBe('chatFooter.directSessionControlledElsewhere');
+    expect(agentInput.props.statusBadges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'direct-session-owner',
+        testID: 'session-direct-owner-status-badge',
+        tone: 'warning',
+        emphasis: 'quiet',
+        label: 'chatFooter.directSessionControlledByOtherHappier',
+      }),
+    ]));
+    expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
+
+  });
+
+  it('keeps the transcript subscribed for the all-activity status character even while runtime status is online', async () => {
+    sessionMessagesState.current = [{
+      kind: 'tool-call',
+      id: 'tool-live',
+      localId: null,
+      createdAt: 2,
+      tool: {
+        name: 'Exec',
+        state: 'running',
+        input: { command: 'pnpm test' },
+        result: { output: 'tests 41/42' },
+      },
+      children: [],
+    }];
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.connectionStatus?.text).toBe('status.online');
+    expect(findAgentInput(screen).props.connectionStatus?.detailText).toBe('2');
+    expect(useSessionMessagesOptionsSpy).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+  });
+
+  it('prefers the provider raw-stream tail character over the materialized transcript fallback', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: true,
+      activity: 'running',
+      canTakeOverDirect: false,
+      canTakeOverPersist: true,
+      canForceStop: false,
+      activityTailCharacter: '新',
+    });
+    sessionMessagesState.current = [{
+      kind: 'agent-text',
+      id: 'materialized-old',
+      localId: null,
+      createdAt: 2,
+      text: 'older materialized text',
+    }];
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.connectionStatus?.detailText).toBe('新');
+  });
+
+  it('shows the current direct-session owner in the compact input status row', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: true,
+      activity: 'idle',
+      canTakeOverDirect: false,
+      canTakeOverPersist: true,
+      canForceStop: false,
+      ownerHappierSessionId: 's1',
+      ownerPid: 3904,
     });
 
-    await act(async () => {
-      await agentInput.props.onSend();
-    });
+    const screen = await renderSessionViewAndSettle();
+    const ownerBadge = findAgentInput(screen).props.statusBadges.find((badge: { key?: string }) => (
+      badge.key === 'direct-session-owner'
+    ));
 
-    expect(showDirectSessionTakeoverDialogSpy).toHaveBeenCalledWith({
+    expect(ownerBadge).toEqual(expect.objectContaining({
+      key: 'direct-session-owner',
+      testID: 'session-direct-owner-status-badge',
+      tone: 'complete',
+      emphasis: 'quiet',
+      label: 'chatFooter.directSessionControlledByCurrentHappier',
+    }));
+  });
+
+  it('keeps the composer text when direct takeover is cancelled from the send prompt', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: false,
+      activity: 'running',
       canTakeOverDirect: true,
       canTakeOverPersist: true,
       canForceStop: false,
     });
-    expect(machineDirectSessionTakeoverSpy).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      sessionId: 's1',
-    }, { serverId: 'server-1' });
-    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
-      's1',
-      'continue this session',
-      undefined,
-      undefined,
-      expectDirectSendProjectionOptions(),
-    );
-
-  });
-
-  it('keeps the composer text when direct takeover is cancelled from the send prompt', async () => {
     showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: null, forceStop: false });
     const screen = await renderSessionView();
 
@@ -2730,6 +2820,15 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('keeps the composer text visible while a direct takeover send prompt is still pending', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: false,
+      activity: 'running',
+      canTakeOverDirect: true,
+      canTakeOverPersist: true,
+      canForceStop: false,
+    });
     showDirectSessionTakeoverDialogSpy.mockImplementationOnce(
       () => new Promise<{ action: 'direct' | 'persisted' | null; forceStop: boolean }>(() => {}),
     );
@@ -2750,8 +2849,7 @@ describe('SessionView (direct sessions)', () => {
 
   });
 
-  it('passes force-stop through when persisting takeover from the send prompt', async () => {
-    showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'persisted', forceStop: true });
+  it('does not send while another provider process requires a persisted takeover', async () => {
     machineDirectSessionStatusGetSpy.mockResolvedValue({
       ok: true,
       machineOnline: true,
@@ -2773,18 +2871,8 @@ describe('SessionView (direct sessions)', () => {
       await agentInput.props.onSend();
     });
 
-    expect(machineDirectSessionTakeoverPersistSpy).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      sessionId: 's1',
-      forceStop: true,
-    }, { serverId: 'server-1' });
-    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
-      's1',
-      'persist this',
-      undefined,
-      undefined,
-      expectDirectSendProjectionOptions(),
-    );
+    expect(machineDirectSessionTakeoverPersistSpy).not.toHaveBeenCalled();
+    expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
 
   });
 

@@ -81,7 +81,12 @@ export const Header = React.memo((props: HeaderProps) => {
                 <View
                     testID="desktop-route-header-content"
                     pointerEvents="box-none"
-                    style={[styles.content, { height: headerHeight, maxWidth }]}
+                    style={[
+                        styles.content,
+                        Platform.OS === 'web'
+                            ? { minHeight: headerHeight, maxWidth }
+                            : { height: headerHeight, maxWidth },
+                    ]}
                 >
                     <View pointerEvents="box-none" style={styles.leftContainer}>
                         {headerLeft && headerLeft()}

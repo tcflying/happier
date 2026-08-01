@@ -2,6 +2,10 @@ import type { DirectTranscriptRawMessageV1 } from '@happier-dev/protocol';
 
 import type { CodexRolloutAction } from '../localControl/rolloutMapper';
 import { projectCodexRolloutActions } from '../rollout/projectCodexRolloutActions';
+import {
+  buildCodexStreamSegmentLocalId,
+  readCodexRolloutResponseItemId,
+} from '../appServer/streamedTranscriptIdentity';
 
 function shouldFilterHarnessBlob(text: string): boolean {
   const t = text.trim();
@@ -40,6 +44,7 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
   sidechainId?: string | null;
 }>): DirectTranscriptRawMessageV1[] {
   const createdAtMs = extractEnvelopeTimestampMs(params.lineValue);
+  const responseItemId = readCodexRolloutResponseItemId(params.lineValue);
   // Direct transcript rendering should include "debug-only" tool calls (e.g., Codex-internal read/write tools),
   // but must still filter harness/system blobs that Codex sometimes embeds as user messages.
   const projected = projectCodexRolloutActions(
@@ -68,12 +73,27 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
     }
 
     if (action.type === 'assistant-text') {
+      const streamLocalId = responseItemId
+        ? buildCodexStreamSegmentLocalId('assistant', responseItemId)
+        : stableId;
       out.push({
         id: stableId,
-        localId: stableId,
+        localId: streamLocalId,
         createdAtMs,
         raw: {
           role: 'agent',
+          ...(responseItemId ? {
+            meta: {
+              happierStreamSegmentV1: {
+                v: 1,
+                segmentKind: 'assistant',
+                segmentLocalId: streamLocalId,
+                segmentState: 'complete',
+                startedAtMs: createdAtMs,
+                updatedAtMs: createdAtMs,
+              },
+            },
+          } : {}),
           content: {
             type: 'codex',
             data: {

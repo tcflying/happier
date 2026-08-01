@@ -94,4 +94,16 @@ describe('Header content width', () => {
         expect(flattenStyle(screen.findByTestId('desktop-route-header-content')?.props.style).maxWidth)
             .toBe(Number.POSITIVE_INFINITY);
     });
+
+    it('uses the platform header height as a web minimum instead of clipping enlarged text', async () => {
+        const { Header } = await import('./Header');
+
+        const screen = await renderScreen(
+            <Header title={React.createElement('Text', null, 'Appearance')} subtitle="Subtitle" safeAreaEnabled={false} />,
+        );
+        const style = flattenStyle(screen.findByTestId('desktop-route-header-content')?.props.style);
+
+        expect(style.height).toBeUndefined();
+        expect(style.minHeight).toBe(56);
+    });
 });

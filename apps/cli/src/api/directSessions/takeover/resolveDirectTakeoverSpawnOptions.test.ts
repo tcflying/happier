@@ -283,12 +283,14 @@ describe('resolveDirectTakeoverSpawnOptions', () => {
   it('uses app-server thread cwd when an app-server-linked codex session has no stored path or rollout metadata', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-direct-takeover-codex-app-server-cwd-'));
     const codexHome = join(root, '.codex');
+    const appServerCwd = join(root, 'project');
     await mkdir(codexHome, { recursive: true });
+    await mkdir(appServerCwd, { recursive: true });
     const fakeAppServer = await writeFakeCodexAppServerThreadListScript({
       dir: root,
       nonArchivedThreads: [{
         id: '22222222-2222-2222-2222-222222222222',
-        cwd: '/tmp/direct-codex-app-server-cwd-project',
+        cwd: appServerCwd,
         updatedAt: 1_736_000_100,
       }],
     });
@@ -305,7 +307,7 @@ describe('resolveDirectTakeoverSpawnOptions', () => {
     });
 
     expect(spawnOptions).toEqual({
-      directory: '/tmp/direct-codex-app-server-cwd-project',
+      directory: appServerCwd,
       backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
       existingSessionId: 'sess_happy_direct_codex_app_server_cwd',
       resume: '22222222-2222-2222-2222-222222222222',

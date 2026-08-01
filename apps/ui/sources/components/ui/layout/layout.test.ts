@@ -8,7 +8,7 @@ const layoutState = vi.hoisted(() => ({
     platformOs: 'web' as 'ios' | 'android' | 'web',
     windowDimensions: { width: 2048, height: 687 },
     localSettings: {
-        uiContentWidthMode: 'compact' as 'compact' | 'medium' | 'full',
+        uiContentWidthMode: 'full' as 'compact' | 'medium' | 'full',
     },
 }));
 
@@ -56,19 +56,20 @@ describe('layout', () => {
         layoutState.isTauriDesktop = false;
         layoutState.platformOs = 'web';
         layoutState.windowDimensions = { width: 2048, height: 687 };
-        layoutState.localSettings = { uiContentWidthMode: 'compact' };
+        layoutState.localSettings = { uiContentWidthMode: 'full' };
     });
 
-    it('uses compact content width by default in Tauri desktop windows', async () => {
+    it('uses full content width by default in Tauri desktop windows', async () => {
         layoutState.isTauriDesktop = true;
 
         const { layout } = await import('./layout');
 
-        expect(layout.maxWidth).toBe(850);
+        expect(layout.maxWidth).toBe(Number.POSITIVE_INFINITY);
     });
 
-    it('uses compact content width for desktop headers', async () => {
+    it('uses compact content width for desktop headers when selected', async () => {
         layoutState.isTauriDesktop = true;
+        layoutState.localSettings = { uiContentWidthMode: 'compact' };
 
         const { layout } = await import('./layout');
 
@@ -76,13 +77,13 @@ describe('layout', () => {
         expect(layout.headerMaxWidth).toBe(850);
     });
 
-    it('uses compact content width for web headers regardless of viewport class', async () => {
+    it('uses full content width for web headers by default regardless of viewport class', async () => {
         layoutState.windowDimensions = { width: 2400, height: 1400 };
 
         const { layout } = await import('./layout');
 
-        expect(layout.maxWidth).toBe(850);
-        expect(layout.headerMaxWidth).toBe(850);
+        expect(layout.maxWidth).toBe(Number.POSITIVE_INFINITY);
+        expect(layout.headerMaxWidth).toBe(Number.POSITIVE_INFINITY);
     });
 
     it('uses medium content width when selected', async () => {

@@ -88,12 +88,12 @@ describe('featureLocalPolicy', () => {
         })).toBe(false);
     });
 
-    it('disables attachments.uploads by default when experiments are on', () => {
+    it('enables attachments.uploads by default without the experiments master switch', () => {
         expect(resolveLocalFeaturePolicyEnabled('attachments.uploads', {
             ...settingsDefaults,
-            experiments: true,
+            experiments: false,
             featureToggles: {},
-        })).toBe(false);
+        })).toBe(true);
     });
 
     it('enables attachments.uploads when explicitly enabled', () => {

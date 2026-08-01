@@ -28,6 +28,19 @@ function extractVendorSessionIdFromMarkerMetadata(params: Readonly<{
   return normalized.length > 0 ? normalized : null;
 }
 
+function markerMatchesProvider(params: Readonly<{
+  marker: DaemonSessionMarker;
+  providerId: DirectSessionsProviderId;
+}>): boolean {
+  const topLevelFlavor = typeof params.marker.flavor === 'string' ? params.marker.flavor.trim() : '';
+  if (topLevelFlavor) return topLevelFlavor === params.providerId;
+
+  const metadata = params.marker.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false;
+  const metadataFlavor = (metadata as Record<string, unknown>).flavor;
+  return typeof metadataFlavor === 'string' && metadataFlavor.trim() === params.providerId;
+}
+
 export function findTrustedDirectSessionOwner(params: Readonly<{
   markers: readonly DaemonSessionMarker[];
   providerId: DirectSessionsProviderId;
@@ -40,7 +53,11 @@ export function findTrustedDirectSessionOwner(params: Readonly<{
 
   const candidates = params.markers
     .filter((marker) => Number.isFinite(marker.pid) && marker.pid > 0 && isPidAlive(marker.pid))
-    .filter((marker) => marker.flavor === params.providerId)
+    // Real daemon marker files created by older/current session runners keep
+    // the provider under metadata.flavor and may omit the optional top-level
+    // flavor field. Accept both shapes, while still rejecting cross-provider
+    // markers before comparing provider session ids.
+    .filter((marker) => markerMatchesProvider({ marker, providerId: params.providerId }))
     .filter(
       (marker) =>
         extractVendorSessionIdFromMarkerMetadata({

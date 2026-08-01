@@ -14,6 +14,7 @@ import { isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import type { ApiMachineClient } from '@/api/apiMachine';
+import { ensureDirectSessionLink } from '@/api/directSessions/linking/ensureDirectSessionLink';
 import { applyInitialTranscriptAfterSeqToAttachPayload } from '@/daemon/sessionEncryption/applyInitialTranscriptAfterSeqToAttachPayload';
 import { TrackedSession } from './types';
 import { MachineMetadata, DaemonState, type Metadata } from '@/api/types';
@@ -4854,6 +4855,27 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         readSessionRunnerLockStatus,
         requestRestart: requestOldRunnerMigrationRestart,
       }),
+      handleCodexDirectSessionLinkEnsure: async ({ remoteSessionId, title, directory }) => {
+        try {
+          const result = await ensureDirectSessionLink({
+            credentials,
+            machineId,
+            providerId: 'codex',
+            remoteSessionId,
+            titleHint: title,
+            ...(directory ? { directoryHint: directory } : {}),
+            codexBackendMode: 'appServer',
+            source: { kind: 'codexHome', home: 'user' },
+          });
+          return { ok: true, sessionId: result.sessionId, created: result.created };
+        } catch (error) {
+          return {
+            ok: false,
+            errorCode: 'direct_session_link_failed',
+            errorMessage: error instanceof Error ? error.message : 'Unknown error',
+          };
+        }
+      },
       handleConnectedServiceUsageLimitWaitResumeCancel: cancelConnectedServiceUsageLimitWaitResumeForSession,
       handleSessionConnectedServiceAuthSwitch: async (input) => {
         let diagnostics: SessionConnectedServiceAuthSwitchDiagnostics | undefined;

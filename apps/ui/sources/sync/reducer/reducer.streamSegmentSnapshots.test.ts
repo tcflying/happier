@@ -2,13 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { NormalizedMessage } from '../typesRaw';
 
-function buildStreamSegmentMeta(opts: { segmentKind: 'assistant' | 'thinking'; updatedAtMs: number }) {
+function buildStreamSegmentMeta(opts: {
+  segmentKind: 'assistant' | 'thinking';
+  updatedAtMs: number;
+  segmentState?: 'streaming' | 'complete';
+}) {
   return {
     happierStreamSegmentV1: {
       v: 1,
       segmentKind: opts.segmentKind,
       segmentLocalId: `${opts.segmentKind}-segment-1`,
-      segmentState: 'streaming',
+      segmentState: opts.segmentState ?? 'streaming',
       startedAtMs: 1_000,
       updatedAtMs: opts.updatedAtMs,
     },
@@ -88,6 +92,71 @@ describe('reducer (stream segment snapshots)', () => {
     expect(m2.id).toBe(m1.id);
     expect(m2.text).toBe('Hello world');
     expect(m2.localId).toBe('assistant-segment-1');
+  });
+
+  it('closes a streamed tool with collected output when the assistant segment completes', async () => {
+    vi.resetModules();
+    vi.unmock('./helpers/streamSegmentMeta');
+    const { createReducer, reducer } = await import('./reducer');
+    const state = createReducer();
+
+    const toolCall: NormalizedMessage = {
+      id: 'tool-call-message',
+      seq: 1,
+      localId: 'tool-call-local',
+      createdAt: 1_000,
+      role: 'agent',
+      content: [{
+        type: 'tool-call',
+        id: 'tool-stream-1',
+        name: 'CodexBash',
+        input: { command: 'slow output' },
+        description: null,
+        uuid: 'tool-call-uuid',
+        parentUUID: null,
+      }],
+      isSidechain: false,
+    };
+    reducer(state, [toolCall], null);
+
+    const streamChunk: NormalizedMessage = {
+      id: 'tool-output-message',
+      seq: 2,
+      localId: 'tool-output-local',
+      createdAt: 1_100,
+      role: 'agent',
+      content: [{
+        type: 'tool-result',
+        tool_use_id: 'tool-stream-1',
+        content: { _stream: true, stdoutChunk: 'line 1\n' },
+        is_error: false,
+        uuid: 'tool-output-uuid',
+        parentUUID: null,
+      }],
+      isSidechain: false,
+    };
+    reducer(state, [streamChunk], null);
+
+    const completedAssistant: NormalizedMessage = {
+      id: 'assistant-complete-message',
+      seq: 3,
+      localId: 'assistant-complete-local',
+      createdAt: 1_200,
+      role: 'agent',
+      content: [{ type: 'text', text: 'Done', uuid: 'assistant-complete-uuid', parentUUID: null }],
+      isSidechain: false,
+      meta: buildStreamSegmentMeta({
+        segmentKind: 'assistant',
+        updatedAtMs: 1_250,
+        segmentState: 'complete',
+      }) as any,
+    };
+
+    const result = reducer(state, [completedAssistant], null);
+    const completedTool = result.messages.find((message) => message.kind === 'tool-call') as any;
+    expect(completedTool?.tool.state).toBe('completed');
+    expect(completedTool?.tool.completedAt).toBe(1_250);
+    expect(completedTool?.tool.result).toEqual({ stdout: 'line 1\n' });
   });
 
   it('upserts assistant stream segments by segmentLocalId when durable snapshots were written with different localIds', async () => {

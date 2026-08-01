@@ -7,6 +7,40 @@ import { GlassPanel } from '@/components/ui/glass/GlassPanel';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
+export function isTextControlSelectionAtEnd(
+    value: string,
+    selectionStart: number | null,
+    selectionEnd: number | null,
+): boolean {
+    return typeof selectionStart === 'number'
+        && typeof selectionEnd === 'number'
+        && selectionStart === value.length
+        && selectionEnd === value.length;
+}
+
+function isTextControlCaretAtEnd(element: Element): boolean {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return false;
+    return isTextControlSelectionAtEnd(element.value, element.selectionStart, element.selectionEnd);
+}
+
+function isContentEditableCaretAtEnd(element: Element): boolean {
+    if (!(element instanceof HTMLElement) || !element.isContentEditable) return false;
+    const selection = window.getSelection();
+    if (!selection || !selection.isCollapsed || selection.rangeCount === 0) return false;
+    const range = selection.getRangeAt(0).cloneRange();
+    range.selectNodeContents(element);
+    range.setStart(selection.focusNode ?? element, selection.focusOffset);
+    return range.toString().length === 0;
+}
+
+export function shouldHandleJumpToBottomArrowDown(event: KeyboardEvent): boolean {
+    if (event.key !== 'ArrowDown' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+    if (event.defaultPrevented) return false;
+    const activeElement = document.activeElement;
+    if (!activeElement || activeElement === document.body || activeElement === document.documentElement) return true;
+    return isTextControlCaretAtEnd(activeElement) || isContentEditableCaretAtEnd(activeElement);
+}
+
 export const JumpToBottomButton = React.memo(function JumpToBottomButton(props: {
     count: number;
     onPress: () => void;
@@ -19,6 +53,16 @@ export const JumpToBottomButton = React.memo(function JumpToBottomButton(props: 
         ? t('settingsSession.transcript.jumpToBottomButtonNewActivityLabel', { count: props.count })
         : label;
     const compact = props.presentation === 'activity' || rt.breakpoint === 'xs' || rt.breakpoint === 'sm' || rt.breakpoint === 'md';
+    React.useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (!shouldHandleJumpToBottomArrowDown(event)) return;
+            event.preventDefault();
+            props.onPress();
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [props.onPress]);
     return (
         <GlassPanel
             // Match the tab bar's glass look: default solid fill (surface.base), not a
@@ -32,6 +76,7 @@ export const JumpToBottomButton = React.memo(function JumpToBottomButton(props: 
                 onPress={props.onPress}
                 accessibilityRole="button"
                 accessibilityLabel={accessibilityLabel}
+                accessibilityHint="ArrowDown"
                 style={({ pressed }) => [styles.row, compact && styles.compactRow, pressed && { opacity: 0.92 }]}
             >
                 {props.count > 0 ? (

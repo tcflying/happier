@@ -152,6 +152,21 @@ describe('ChatHeaderView', () => {
         expect(maxWidth).toBe('100%');
     });
 
+    it('lets the web header grow beyond its platform minimum when enlarged text needs more room', async () => {
+        platformOs = 'web';
+        const { ChatHeaderView } = await import('./ChatHeaderView');
+
+        const screen = await renderScreen(<ChatHeaderView title="Title" subtitle="Subtitle" />);
+        const contentView = screen.findAllByType('View' as any).find((node) => {
+            const style = flattenStyle(node.props?.style);
+            return style.maxWidth === 1024;
+        });
+        const style = flattenStyle(contentView?.props.style);
+
+        expect(style.height).toBeUndefined();
+        expect(style.minHeight).toBe(44);
+    });
+
     it('renders header badges when provided', async () => {
         const { ChatHeaderView } = await import('./ChatHeaderView');
 

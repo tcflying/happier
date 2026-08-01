@@ -11,7 +11,7 @@ export function resolveToolViewDetailLevelDefaultForChromeMode(params: {
     setting: ToolViewDetailLevelSetting;
 }): ToolViewDetailLevel {
     if (params.setting === 'default') {
-        return params.chromeMode === 'activity_feed' ? 'compact' : 'summary';
+        return params.chromeMode === 'activity_feed' ? 'compact' : 'title';
     }
     return params.setting;
 }

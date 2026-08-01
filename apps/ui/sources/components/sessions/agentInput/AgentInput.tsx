@@ -103,6 +103,7 @@ import { resolveSessionModeChipPresentation } from './controls/resolveSessionMod
 import { useAgentInputActionMenuControls } from './controls/useAgentInputActionMenuControls';
 import { useAgentInputCoreControlHandlers } from './controls/useAgentInputCoreControlHandlers';
 import { useRenderedAgentInputControlRows } from './controls/useRenderedAgentInputControlRows';
+import { resolveAgentChipModelControlSummary } from './controls/resolveAgentChipModelControlSummary';
 import { buildAgentInputSelectionOverlayViewModel } from './selection/buildAgentInputSelectionOverlayViewModel';
 import { useAgentInputSelectionAnchors } from './selection/useAgentInputSelectionAnchors';
 import { useAgentInputSelectionOverlayController } from './selection/useAgentInputSelectionOverlayController';
@@ -301,7 +302,9 @@ interface AgentInputProps {
     onAbort?: () => void | Promise<void>;
     showAbortButton?: boolean;
     connectionStatus?: {
+        leadingAction?: React.ReactNode;
         text: string;
+        detailText?: string | null;
         color: string;
         dotColor: string;
         isPulsing?: boolean;
@@ -773,6 +776,13 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     statusText: {
         fontSize: 11,
+        ...Typography.default(),
+    },
+    statusDetailText: {
+        marginLeft: 8,
+        fontSize: 11,
+        color: theme.colors.text.secondary,
+        flexShrink: 1,
         ...Typography.default(),
     },
     statusDot: {
@@ -2303,8 +2313,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         toggleSelectionOverlay,
     });
     const engineChipLabel = React.useMemo(() => {
-        return hasAgentPickerOptions ? effectiveModelLabel : resolvedAgentLabel;
-    }, [effectiveModelLabel, hasAgentPickerOptions, resolvedAgentLabel]);
+        if (!hasAgentPickerOptions) return resolvedAgentLabel;
+        const controlSummary = resolveAgentChipModelControlSummary(selectedModelOptionControls);
+        return [effectiveModelLabel, ...controlSummary].join(' · ');
+    }, [effectiveModelLabel, hasAgentPickerOptions, resolvedAgentLabel, selectedModelOptionControls]);
     const hasRecipient = React.useMemo(() => {
         return (props.extraActionChips ?? []).some((chip) => chip.controlId === 'recipient');
     }, [props.extraActionChips]);
@@ -3122,6 +3134,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     <View style={styles.statusContainer}>
                         <View style={styles.statusRow}>
                             {props.connectionStatus && (
+                                <>
+                                {props.connectionStatus.leadingAction ?? null}
                                 <View style={styles.connectionStatusGroup}>
                                     <StatusDot
                                         color={props.connectionStatus.dotColor}
@@ -3135,7 +3149,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     >
                                         {props.connectionStatus.text}
                                     </Text>
+                                    {props.connectionStatus.detailText ? (
+                                        <Text
+                                            testID="agent-input-connection-status-detail"
+                                            style={styles.statusDetailText}
+                                            numberOfLines={1}
+                                        >
+                                            {props.connectionStatus.detailText}
+                                        </Text>
+                                    ) : null}
                                 </View>
+                                </>
                             )}
                             {props.statusBadges?.map(({ key, renderPopover, onPress, ...badge }) => (
                                 <AgentInputStatusBadge

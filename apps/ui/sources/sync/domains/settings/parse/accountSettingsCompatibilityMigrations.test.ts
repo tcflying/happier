@@ -142,6 +142,40 @@ describe('applyAccountSettingsCompatibilityMigrations', () => {
         expect(migrated.glassBlurEnabled).toBe(true);
     });
 
+    it('migrates the legacy three-row tool preview default to the header-only default', () => {
+        const migrated = applyAccountSettingsCompatibilityMigrations({
+            input: {
+                transcriptToolCallsCollapsedPreviewCount: 3,
+            },
+            settings: {
+                ...settingsDefaults,
+                transcriptToolCallsCollapsedPreviewCount: 3,
+            },
+            inputSchemaVersion: 8,
+            supportedSchemaVersion: 8,
+        });
+
+        expect(migrated.transcriptToolCallsCollapsedPreviewCount).toBe(0);
+    });
+
+    it('preserves a three-row preview after the user explicitly selects it', () => {
+        const migrated = applyAccountSettingsCompatibilityMigrations({
+            input: {
+                transcriptToolCallsCollapsedPreviewCount: 3,
+                transcriptToolCallsCollapsedPreviewExplicitChoice: true,
+            },
+            settings: {
+                ...settingsDefaults,
+                transcriptToolCallsCollapsedPreviewCount: 3,
+                transcriptToolCallsCollapsedPreviewExplicitChoice: true,
+            },
+            inputSchemaVersion: 8,
+            supportedSchemaVersion: 8,
+        });
+
+        expect(migrated.transcriptToolCallsCollapsedPreviewCount).toBe(3);
+    });
+
     it('preserves an existing codex backend mode when migrating a pre-v6 payload', () => {
         const migrated = applyAccountSettingsCompatibilityMigrations({
             input: {

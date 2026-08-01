@@ -65,7 +65,15 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
     return (
         <View style={[styles.container, { paddingTop: includeTopInset ? insets.top : 0, backgroundColor: theme.colors.chrome.header.background }]}>
             <View style={[styles.contentWrapper, constrainWidth ? null : { alignItems: 'stretch' }]}>
-                <View style={[styles.content, { height: headerHeight, maxWidth }, constrainWidth ? null : { maxWidth: '100%' }]}>
+                <View
+                    style={[
+                        styles.content,
+                        Platform.OS === 'web'
+                            ? { minHeight: headerHeight, maxWidth }
+                            : { height: headerHeight, maxWidth },
+                        constrainWidth ? null : { maxWidth: '100%' },
+                    ]}
+                >
                 <Pressable
                     onPress={handleBackPress}
                     testID={backButtonTestId}

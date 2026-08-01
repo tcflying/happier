@@ -340,6 +340,15 @@ vi.mock('@/components/ui/feedback/AppUpdateStatusTag', () => {
     };
 });
 
+vi.mock('@/components/navigation/HeaderUiFontScaleMenu', () => {
+    const React = require('react');
+    return {
+        HeaderUiFontScaleMenu: () => React.createElement('HeaderUiFontScaleMenu', {
+            testID: 'header-ui-font-scale-menu',
+        }),
+    };
+});
+
 vi.mock('@/components/navigation/shell/desktopChrome/DesktopShellWindowControlsHost', () => {
     const React = require('react');
     return {
@@ -786,13 +795,24 @@ describe('app/_layout init resilience', () => {
         expect(fontInitErrors).toHaveLength(0);
     });
 
-    it('renders the web top-right update tag outside Tauri desktop', async () => {
+    it('renders the web top-right global controls outside Tauri desktop', async () => {
         shellChromeState.isTauriDesktop = false;
 
         const screen = await renderSettledRootLayout();
 
+        expect(screen.findAllByTestId('root-shell-top-right-controls')).toHaveLength(1);
         expect(screen.findAllByTestId('root-shell-app-update-status-tag').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('header-ui-font-scale-menu')).toHaveLength(1);
         expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(0);
+    });
+
+    it('keeps the global top-right controls out of a session header', async () => {
+        mockedPathname = '/session/session-1';
+
+        const screen = await renderSettledRootLayout();
+
+        expect(screen.findAllByTestId('root-shell-top-right-controls')).toHaveLength(0);
+        expect(screen.findAllByTestId('header-ui-font-scale-menu')).toHaveLength(0);
     });
 
     it('renders fallback desktop controls and update tag for unauthenticated Tauri desktop setup flows', async () => {

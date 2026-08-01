@@ -126,6 +126,13 @@ export const ACCOUNT_TRANSCRIPT_TOOL_SETTING_DEFINITIONS = defineSettingDefiniti
             serializeCurrent: serializeBucketCount(3, 5),
         },
     },
+    transcriptToolCallsCollapsedPreviewExplicitChoice: {
+        schema: z.boolean(),
+        default: false,
+        description: 'Whether the user explicitly chose the collapsed tool preview count after the header-only default migration',
+        storageScope: 'account',
+        analytics: { trackCurrentState: false, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    },
     transcriptToolCallsGroupShowBackground: {
         schema: z.boolean(),
         default: true,

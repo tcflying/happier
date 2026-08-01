@@ -273,4 +273,46 @@ describe('ChatFooter (local control)', () => {
         expect(screen.findByTestId('session-chatFooter-takeOverDirect')).toBeNull();
         expect(screen.findByTestId('session-chatFooter-takeOverPersist')).toBeNull();
     });
+
+    it('does not render the current Happier owner as a warning banner', async () => {
+        const screen = await renderFooter({
+            controlledByUser: false,
+            directControl: {
+                machineOnline: true,
+                runnerActive: true,
+                activity: 'running',
+                canTakeOverDirect: false,
+                canTakeOverPersist: true,
+                takeoverInFlight: null,
+                providerLabel: 'Codex',
+                ownerHappierSessionId: 'session-current',
+                ownerPid: 1234,
+                onRequestTakeOverPersist: vi.fn(),
+            },
+        } as any);
+
+        expect(screen.getTextContent()).not.toContain('chatFooter.directSessionControlledByCurrentHappier');
+        expect(screen.findByTestId('session-chatFooter-takeOverDirect')).toBeNull();
+        expect(screen.findByTestId('session-chatFooter-takeOverPersist')).toBeNull();
+    });
+
+    it('identifies the other Happier session that currently owns the direct session', async () => {
+        const screen = await renderFooter({
+            controlledByUser: false,
+            directControl: {
+                machineOnline: true,
+                runnerActive: false,
+                activity: 'running',
+                canTakeOverDirect: true,
+                canTakeOverPersist: true,
+                takeoverInFlight: null,
+                providerLabel: 'Codex',
+                trustedPid: 4321,
+                ownerHappierSessionId: 'session-other',
+                ownerPid: 4321,
+            },
+        } as any);
+
+        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByOtherHappier');
+    });
 });

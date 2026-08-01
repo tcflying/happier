@@ -15,6 +15,10 @@ export type ChatFooterDirectControlState = Readonly<{
     activity: 'running' | 'active_recently' | 'idle' | 'unknown';
     canTakeOverDirect: boolean;
     canTakeOverPersist: boolean;
+    providerLabel: string;
+    trustedPid?: number | null;
+    ownerPid?: number | null;
+    ownerHappierSessionId?: string | null;
     takeoverInFlight: 'direct' | 'persisted' | null;
     onRequestTakeOverDirect?: () => void | Promise<void>;
     onRequestTakeOverPersist?: () => void | Promise<void>;
@@ -162,18 +166,25 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
     ]);
 
     const directModeBanner = React.useMemo(() => {
-        if (!props.directControl) return null;
-        if (props.directControl.runnerActive) return null;
+        // Owning the linked provider session from this Happier session is the
+        // healthy steady state. Its operator identity belongs in AgentInput's
+        // compact status row, not in the warning/action banner used for states
+        // that need attention or takeover.
+        if (!props.directControl || props.directControl.runnerActive) return null;
 
         const switchingToDirect = props.directControl.takeoverInFlight === 'direct';
         const switchingToPersisted = props.directControl.takeoverInFlight === 'persisted';
         const showDirectAction =
+            !props.directControl.runnerActive
+            &&
             !switchingToDirect
             && !switchingToPersisted
             && props.directControl.machineOnline
             && props.directControl.canTakeOverDirect
             && typeof props.directControl.onRequestTakeOverDirect === 'function';
         const showPersistAction =
+            !props.directControl.runnerActive
+            &&
             !switchingToDirect
             && !switchingToPersisted
             && props.directControl.machineOnline
@@ -184,6 +195,7 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
             if (switchingToPersisted) return 'chatFooter.switchingToPersistedTakeover';
             if (switchingToDirect) return 'chatFooter.switchingToDirectTakeover';
             if (!props.directControl.machineOnline) return 'chatFooter.directSessionMachineOffline';
+            if (typeof props.directControl.trustedPid === 'number') return 'chatFooter.directSessionControlledByOtherHappier';
             return 'chatFooter.directSessionTakeoverAvailable';
         })();
 
@@ -197,7 +209,12 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
                             color={theme.colors.state.warning.foreground}
                         />
                         <Text selectable style={warningTextStyle}>
-                            {t(textKey)}
+                            {textKey === 'chatFooter.directSessionControlledByOtherHappier'
+                                ? t(textKey, {
+                                    session: props.directControl.ownerHappierSessionId ?? 'unknown',
+                                    pid: props.directControl.trustedPid ?? 'unknown',
+                                })
+                                : t(textKey)}
                         </Text>
                         {showDirectAction && (
                             <Pressable

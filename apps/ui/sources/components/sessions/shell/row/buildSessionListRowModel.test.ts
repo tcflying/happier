@@ -75,6 +75,24 @@ function createMessage(id: string, createdAt: number, seq = 1): Message {
     };
 }
 
+function createContextCompactionMessage(
+    id: string,
+    phase: 'started' | 'progress' | 'completed' | 'failed' | 'cancelled',
+    createdAt: number,
+): Message {
+    return {
+        kind: 'agent-event',
+        id,
+        createdAt,
+        event: {
+            type: 'context-compaction',
+            phase,
+            lifecycleId: 'compact-1',
+            source: 'provider-event',
+        },
+    };
+}
+
 function createMessages(messages: readonly Message[] = []): SessionMessages {
     return {
         messageIdsOldestFirst: messages.map((message) => message.id),
@@ -144,6 +162,47 @@ function createSettings(
 }
 
 describe('buildSessionListRowModel', () => {
+    it('shows localized context-compaction status while the latest lifecycle is active', () => {
+        const session = createRenderable('s1', { active: true, thinking: false });
+        const model = buildSessionListRowModel({
+            item: createSessionItem(session),
+            state: {
+                messages: createMessages([
+                    createContextCompactionMessage('compact-start', 'started', NOW_MS - 1_000),
+                ]),
+            },
+            dataIndex: 0,
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings(),
+        });
+
+        expect(model.status.state).toBe('thinking');
+        expect(model.status.statusText).toBe('正在压缩上下文...');
+    });
+
+    it('restores the general session status after compaction reaches a terminal phase', () => {
+        const session = createRenderable('s1', { active: true, thinking: false });
+        const model = buildSessionListRowModel({
+            item: createSessionItem(session),
+            state: {
+                messages: createMessages([
+                    createContextCompactionMessage('compact-start', 'started', NOW_MS - 2_000),
+                    createContextCompactionMessage('compact-complete', 'completed', NOW_MS - 1_000),
+                ]),
+            },
+            dataIndex: 0,
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings(),
+        });
+
+        expect(model.status.state).toBe('waiting');
+        expect(model.status.shouldShowStatus).toBe(false);
+    });
+
     it('uses server-scoped row identity without collapsing same session ids from different servers', () => {
         const session = createRenderable('shared-id');
         const modelA = buildSessionListRowModel({

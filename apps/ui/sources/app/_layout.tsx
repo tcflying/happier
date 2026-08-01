@@ -38,6 +38,7 @@ import { FaviconPermissionIndicator } from '@/components/web/FaviconPermissionIn
 import { CommandPaletteProvider } from '@/components/appShell/commandPalette/CommandPaletteProvider';
 import { StatusBarProvider } from '@/components/ui/layout/StatusBarProvider';
 import { AppUpdateStatusTag } from '@/components/ui/feedback/AppUpdateStatusTag';
+import { HeaderUiFontScaleMenu } from '@/components/navigation/HeaderUiFontScaleMenu';
 import { monkeyPatchConsoleForRemoteLoggingForFasterAiAutoDebuggingOnlyInLocalBuilds } from '@/utils/system/remoteLogger';
 import { installBugReportConsoleCapture } from '@/utils/system/bugReportLogBuffer';
 import { configureBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
@@ -77,6 +78,10 @@ const TERMINAL_CONNECT_ROUTE = '/terminal/connect';
 function isTerminalConnectWebPathname(pathname: string | null | undefined): boolean {
     const route = String(pathname ?? '').split('?')[0]?.replace(/\/+$/, '');
     return route === TERMINAL_CONNECT_ROUTE;
+}
+
+function isSessionWebPathname(pathname: string | null | undefined): boolean {
+    return /^\/session\/[^/?#]+(?:\/|$)/.test(String(pathname ?? ''));
 }
 
 function shouldCaptureRnwUnexpectedTextNodeStacks(): boolean {
@@ -801,6 +806,7 @@ function AppBoot(props: {
                                                     isDesktopPetOverlayWindow={isDesktopPetOverlayWindow}
                                                     isTablet={isTablet}
                                                     isTerminalConnectRoute={isTerminalConnectRoute}
+                                                    isSessionRoute={isSessionWebPathname(pathname)}
                                                     safeArea={safeArea}
                                                 />
                                             </HorizontalSafeAreaWrapper>
@@ -844,6 +850,7 @@ function RootAppShell(props: Readonly<{
     isDesktopPetOverlayWindow: boolean;
     isTablet: boolean;
     isTerminalConnectRoute: boolean;
+    isSessionRoute: boolean;
     safeArea: Readonly<{ top: number; right: number; left: number }>;
 }>) {
     const auth = useAuth();
@@ -874,7 +881,7 @@ function RootAppShell(props: Readonly<{
             {!props.isDesktopPetOverlayWindow ? <OnboardingShowcaseAutoShowMount /> : null}
             {appShellChromeHost === 'narrow-desktop-fallback' || appShellChromeHost === 'unauth-shell' ? (
                 <DesktopFallbackShellChrome safeArea={props.safeArea} />
-            ) : appShellChromeHost === 'web-top-right' ? (
+            ) : appShellChromeHost === 'web-top-right' && !props.isSessionRoute ? (
                 <View
                     pointerEvents="box-none"
                     style={{
@@ -884,7 +891,13 @@ function RootAppShell(props: Readonly<{
                         zIndex: 10,
                     }}
                 >
-                    <AppUpdateStatusTag testID="root-shell-app-update-status-tag" />
+                    <View
+                        testID="root-shell-top-right-controls"
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                    >
+                        <HeaderUiFontScaleMenu />
+                        <AppUpdateStatusTag testID="root-shell-app-update-status-tag" />
+                    </View>
                 </View>
             ) : null}
             <View style={{ flex: 1 }}>

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveSessionRowTitleColorRole } from './sessionRowTitleColorRole';
 
 describe('resolveSessionRowTitleColorRole', () => {
-    it('keeps the current activity-and-attention behavior by default', () => {
+    it('keeps every non-selected title secondary regardless of activity', () => {
         expect(resolveSessionRowTitleColorRole({
             mode: 'activityAndAttention',
             selected: false,
@@ -20,10 +20,10 @@ describe('resolveSessionRowTitleColorRole', () => {
             isSessionActive: true,
             attentionState: 'working',
             titleTone: 'emphasized',
-        })).toBe('primary');
+        })).toBe('secondary');
     });
 
-    it('can limit active color to user attention states', () => {
+    it('does not turn attention-state titles primary unless selected', () => {
         expect(resolveSessionRowTitleColorRole({
             mode: 'attentionOnly',
             selected: false,
@@ -40,10 +40,10 @@ describe('resolveSessionRowTitleColorRole', () => {
             isSessionActive: true,
             attentionState: 'permission_required',
             titleTone: 'emphasized',
-        })).toBe('primary');
+        })).toBe('secondary');
     });
 
-    it('can color every active connected session as active', () => {
+    it('does not turn active session titles primary unless selected', () => {
         expect(resolveSessionRowTitleColorRole({
             mode: 'allActive',
             selected: false,
@@ -51,7 +51,7 @@ describe('resolveSessionRowTitleColorRole', () => {
             isSessionActive: true,
             attentionState: 'quiet',
             titleTone: 'quiet',
-        })).toBe('primary');
+        })).toBe('secondary');
 
         expect(resolveSessionRowTitleColorRole({
             mode: 'allActive',

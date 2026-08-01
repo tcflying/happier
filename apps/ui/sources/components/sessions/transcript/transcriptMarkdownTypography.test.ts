@@ -34,6 +34,25 @@ function requireNumber(value: number | undefined, name: string): number {
 }
 
 describe('transcriptMarkdownTypography', () => {
+    it('scales immutable Web Unistyles transcript metrics exactly once', () => {
+        const immutableTextStyle = Object.freeze({
+            fontSize: 16,
+            lineHeight: 24,
+        });
+
+        const { markdownStyle } = buildEnrichedMarkdownStyle({
+            colors,
+            profile: 'transcript',
+            uiFontScale: 2,
+            textStyle: immutableTextStyle,
+        });
+
+        expect(markdownStyle.paragraph).toMatchObject({
+            fontSize: 32,
+            lineHeight: 48,
+        });
+    });
+
     it('keeps transcript text metrics without collapsing markdown block spacing', () => {
         const { markdownStyle } = buildEnrichedMarkdownStyle({
             colors,

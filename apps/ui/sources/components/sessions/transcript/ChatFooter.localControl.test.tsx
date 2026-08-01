@@ -274,7 +274,7 @@ describe('ChatFooter (local control)', () => {
         expect(screen.findByTestId('session-chatFooter-takeOverPersist')).toBeNull();
     });
 
-    it('shows the current Happier direct runner as the active operator', async () => {
+    it('does not render the current Happier owner as a warning banner', async () => {
         const screen = await renderFooter({
             controlledByUser: false,
             directControl: {
@@ -291,7 +291,7 @@ describe('ChatFooter (local control)', () => {
             },
         } as any);
 
-        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByCurrentHappier');
+        expect(screen.getTextContent()).not.toContain('chatFooter.directSessionControlledByCurrentHappier');
         expect(screen.findByTestId('session-chatFooter-takeOverDirect')).toBeNull();
         expect(screen.findByTestId('session-chatFooter-takeOverPersist')).toBeNull();
     });

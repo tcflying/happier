@@ -166,7 +166,11 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
     ]);
 
     const directModeBanner = React.useMemo(() => {
-        if (!props.directControl) return null;
+        // Owning the linked provider session from this Happier session is the
+        // healthy steady state. Its operator identity belongs in AgentInput's
+        // compact status row, not in the warning/action banner used for states
+        // that need attention or takeover.
+        if (!props.directControl || props.directControl.runnerActive) return null;
 
         const switchingToDirect = props.directControl.takeoverInFlight === 'direct';
         const switchingToPersisted = props.directControl.takeoverInFlight === 'persisted';
@@ -188,7 +192,6 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
             && typeof props.directControl.onRequestTakeOverPersist === 'function';
 
         const textKey = (() => {
-            if (props.directControl.runnerActive) return 'chatFooter.directSessionControlledByCurrentHappier';
             if (switchingToPersisted) return 'chatFooter.switchingToPersistedTakeover';
             if (switchingToDirect) return 'chatFooter.switchingToDirectTakeover';
             if (!props.directControl.machineOnline) return 'chatFooter.directSessionMachineOffline';
@@ -206,12 +209,7 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
                             color={theme.colors.state.warning.foreground}
                         />
                         <Text selectable style={warningTextStyle}>
-                            {textKey === 'chatFooter.directSessionControlledByCurrentHappier'
-                                ? t(textKey, {
-                                    session: props.directControl.ownerHappierSessionId ?? 'unknown',
-                                    pid: props.directControl.ownerPid ?? 'unknown',
-                                })
-                                : textKey === 'chatFooter.directSessionControlledByOtherHappier'
+                            {textKey === 'chatFooter.directSessionControlledByOtherHappier'
                                 ? t(textKey, {
                                     session: props.directControl.ownerHappierSessionId ?? 'unknown',
                                     pid: props.directControl.trustedPid ?? 'unknown',

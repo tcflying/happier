@@ -2692,6 +2692,9 @@ describe('SessionView (direct sessions)', () => {
       canTakeOverDirect: true,
       canTakeOverPersist: true,
       canForceStop: false,
+      trustedPid: 4321,
+      ownerPid: 4321,
+      ownerHappierSessionId: 'session-other',
     });
     const screen = await renderSessionView();
 
@@ -2699,6 +2702,15 @@ describe('SessionView (direct sessions)', () => {
     expect(agentInput.props.disabled).toBe(true);
     expect(agentInput.props.isSendDisabled).toBe(true);
     expect(agentInput.props.placeholder).toBe('chatFooter.directSessionControlledElsewhere');
+    expect(agentInput.props.statusBadges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'direct-session-owner',
+        testID: 'session-direct-owner-status-badge',
+        tone: 'warning',
+        emphasis: 'quiet',
+        label: 'chatFooter.directSessionControlledByOtherHappier',
+      }),
+    ]));
     expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
 
   });
@@ -2747,6 +2759,33 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle();
 
     expect(findAgentInput(screen).props.connectionStatus?.detailText).toBe('新');
+  });
+
+  it('shows the current direct-session owner in the compact input status row', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: true,
+      activity: 'idle',
+      canTakeOverDirect: false,
+      canTakeOverPersist: true,
+      canForceStop: false,
+      ownerHappierSessionId: 's1',
+      ownerPid: 3904,
+    });
+
+    const screen = await renderSessionViewAndSettle();
+    const ownerBadge = findAgentInput(screen).props.statusBadges.find((badge: { key?: string }) => (
+      badge.key === 'direct-session-owner'
+    ));
+
+    expect(ownerBadge).toEqual(expect.objectContaining({
+      key: 'direct-session-owner',
+      testID: 'session-direct-owner-status-badge',
+      tone: 'complete',
+      emphasis: 'quiet',
+      label: 'chatFooter.directSessionControlledByCurrentHappier',
+    }));
   });
 
   it('keeps the composer text when direct takeover is cancelled from the send prompt', async () => {

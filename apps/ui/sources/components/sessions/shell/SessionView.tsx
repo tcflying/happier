@@ -3733,6 +3733,32 @@ function SessionViewLoaded({
                 : undefined,
         } as const;
     }, [directSessionLink, directSessionRuntime.status, directSessionTakeover, isHiddenSystemSessionSession]);
+    const directSessionOwnerStatusBadge = React.useMemo<AgentInputStatusBadge | null>(() => {
+        if (!directSessionLink) return null;
+        const status = directSessionRuntime.status;
+        const ownerHappierSessionId = status?.ownerHappierSessionId?.trim() ?? '';
+        const ownerPid = status?.ownerPid ?? status?.trustedPid ?? null;
+        if (!ownerHappierSessionId || typeof ownerPid !== 'number') return null;
+        const isCurrentOwner = status?.runnerActive === true;
+        const label = isCurrentOwner
+            ? t('chatFooter.directSessionControlledByCurrentHappier', {
+                session: ownerHappierSessionId,
+                pid: ownerPid,
+            })
+            : t('chatFooter.directSessionControlledByOtherHappier', {
+                session: ownerHappierSessionId,
+                pid: ownerPid,
+            });
+        return {
+            key: 'direct-session-owner',
+            label,
+            accessibilityLabel: label,
+            testID: 'session-direct-owner-status-badge',
+            tone: isCurrentOwner ? 'complete' : 'warning',
+            emphasis: 'quiet',
+            icon: (tint: string) => <Ionicons name="person-circle-outline" size={12} color={tint} />,
+        };
+    }, [directSessionLink, directSessionRuntime.status]);
     const isDirectSessionControlledByCurrentHappier = directSessionLink !== null
         && directSessionRuntime.status?.runnerActive === true;
     const isDirectSessionControlLocked = directSessionLink !== null && !isDirectSessionControlledByCurrentHappier;
@@ -3950,6 +3976,7 @@ function SessionViewLoaded({
             intentionalRestartSignals,
         });
         const agentInputStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
+            ...(directSessionOwnerStatusBadge ? [directSessionOwnerStatusBadge] : []),
             ...sessionStatusBadges,
             ...sessionConnectedServicesAuthSwitch.statusBadges,
             ...(pendingMessageEdit
@@ -3966,6 +3993,7 @@ function SessionViewLoaded({
                 : []),
         ], [
             cancelPendingMessageEdit,
+            directSessionOwnerStatusBadge,
             pendingMessageEdit,
             sessionConnectedServicesAuthSwitch.statusBadges,
             sessionStatusBadges,

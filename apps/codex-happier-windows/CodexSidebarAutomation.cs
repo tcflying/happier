@@ -13,13 +13,20 @@ internal static class CodexSidebarAutomation
     {
         try
         {
-            var current = AutomationElement.FromPoint(new System.Windows.Point(point.X, point.Y));
+            var automationPoint = new System.Windows.Point(point.X, point.Y);
+            var current = AutomationElement.FromPoint(automationPoint);
             var processId = current.Current.ProcessId;
             if (!IsCodexProcess(processId)) return null;
             for (var depth = 0; current is not null && depth < 12; depth++)
             {
-                var name = current.Current.Name?.Trim();
-                if (!string.IsNullOrWhiteSpace(name) && name.Length <= 512) return new CodexSidebarTarget(name, processId);
+                if (IsThreadListItem(current, automationPoint))
+                {
+                    var name = current.Current.Name?.Trim();
+                    if (!string.IsNullOrWhiteSpace(name) && name.Length <= 512)
+                    {
+                        return new CodexSidebarTarget(name, processId);
+                    }
+                }
                 current = TreeWalker.ControlViewWalker.GetParent(current);
             }
         }
@@ -29,6 +36,30 @@ internal static class CodexSidebarAutomation
         }
         return null;
     }
+
+    private static bool IsThreadListItem(AutomationElement element, System.Windows.Point point)
+    {
+        var current = element.Current;
+        return IsThreadListItemCandidate(
+            current.ControlType == ControlType.ListItem,
+            current.ClassName ?? string.Empty,
+            current.IsOffscreen,
+            current.BoundingRectangle,
+            point);
+    }
+
+    internal static bool IsThreadListItemCandidate(
+        bool isListItem,
+        string className,
+        bool isOffscreen,
+        System.Windows.Rect bounds,
+        System.Windows.Point point)
+        => isListItem
+            && className.Contains("touch-none", StringComparison.Ordinal)
+            && !isOffscreen
+            && bounds.Contains(point)
+            && bounds.Width is >= 100 and <= 500
+            && bounds.Height is >= 20 and <= 60;
 
     public static IReadOnlyList<string> FindSidebarTitleCandidates()
     {

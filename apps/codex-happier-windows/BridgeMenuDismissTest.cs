@@ -19,9 +19,10 @@ internal static class BridgeMenuDismissTest
         var closed = false;
         NativeMethods.GetCursorPos(out var originalCursor);
 
-        hook.PointerPressed += point =>
+        hook.LeftClickIntercepted = point =>
         {
             if (menu.Visible && !menu.Bounds.Contains(point)) menu.Close();
+            return false;
         };
         menu.Opened += (_, _) =>
         {

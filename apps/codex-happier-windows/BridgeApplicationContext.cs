@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Net.Http;
 using System.Windows.Forms;
 
@@ -12,8 +11,12 @@ internal sealed class BridgeApplicationContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly CodexRightClickHook _hook;
     private readonly Control _dispatcher = new();
-    private ContextMenuStrip? _bridgeMenu;
-    private int _allowNextNativeRightClick;
+    private readonly System.Windows.Forms.Timer _menuMonitor;
+    private HappierMenuSidecar? _sidecar;
+    private NativePopupMenu? _nativeMenu;
+    private PendingCodexImport? _pendingImport;
+    private CancellationTokenSource? _attachCancellation;
+    private int _attachGeneration;
 
     public BridgeApplicationContext()
     {
@@ -29,80 +32,133 @@ internal sealed class BridgeApplicationContext : ApplicationContext
             Visible = true,
             ContextMenuStrip = trayMenu,
         };
-        _hook = new CodexRightClickHook();
-        _hook.PointerPressed += point =>
+        _menuMonitor = new System.Windows.Forms.Timer { Interval = 50 };
+        _menuMonitor.Tick += (_, _) =>
         {
-            var menu = _bridgeMenu;
-            if (menu is null || !menu.Visible || menu.Bounds.Contains(point)) return;
-            _dispatcher.BeginInvoke(() =>
+            var nativeMenu = _nativeMenu;
+            if (nativeMenu is null
+                || !NativeMethods.IsWindow(nativeMenu.Handle)
+                || !NativeMethods.IsWindowVisible(nativeMenu.Handle))
             {
-                if (ReferenceEquals(_bridgeMenu, menu)) menu.Close();
-            });
-        };
-        _hook.RightClickIntercepted = point =>
-        {
-            if (Interlocked.Exchange(ref _allowNextNativeRightClick, 0) == 1)
-            {
-                BridgeDiagnostics.Write("native_menu_replayed");
-                return false;
+                CloseSidecar();
             }
+        };
+        _hook = new CodexRightClickHook();
+        _hook.RightButtonPressed += point =>
+        {
             try
             {
                 var target = CodexSidebarAutomation.FindTargetAtPoint(point);
                 if (target is null)
                 {
+                    Interlocked.Increment(ref _attachGeneration);
+                    _attachCancellation?.Cancel();
                     BridgeDiagnostics.Write("right_click_ignored");
-                    return false;
+                    _dispatcher.BeginInvoke(CloseSidecar);
+                    return;
                 }
                 var pending = new PendingCodexImport(target.Title, target.ProcessId, point);
-                _dispatcher.BeginInvoke(() => ShowBridgeMenu(pending));
-                BridgeDiagnostics.Write("bridge_menu_scheduled");
-                return true;
+                _dispatcher.BeginInvoke(() => _ = AttachToNativeMenuAsync(pending));
+                BridgeDiagnostics.Write("native_menu_attach_scheduled");
             }
             catch (Exception error)
             {
                 BridgeDiagnostics.Write("right_click_failed", error.Message);
-                return false;
             }
         };
         BridgeDiagnostics.Write("started");
         ShowBalloon("Happier Codex Bridge 已启动", "在 Codex 左侧会话上点鼠标右键，即可导入到 Happier 直连。");
     }
 
-    private void ShowBridgeMenu(PendingCodexImport target)
+    private async Task AttachToNativeMenuAsync(PendingCodexImport target)
     {
-        _bridgeMenu?.Close();
-        var menu = new ContextMenuStrip();
-        _bridgeMenu = menu;
-        menu.Items.Add("导入到 Happier 直连", null, (_, _) =>
-        {
-            menu.Close();
-            _ = CaptureAndImportAsync(target);
-        });
-        menu.Closed += (_, _) => _dispatcher.BeginInvoke(() =>
-        {
-            if (ReferenceEquals(_bridgeMenu, menu)) _bridgeMenu = null;
-            menu.Dispose();
-        });
-        menu.Show(target.Point);
-        BridgeDiagnostics.Write("bridge_menu_shown");
-    }
+        var generation = Interlocked.Increment(ref _attachGeneration);
+        _attachCancellation?.Cancel();
+        _attachCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        _attachCancellation = cancellation;
+        CloseSidecar();
 
-    private async Task CaptureAndImportAsync(PendingCodexImport target)
-    {
         try
         {
-            await Task.Delay(125);
-            ReplayNativeRightClick(target.Point);
-            var nativeMenu = await NativePopupMenuLocator.WaitForAsync(target.Point, target.ProcessId, TimeSpan.FromSeconds(2));
+            var nativeMenu = await NativePopupMenuLocator.WaitForAsync(
+                target.Point,
+                target.ProcessId,
+                TimeSpan.FromSeconds(2),
+                cancellation.Token);
             if (nativeMenu is null)
             {
                 BridgeDiagnostics.Write("native_menu_not_found");
-                ShowBalloon("无法读取 Codex 会话 ID", "没有找到 Codex 原生右键菜单。", ToolTipIcon.Error);
                 return;
             }
+            if (generation != Volatile.Read(ref _attachGeneration) || cancellation.IsCancellationRequested) return;
+            ShowSidecar(target, nativeMenu);
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer right-click superseded this popup.
+        }
+        catch (Exception error)
+        {
+            BridgeDiagnostics.Write("native_menu_attach_failed", error.Message);
+        }
+    }
+
+    private void ShowSidecar(PendingCodexImport target, NativePopupMenu nativeMenu)
+    {
+        CloseSidecar();
+        try
+        {
+            var sidecar = new HappierMenuSidecar(nativeMenu.Bounds);
+            _sidecar = sidecar;
+            _nativeMenu = nativeMenu;
+            _pendingImport = target;
+            sidecar.Show();
+            ArmSidecarClickInterceptor();
+            _menuMonitor.Start();
+            BridgeDiagnostics.Write(
+                "native_menu_sidecar_shown",
+                $"native={nativeMenu.Bounds};sidecar={sidecar.Bounds};title={target.Title}");
+        }
+        catch (Exception error)
+        {
+            BridgeDiagnostics.Write("native_menu_sidecar_failed", error.Message);
+            CloseSidecar();
+        }
+    }
+
+    private void ArmSidecarClickInterceptor()
+    {
+        _hook.LeftClickIntercepted = point =>
+        {
+            var sidecar = _sidecar;
+            var nativeMenu = _nativeMenu;
+            var target = _pendingImport;
+            if (sidecar is null || nativeMenu is null || target is null || !sidecar.Visible)
+            {
+                _hook.LeftClickIntercepted = null;
+                return false;
+            }
+            if (!sidecar.Bounds.Contains(point))
+            {
+                _hook.LeftClickIntercepted = null;
+                _dispatcher.BeginInvoke(CloseSidecar);
+                return false;
+            }
+
+            _hook.LeftClickIntercepted = null;
+            _dispatcher.BeginInvoke(() => CaptureAndImportFromNativeMenu(target, nativeMenu));
+            return true;
+        };
+    }
+
+    private void CaptureAndImportFromNativeMenu(PendingCodexImport target, NativePopupMenu nativeMenu)
+    {
+        CloseSidecar();
+        try
+        {
             var threadId = CodexNativeMenuThreadIdReader.Read(nativeMenu.Handle);
-            BridgeDiagnostics.Write("thread_id_captured");
+            BridgeDiagnostics.Write("thread_id_captured", $"threadId={threadId};title={target.Title}");
             _ = Task.Run(() => ImportByIdAsync(threadId, target.Title));
         }
         catch (Exception error)
@@ -112,12 +168,17 @@ internal sealed class BridgeApplicationContext : ApplicationContext
         }
     }
 
-    private void ReplayNativeRightClick(System.Drawing.Point point)
+    private void CloseSidecar()
     {
-        Interlocked.Exchange(ref _allowNextNativeRightClick, 1);
-        NativeMethods.SetCursorPos(point.X, point.Y);
-        NativeMethods.mouse_event(NativeMethods.MouseEventRightDown, 0, 0, 0, UIntPtr.Zero);
-        NativeMethods.mouse_event(NativeMethods.MouseEventRightUp, 0, 0, 0, UIntPtr.Zero);
+        _hook.LeftClickIntercepted = null;
+        _menuMonitor.Stop();
+        var sidecar = _sidecar;
+        _sidecar = null;
+        _nativeMenu = null;
+        _pendingImport = null;
+        if (sidecar is null) return;
+        sidecar.Hide();
+        sidecar.Dispose();
     }
 
     private async Task ImportByIdAsync(string threadId, string displayTitle)
@@ -182,8 +243,11 @@ internal sealed class BridgeApplicationContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        _attachCancellation?.Cancel();
+        _attachCancellation?.Dispose();
         _hook.Dispose();
-        _bridgeMenu?.Dispose();
+        CloseSidecar();
+        _menuMonitor.Dispose();
         _tray.Visible = false;
         _tray.Dispose();
         _dispatcher.Dispose();

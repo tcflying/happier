@@ -34,9 +34,9 @@ internal static class Program
             return BridgeMenuDismissTest.Run();
         }
 
-        if (args.Contains("--right-click-suppression-test", StringComparer.OrdinalIgnoreCase))
+        if (args.Contains("--right-click-passthrough-test", StringComparer.OrdinalIgnoreCase))
         {
-            return RightClickSuppressionTest.Run();
+            return RightClickPassThroughTest.Run();
         }
 
         if (args.Contains("--install", StringComparer.OrdinalIgnoreCase))

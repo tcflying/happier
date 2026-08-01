@@ -2,11 +2,19 @@ using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using System.Windows.Forms;
+using DrawingPoint = System.Drawing.Point;
+using DrawingRectangle = System.Drawing.Rectangle;
 
 namespace HappierCodexBridge;
 
 internal static partial class CodexNativeMenuThreadIdReader
 {
+    internal readonly record struct MenuClickCandidate(
+        DrawingRectangle Bounds,
+        bool IsOffscreen,
+        bool IsActionable,
+        DrawingPoint? ClickablePoint);
+
     public static string Read(IntPtr nativeMenuHandle)
     {
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
@@ -15,14 +23,14 @@ internal static partial class CodexNativeMenuThreadIdReader
         }
         if (!NativeMethods.IsWindow(nativeMenuHandle)) throw new InvalidOperationException("Codex 原生菜单已经关闭");
 
-        var menuItem = FindCopyThreadIdItem(nativeMenuHandle)
+        var menuItemPoint = FindCopyThreadIdPoint(nativeMenuHandle)
             ?? throw new InvalidOperationException("Codex 原生菜单里找不到“复制会话 ID”");
 
         var snapshot = CaptureClipboard();
         try
         {
             RetryClipboard(Clipboard.Clear);
-            ClickMenuItem(nativeMenuHandle, menuItem);
+            ClickMenuItem(nativeMenuHandle, menuItemPoint);
             for (var attempt = 0; attempt < 100; attempt++)
             {
                 Application.DoEvents();
@@ -46,10 +54,17 @@ internal static partial class CodexNativeMenuThreadIdReader
         return match.Success ? match.Groups[1].Value.ToLowerInvariant() : null;
     }
 
-    private static AutomationElement? FindCopyThreadIdItem(IntPtr nativeMenuHandle)
+    private static DrawingPoint? FindCopyThreadIdPoint(IntPtr nativeMenuHandle)
     {
+        if (!NativeMethods.GetWindowRect(nativeMenuHandle, out var nativeRectangle))
+        {
+            throw new InvalidOperationException("无法读取 Codex 原生菜单位置");
+        }
+        var menuBounds = nativeRectangle.ToRectangle();
         var root = AutomationElement.FromHandle(nativeMenuHandle);
         var elements = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+        var candidates = new List<MenuClickCandidate>();
+        var matchingElements = 0;
         for (var index = 0; index < elements.Count; index++)
         {
             var element = elements[index];
@@ -60,7 +75,8 @@ internal static partial class CodexNativeMenuThreadIdReader
                     || name.Contains("复制任务 ID", StringComparison.OrdinalIgnoreCase)
                     || CopyIdLabelPattern().IsMatch(name))
                 {
-                    return element;
+                    matchingElements++;
+                    AddClickCandidates(element, root, candidates);
                 }
             }
             catch (ElementNotAvailableException)
@@ -68,20 +84,130 @@ internal static partial class CodexNativeMenuThreadIdReader
                 // The menu can close while its accessibility tree is enumerated.
             }
         }
+        var selected = SelectClickPoint(menuBounds, candidates);
+        if (selected is not null) return selected;
+        if (matchingElements > 0)
+        {
+            throw new InvalidOperationException(
+                $"Codex 原生菜单匹配到 {matchingElements} 个“复制会话 ID”节点，但都没有位于菜单内的有效点击点");
+        }
         return null;
     }
 
-    private static void ClickMenuItem(IntPtr nativeMenuHandle, AutomationElement menuItem)
+    private static void AddClickCandidates(
+        AutomationElement matchedElement,
+        AutomationElement root,
+        ICollection<MenuClickCandidate> candidates)
     {
-        var bounds = menuItem.Current.BoundingRectangle;
-        if (bounds.IsEmpty || bounds.Width <= 1 || bounds.Height <= 1)
+        AddClickCandidate(matchedElement, isActionable: true, candidates);
+
+        var current = matchedElement;
+        for (var depth = 0; depth < 4; depth++)
         {
-            throw new InvalidOperationException("Codex 的“复制会话 ID”菜单项没有有效坐标");
+            AutomationElement? parent;
+            try
+            {
+                parent = TreeWalker.ControlViewWalker.GetParent(current);
+            }
+            catch (ElementNotAvailableException)
+            {
+                break;
+            }
+            if (parent is null || parent.Equals(root)) break;
+            AddClickCandidate(parent, IsActionableControl(parent), candidates);
+            current = parent;
         }
+
+        try
+        {
+            var descendants = matchedElement.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            for (var index = 0; index < Math.Min(descendants.Count, 12); index++)
+            {
+                AddClickCandidate(descendants[index], isActionable: true, candidates);
+            }
+        }
+        catch (ElementNotAvailableException)
+        {
+            // The next matching node may still provide a usable click point.
+        }
+    }
+
+    private static void AddClickCandidate(
+        AutomationElement element,
+        bool isActionable,
+        ICollection<MenuClickCandidate> candidates)
+    {
+        try
+        {
+            var current = element.Current;
+            var bounds = current.BoundingRectangle;
+            var drawingBounds = bounds.IsEmpty
+                ? DrawingRectangle.Empty
+                : DrawingRectangle.FromLTRB(
+                    checked((int)Math.Floor(bounds.Left)),
+                    checked((int)Math.Floor(bounds.Top)),
+                    checked((int)Math.Ceiling(bounds.Right)),
+                    checked((int)Math.Ceiling(bounds.Bottom)));
+            DrawingPoint? clickablePoint = null;
+            if (element.TryGetClickablePoint(out var point))
+            {
+                clickablePoint = new DrawingPoint(
+                    checked((int)Math.Round(point.X)),
+                    checked((int)Math.Round(point.Y)));
+            }
+            candidates.Add(new MenuClickCandidate(drawingBounds, current.IsOffscreen, isActionable, clickablePoint));
+        }
+        catch (ElementNotAvailableException)
+        {
+            // Ignore nodes removed while the Chromium popup is rendering.
+        }
+        catch (NoClickablePointException)
+        {
+            // Bounding rectangle may still be usable.
+        }
+    }
+
+    private static bool IsActionableControl(AutomationElement element)
+    {
+        try
+        {
+            var controlType = element.Current.ControlType;
+            return controlType == ControlType.MenuItem
+                || controlType == ControlType.Button
+                || controlType == ControlType.ListItem;
+        }
+        catch (ElementNotAvailableException)
+        {
+            return false;
+        }
+    }
+
+    internal static DrawingPoint? SelectClickPoint(
+        DrawingRectangle menuBounds,
+        IEnumerable<MenuClickCandidate> candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (candidate.IsOffscreen || !candidate.IsActionable) continue;
+            if (candidate.ClickablePoint is { } clickablePoint && menuBounds.Contains(clickablePoint))
+            {
+                return clickablePoint;
+            }
+            if (candidate.Bounds.Width <= 1 || candidate.Bounds.Height <= 1) continue;
+            var center = new DrawingPoint(
+                candidate.Bounds.Left + candidate.Bounds.Width / 2,
+                candidate.Bounds.Top + candidate.Bounds.Height / 2);
+            if (menuBounds.Contains(center)) return center;
+        }
+        return null;
+    }
+
+    private static void ClickMenuItem(IntPtr nativeMenuHandle, DrawingPoint screenPoint)
+    {
         var clientPoint = new NativeMethods.Point
         {
-            X = checked((int)Math.Round(bounds.Left + bounds.Width / 2)),
-            Y = checked((int)Math.Round(bounds.Top + bounds.Height / 2)),
+            X = screenPoint.X,
+            Y = screenPoint.Y,
         };
         if (!NativeMethods.ScreenToClient(nativeMenuHandle, ref clientPoint))
         {

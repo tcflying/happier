@@ -3,7 +3,7 @@ using System.Windows.Forms;
 
 namespace HappierCodexBridge;
 
-internal static class RightClickSuppressionTest
+internal static class RightClickPassThroughTest
 {
     public static int Run()
     {
@@ -17,18 +17,17 @@ internal static class RightClickSuppressionTest
             StartPosition = FormStartPosition.Manual,
             Bounds = new Rectangle(240, 180, 320, 180),
             ShowInTaskbar = false,
+            TopMost = true,
         };
         using var nativeMenu = new ContextMenuStrip();
         using var hook = new CodexRightClickHook();
         nativeMenu.Items.Add("原生菜单");
 
-        var intercepted = 0;
+        var observed = 0;
         var targetReceivedRightDown = 0;
-        hook.RightClickIntercepted = _ =>
-        {
-            Interlocked.Increment(ref intercepted);
-            return true;
-        };
+        var expectedWindow = IntPtr.Zero;
+        var windowAtPoint = IntPtr.Zero;
+        hook.RightButtonPressed += _ => Interlocked.Increment(ref observed);
         form.MouseDown += (_, eventArgs) =>
         {
             if (eventArgs.Button != MouseButtons.Right) return;
@@ -39,11 +38,16 @@ internal static class RightClickSuppressionTest
         NativeMethods.GetCursorPos(out var originalCursor);
         form.Shown += (_, _) =>
         {
+            form.Activate();
+            form.BringToFront();
+            expectedWindow = form.Handle;
             var point = form.PointToScreen(new Point(form.ClientSize.Width / 2, form.ClientSize.Height / 2));
             _ = Task.Run(async () =>
             {
                 await Task.Delay(100);
                 NativeMethods.SetCursorPos(point.X, point.Y);
+                var targetWindow = NativeMethods.WindowFromPoint(new NativeMethods.Point { X = point.X, Y = point.Y });
+                windowAtPoint = NativeMethods.GetAncestor(targetWindow, NativeMethods.GaRoot);
                 NativeMethods.mouse_event(NativeMethods.MouseEventRightDown, 0, 0, 0, UIntPtr.Zero);
                 NativeMethods.mouse_event(NativeMethods.MouseEventRightUp, 0, 0, 0, UIntPtr.Zero);
                 await Task.Delay(250);
@@ -55,12 +59,13 @@ internal static class RightClickSuppressionTest
         Application.Run(context);
         NativeMethods.SetCursorPos(originalCursor.X, originalCursor.Y);
 
-        if (intercepted != 1) throw new InvalidOperationException($"右键拦截次数不正确: {intercepted}");
-        if (targetReceivedRightDown != 0 || nativeMenu.Visible)
+        if (observed != 1) throw new InvalidOperationException($"右键观察次数不正确: {observed}");
+        if (targetReceivedRightDown != 1)
         {
-            throw new InvalidOperationException("被拦截的右键仍然触发了目标应用原生菜单");
+            throw new InvalidOperationException(
+                $"Codex 原生右键没有收到完整的右键按下事件: observed={observed};received={targetReceivedRightDown};expected=0x{expectedWindow.ToInt64():X};actual=0x{windowAtPoint.ToInt64():X}");
         }
-        Console.WriteLine("RIGHT_CLICK_SUPPRESSION_TEST=PASS");
+        Console.WriteLine("RIGHT_CLICK_PASSTHROUGH_TEST=PASS");
         return 0;
     }
 }

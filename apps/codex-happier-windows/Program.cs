@@ -10,7 +10,29 @@ internal static class Program
 {
     [STAThread]
     private static int Main(string[] args)
-        => RunAsync(args).GetAwaiter().GetResult();
+    {
+        try
+        {
+            return RunAsync(args).GetAwaiter().GetResult();
+        }
+        catch (Exception error)
+        {
+            if (!IsTestInvocation(args)) BridgeDiagnostics.Write("fatal", error.ToString());
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+    }
+
+    private static bool IsTestInvocation(string[] args)
+        => args.Any(argument => argument is
+            "--self-test"
+            or "--native-menu-sidecar-test"
+            or "--native-menu-sidecar-test-host"
+            or "--menu-dismiss-test"
+            or "--right-click-passthrough-test"
+            or "--left-drag-passthrough-test"
+            or "--pinned-thread-test"
+            or "--live-pinned-import-test");
 
     private static async Task<int> RunAsync(string[] args)
     {
@@ -19,14 +41,14 @@ internal static class Program
             return SelfTests.Run();
         }
 
-        if (args.Contains("--native-menu-id-test", StringComparer.OrdinalIgnoreCase))
+        if (args.Contains("--native-menu-sidecar-test", StringComparer.OrdinalIgnoreCase))
         {
-            return NativeMenuThreadIdTest.Run();
+            return NativeMenuSidecarTest.Run();
         }
 
-        if (args.Contains("--native-menu-id-test-host", StringComparer.OrdinalIgnoreCase))
+        if (args.Contains("--native-menu-sidecar-test-host", StringComparer.OrdinalIgnoreCase))
         {
-            return NativeMenuThreadIdTest.RunHost(args);
+            return NativeMenuSidecarTest.RunHost(args);
         }
 
         if (args.Contains("--menu-dismiss-test", StringComparer.OrdinalIgnoreCase))
@@ -37,6 +59,55 @@ internal static class Program
         if (args.Contains("--right-click-passthrough-test", StringComparer.OrdinalIgnoreCase))
         {
             return RightClickPassThroughTest.Run();
+        }
+
+        if (args.Contains("--left-drag-passthrough-test", StringComparer.OrdinalIgnoreCase))
+        {
+            return LeftDragPassThroughTest.Run();
+        }
+
+        var pinnedThreadTestIndex = Array.FindIndex(
+            args,
+            value => string.Equals(value, "--pinned-thread-test", StringComparison.OrdinalIgnoreCase));
+        if (pinnedThreadTestIndex >= 0)
+        {
+            if (pinnedThreadTestIndex + 1 >= args.Length)
+            {
+                Console.Error.WriteLine("PINNED_THREAD_TEST_TITLE_REQUIRED");
+                return 2;
+            }
+
+            var title = args[pinnedThreadTestIndex + 1];
+            var target = CodexSidebarAutomation.FindTargetByTitle(title);
+            if (target is null)
+            {
+                Console.Error.WriteLine("PINNED_THREAD_TEST_TARGET_NOT_FOUND");
+                return 3;
+            }
+            var thread = new CodexPinnedThreadResolver(new CodexThreadStore()).Resolve(target);
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                status = "PINNED_THREAD_TEST=PASS",
+                thread.Id,
+                thread.Name,
+                thread.Cwd,
+                target.RowIndex,
+                target.ListSize,
+            }));
+            return 0;
+        }
+
+        var livePinnedImportIndex = Array.FindIndex(
+            args,
+            value => string.Equals(value, "--live-pinned-import-test", StringComparison.OrdinalIgnoreCase));
+        if (livePinnedImportIndex >= 0)
+        {
+            if (livePinnedImportIndex + 1 >= args.Length)
+            {
+                Console.Error.WriteLine("LIVE_PINNED_IMPORT_TEST_TITLE_REQUIRED");
+                return 2;
+            }
+            return LivePinnedImportTest.Run(args[livePinnedImportIndex + 1]);
         }
 
         if (args.Contains("--install", StringComparer.OrdinalIgnoreCase))

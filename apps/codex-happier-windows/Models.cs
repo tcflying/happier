@@ -9,16 +9,22 @@ internal sealed record CodexThread(
 
 internal sealed record CodexSidebarTarget(
     string Title,
-    int ProcessId);
+    int ProcessId,
+    int RowIndex,
+    int ListSize,
+    System.Drawing.Rectangle Bounds);
 
 internal sealed record NativePopupMenu(
     IntPtr Handle,
     System.Drawing.Rectangle Bounds);
 
 internal sealed record PendingCodexImport(
-    string Title,
+    CodexThread Thread,
     int ProcessId,
-    System.Drawing.Point Point);
+    System.Drawing.Point Point)
+{
+    public string Title => Thread.Name;
+}
 
 internal sealed record VisibleThreadRow(
     CodexThread Thread,

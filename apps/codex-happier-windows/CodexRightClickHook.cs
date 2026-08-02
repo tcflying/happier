@@ -6,11 +6,20 @@ namespace HappierCodexBridge;
 internal sealed class CodexRightClickHook : IDisposable
 {
     private readonly NativeMethods.HookProc _callback;
+    private readonly MouseHookGestureRouter _router = new();
     private IntPtr _hook;
-    private bool _suppressLeftButtonUp;
 
-    public Func<System.Drawing.Point, bool>? LeftClickIntercepted { get; set; }
-    public event Action<System.Drawing.Point>? RightButtonPressed;
+    public Func<System.Drawing.Point, bool>? LeftClickIntercepted
+    {
+        get => _router.LeftClickIntercepted;
+        set => _router.LeftClickIntercepted = value;
+    }
+
+    public event Action<System.Drawing.Point>? RightButtonPressed
+    {
+        add => _router.RightButtonPressed += value;
+        remove => _router.RightButtonPressed -= value;
+    }
 
     public CodexRightClickHook()
     {
@@ -24,27 +33,13 @@ internal sealed class CodexRightClickHook : IDisposable
         if (code < 0) return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
 
         var message = wParam.ToInt32();
-        var leftClickInterceptor = LeftClickIntercepted;
-        if (message == NativeMethods.WmLButtonDown && leftClickInterceptor is not null)
-        {
-            var data = Marshal.PtrToStructure<NativeMethods.MouseHookStruct>(lParam);
-            var point = new System.Drawing.Point(data.Point.X, data.Point.Y);
-            _suppressLeftButtonUp = leftClickInterceptor(point);
-            if (_suppressLeftButtonUp) return new IntPtr(1);
-        }
-
-        if (message == NativeMethods.WmLButtonUp && _suppressLeftButtonUp)
-        {
-            _suppressLeftButtonUp = false;
-            return new IntPtr(1);
-        }
-
+        var data = Marshal.PtrToStructure<NativeMethods.MouseHookStruct>(lParam);
+        var point = new System.Drawing.Point(data.Point.X, data.Point.Y);
         if (message == NativeMethods.WmRButtonDown)
         {
-            var data = Marshal.PtrToStructure<NativeMethods.MouseHookStruct>(lParam);
             BridgeDiagnostics.Write("hook_right_down_passthrough");
-            RightButtonPressed?.Invoke(new System.Drawing.Point(data.Point.X, data.Point.Y));
         }
+        if (_router.ShouldSuppress(message, point)) return new IntPtr(1);
 
         // Codex must always receive the complete native right-click gesture. The
         // bridge only consumes a later left click inside its separate sidecar row.

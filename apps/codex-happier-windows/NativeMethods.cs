@@ -11,11 +11,20 @@ internal static class NativeMethods
     internal const int WmMouseMove = 0x0200;
     internal const int WmRButtonDown = 0x0204;
     internal const int WmRButtonUp = 0x0205;
+    internal const int WmCancelMode = 0x001F;
+    internal const int WmKeyDown = 0x0100;
+    internal const int WmKeyUp = 0x0101;
+    internal const int VkEscape = 0x001B;
+    internal const int SwRestore = 9;
     internal const uint MouseEventRightDown = 0x0008;
     internal const uint MouseEventRightUp = 0x0010;
     internal const uint MouseEventLeftDown = 0x0002;
     internal const uint MouseEventLeftUp = 0x0004;
     internal const uint GaRoot = 2;
+    internal const int GwlpHwndParent = -8;
+    internal const uint SwpNoActivate = 0x0010;
+    internal const uint SwpShowWindow = 0x0040;
+    internal static readonly IntPtr HwndTopmost = new(-1);
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Point
@@ -63,6 +72,13 @@ internal static class NativeMethods
     internal static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ShowWindow(IntPtr window, int command);
+
+    [DllImport("user32.dll")]
+    internal static extern void SwitchToThisWindow(IntPtr window, [MarshalAs(UnmanagedType.Bool)] bool altTab);
+
+    [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
     [DllImport("user32.dll")]
@@ -70,6 +86,20 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    internal static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr newValue);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetWindowPos(
+        IntPtr window,
+        IntPtr insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

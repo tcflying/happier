@@ -99,6 +99,7 @@ export const ToolCallsGroupView = React.memo((props: ToolCallsGroupViewProps) =>
     const toolRouteCommon = React.useMemo(() => transcriptSessionCommon.toolRoute, [
         transcriptSessionCommon.toolRoute.messagesById,
         transcriptSessionCommon.toolRoute.reducerState,
+        transcriptSessionCommon.toolRoute.reducerVersion,
     ]);
 
     return (

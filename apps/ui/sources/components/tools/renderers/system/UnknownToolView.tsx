@@ -7,55 +7,25 @@ import { CodeView } from '@/components/ui/media/CodeView';
 import { maybeParseJson } from '../../normalization/parse/parseJson';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
-
-
-type UnknownRecord = Record<string, unknown>;
-
-function asRecord(value: unknown): UnknownRecord | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    return value as UnknownRecord;
-}
+import {
+    formatUnknownToolInputText,
+    formatUnknownToolResultText,
+    formatUnknownToolSubtitle,
+    shouldShowUnknownToolResult,
+} from './unknownToolContent';
 
 function truncate(text: string, maxChars: number): string {
     if (text.length <= maxChars) return text;
     return text.slice(0, Math.max(0, maxChars - 1)) + '…';
 }
 
-function stringifyShort(value: unknown): string {
-    if (value == null) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return String(value);
-    }
-}
-
-function formatSubtitle(input: unknown): string {
-    const inputObj = asRecord(maybeParseJson(input)) ?? {};
-    const keys = Object.keys(inputObj).filter((k) => !k.startsWith('_')).slice(0, 3);
-    if (keys.length === 0) return '';
-    const parts = keys.map((k) => `${k}=${truncate(stringifyShort((inputObj as any)[k]), 60)}`);
-    return truncate(parts.join(' '), 140);
-}
-
-function getResultText(result: unknown): string | null {
-    const parsed = maybeParseJson(result);
-    const obj = asRecord(parsed);
-    if (!obj) return typeof parsed === 'string' ? parsed : null;
-    const candidates = [obj.text, obj.message, obj.result, obj.output];
-    for (const c of candidates) {
-        if (typeof c === 'string' && c.trim()) return c;
-    }
-    return null;
-}
-
 export const UnknownToolView = React.memo<ToolViewProps>(({ tool, detailLevel }) => {
     if (detailLevel === 'title') return null;
 
-    const subtitle = formatSubtitle(tool.input);
-    const resultText = getResultText(tool.result);
+    const subtitle = formatUnknownToolSubtitle(tool.input);
+    const inputText = formatUnknownToolInputText(tool.input);
+    const resultText = formatUnknownToolResultText(tool.result);
+    const showResult = shouldShowUnknownToolResult(tool);
 
     if (detailLevel === 'summary') {
         return (
@@ -66,7 +36,7 @@ export const UnknownToolView = React.memo<ToolViewProps>(({ tool, detailLevel })
                             {subtitle}
                         </Text>
                     ) : null}
-                    {tool.state === 'completed' && resultText ? <CodeView code={truncate(resultText, 800)} /> : null}
+                    {showResult && resultText ? <CodeView code={truncate(resultText, 800)} /> : null}
                 </View>
             </ToolSectionView>
         );
@@ -85,12 +55,12 @@ export const UnknownToolView = React.memo<ToolViewProps>(({ tool, detailLevel })
                 ) : null}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>{t('toolView.input')}</Text>
-                    <CodeView code={JSON.stringify(maybeParseJson(tool.input), null, 2)} />
+                    <CodeView code={inputText} />
                 </View>
-                {tool.state === 'completed' && tool.result != null ? (
+                {showResult ? (
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>{t('toolView.output')}</Text>
-                        <CodeView code={JSON.stringify(maybeParseJson(tool.result), null, 2)} />
+                        <CodeView code={resultText ?? JSON.stringify(maybeParseJson(tool.result), null, 2)} />
                     </View>
                 ) : null}
             </View>

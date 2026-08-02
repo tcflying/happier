@@ -133,6 +133,27 @@ describe('ChainTranscriptList', () => {
         expect(list.props.overrideProps).toBeUndefined();
     });
 
+    it('invalidates FlashList rows when live tool reducer content changes', async () => {
+        const screen = await renderChainTranscriptList({
+            sessionId: 's1',
+            messages: [{
+                kind: 'tool-call',
+                id: 'tool-1',
+                localId: null,
+                createdAt: 1,
+                tool: { name: 'exec', state: 'running', input: 'pwd', result: null },
+            } as any],
+            metadata: null,
+            interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+        });
+
+        const list = getFlashList(screen);
+        expect(list.props.extraData).toMatchObject({
+            selectionVersion: expect.any(Number),
+            toolRouteReducerVersion: expect.any(Number),
+        });
+    });
+
     it('pins to the last transcript item instead of scrolling into the footer on first layout', async () => {
         scrollToIndexShouldReject = false;
         const screen = await renderChainTranscriptList({

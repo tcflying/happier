@@ -371,7 +371,12 @@ export function normalizeRawMessage(
         // Claude sometimes sends tool_result.content as [{ type: 'text', text: '...' }]
         if (Array.isArray(content)) {
             const maybeTextBlocks = content as Array<{ type?: unknown; text?: unknown }>;
-            const isTextBlocks = maybeTextBlocks.every((b) => b && typeof b === 'object' && b.type === 'text' && typeof b.text === 'string');
+            const isTextBlocks = maybeTextBlocks.every((b) => (
+                b
+                && typeof b === 'object'
+                && (b.type === 'text' || b.type === 'input_text')
+                && typeof b.text === 'string'
+            ));
             if (isTextBlocks) {
                 return maybeTextBlocks.map((b) => b.text as string).join('');
             }

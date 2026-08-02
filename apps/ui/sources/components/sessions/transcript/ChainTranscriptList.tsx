@@ -232,6 +232,13 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
     // whenever sync is catching this session up to newer activity (fail-closed signal).
     const isCatchingUpNewer = useSessionCatchingUpNewer(props.sessionId);
     const transcriptToolCallsCollapsedPreviewCountSetting = useSetting('transcriptToolCallsCollapsedPreviewCount');
+    const flashListExtraData = React.useMemo(() => ({
+        selectionVersion: transcriptMessageSelection.selectionVersion,
+        toolRouteReducerVersion: transcriptSessionCommon.toolRoute.reducerVersion ?? 0,
+    }), [
+        transcriptMessageSelection.selectionVersion,
+        transcriptSessionCommon.toolRoute.reducerVersion,
+    ]);
 
     // Tool-group expansion state is keyed by anchor message ids (declared before the
     // items memo: N2c per-unit decomposition derives the list rows from it).
@@ -945,7 +952,7 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
             }}
             style={{ flex: 1, minHeight: 0 }}
             data={items}
-            extraData={transcriptMessageSelection.selectionVersion}
+            extraData={flashListExtraData}
             keyExtractor={(item: ChainTranscriptListItem) => item.id}
             renderItem={renderItem}
             scrollEventThrottle={

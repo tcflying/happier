@@ -611,6 +611,33 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
             }
         });
 
+        it('flattens Codex custom-tool input_text output blocks into readable text', () => {
+            const normalized = normalizeRawMessage('codex-output-msg', null, Date.now(), {
+                role: 'agent',
+                content: {
+                    type: 'codex',
+                    data: {
+                        type: 'tool-call-result',
+                        callId: 'codex_exec_1',
+                        output: [
+                            { type: 'input_text', text: 'Script completed\n' },
+                            { type: 'input_text', text: 'STREAM-1\nSTREAM-2\n' },
+                        ],
+                        id: 'codex-output-id-1',
+                    },
+                },
+            });
+
+            expect(normalized?.role).toBe('agent');
+            if (normalized?.role === 'agent') {
+                const item = normalized.content[0];
+                expect(item.type).toBe('tool-result');
+                if (item.type === 'tool-result') {
+                    expect(item.content).toBe('Script completed\nSTREAM-1\nSTREAM-2\n');
+                }
+            }
+        });
+
         it('accepts Codex token_count messages via codex schema path (so they are not dropped)', () => {
             const codexMessage = {
                 role: 'agent',

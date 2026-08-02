@@ -6,8 +6,9 @@ namespace HappierCodexBridge;
 internal sealed class BridgeApplicationContext : ApplicationContext
 {
     private readonly CodexThreadStore _codex = new();
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(8) };
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly HappierDaemonClient _happier;
+    private readonly CodexPinnedThreadResolver _pinnedResolver;
     private readonly NotifyIcon _tray;
     private readonly CodexRightClickHook _hook;
     private readonly Control _dispatcher = new();
@@ -21,6 +22,7 @@ internal sealed class BridgeApplicationContext : ApplicationContext
     public BridgeApplicationContext()
     {
         _happier = new HappierDaemonClient(_http);
+        _pinnedResolver = new CodexPinnedThreadResolver(_codex);
         _dispatcher.CreateControl();
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add("检测 Codex 侧栏", null, (_, _) => ShowProbe());
@@ -40,7 +42,7 @@ internal sealed class BridgeApplicationContext : ApplicationContext
                 || !NativeMethods.IsWindow(nativeMenu.Handle)
                 || !NativeMethods.IsWindowVisible(nativeMenu.Handle))
             {
-                CloseSidecar();
+                CloseSidecar("native_menu_hidden");
             }
         };
         _hook = new CodexRightClickHook();
@@ -54,11 +56,10 @@ internal sealed class BridgeApplicationContext : ApplicationContext
                     Interlocked.Increment(ref _attachGeneration);
                     _attachCancellation?.Cancel();
                     BridgeDiagnostics.Write("right_click_ignored");
-                    _dispatcher.BeginInvoke(CloseSidecar);
+                    _dispatcher.BeginInvoke(() => CloseSidecar("non_thread_right_click"));
                     return;
                 }
-                var pending = new PendingCodexImport(target.Title, target.ProcessId, point);
-                _dispatcher.BeginInvoke(() => _ = AttachToNativeMenuAsync(pending));
+                _dispatcher.BeginInvoke(() => _ = AttachToNativeMenuAsync(target, point));
                 BridgeDiagnostics.Write("native_menu_attach_scheduled");
             }
             catch (Exception error)
@@ -70,20 +71,25 @@ internal sealed class BridgeApplicationContext : ApplicationContext
         ShowBalloon("Happier Codex Bridge 已启动", "在 Codex 左侧会话上点鼠标右键，即可导入到 Happier 直连。");
     }
 
-    private async Task AttachToNativeMenuAsync(PendingCodexImport target)
+    private async Task AttachToNativeMenuAsync(CodexSidebarTarget target, System.Drawing.Point point)
     {
         var generation = Interlocked.Increment(ref _attachGeneration);
         _attachCancellation?.Cancel();
         _attachCancellation?.Dispose();
         var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         _attachCancellation = cancellation;
-        CloseSidecar();
+        CloseSidecar("new_native_menu_attach");
 
         try
         {
+            var thread = _pinnedResolver.Resolve(target);
+            var pending = new PendingCodexImport(thread, target.ProcessId, point);
+            BridgeDiagnostics.Write(
+                "pinned_thread_resolved",
+                $"threadId={thread.Id};title={thread.Name};row={target.RowIndex + 1}/{target.ListSize}");
             var nativeMenu = await NativePopupMenuLocator.WaitForAsync(
-                target.Point,
-                target.ProcessId,
+                pending.Point,
+                pending.ProcessId,
                 TimeSpan.FromSeconds(2),
                 cancellation.Token);
             if (nativeMenu is null)
@@ -92,7 +98,7 @@ internal sealed class BridgeApplicationContext : ApplicationContext
                 return;
             }
             if (generation != Volatile.Read(ref _attachGeneration) || cancellation.IsCancellationRequested) return;
-            ShowSidecar(target, nativeMenu);
+            ShowSidecar(pending, nativeMenu);
         }
         catch (OperationCanceledException)
         {
@@ -106,24 +112,24 @@ internal sealed class BridgeApplicationContext : ApplicationContext
 
     private void ShowSidecar(PendingCodexImport target, NativePopupMenu nativeMenu)
     {
-        CloseSidecar();
+        CloseSidecar("replace_sidecar");
         try
         {
             var sidecar = new HappierMenuSidecar(nativeMenu.Bounds);
             _sidecar = sidecar;
             _nativeMenu = nativeMenu;
             _pendingImport = target;
-            sidecar.Show();
+            sidecar.ShowAttachedTo(nativeMenu.Handle);
             ArmSidecarClickInterceptor();
             _menuMonitor.Start();
             BridgeDiagnostics.Write(
                 "native_menu_sidecar_shown",
-                $"native={nativeMenu.Bounds};sidecar={sidecar.Bounds};title={target.Title}");
+                $"native={nativeMenu.Bounds};sidecar={sidecar.Bounds};sidecarHwnd=0x{sidecar.Handle.ToInt64():X};visible={NativeMethods.IsWindowVisible(sidecar.Handle)};title={target.Title}");
         }
         catch (Exception error)
         {
             BridgeDiagnostics.Write("native_menu_sidecar_failed", error.Message);
-            CloseSidecar();
+            CloseSidecar("sidecar_show_failed");
         }
     }
 
@@ -142,33 +148,24 @@ internal sealed class BridgeApplicationContext : ApplicationContext
             if (!sidecar.Bounds.Contains(point))
             {
                 _hook.LeftClickIntercepted = null;
-                _dispatcher.BeginInvoke(CloseSidecar);
+                _dispatcher.BeginInvoke(() => CloseSidecar("outside_left_click"));
                 return false;
             }
 
             _hook.LeftClickIntercepted = null;
-            _dispatcher.BeginInvoke(() => CaptureAndImportFromNativeMenu(target, nativeMenu));
+            _dispatcher.BeginInvoke(() => BeginImport(target, nativeMenu));
             return true;
         };
     }
 
-    private void CaptureAndImportFromNativeMenu(PendingCodexImport target, NativePopupMenu nativeMenu)
+    private void BeginImport(PendingCodexImport target, NativePopupMenu nativeMenu)
     {
-        CloseSidecar();
-        try
-        {
-            var threadId = CodexNativeMenuThreadIdReader.Read(nativeMenu.Handle);
-            BridgeDiagnostics.Write("thread_id_captured", $"threadId={threadId};title={target.Title}");
-            _ = Task.Run(() => ImportByIdAsync(threadId, target.Title));
-        }
-        catch (Exception error)
-        {
-            BridgeDiagnostics.Write("thread_id_capture_failed", error.Message);
-            ShowBalloon("无法读取 Codex 会话 ID", error.Message, ToolTipIcon.Error);
-        }
+        CloseSidecar("import_selected");
+        NativePopupMenuLocator.Dismiss(nativeMenu);
+        _ = ImportAsync(target.Thread);
     }
 
-    private void CloseSidecar()
+    private void CloseSidecar(string reason)
     {
         _hook.LeftClickIntercepted = null;
         _menuMonitor.Stop();
@@ -179,21 +176,7 @@ internal sealed class BridgeApplicationContext : ApplicationContext
         if (sidecar is null) return;
         sidecar.Hide();
         sidecar.Dispose();
-    }
-
-    private async Task ImportByIdAsync(string threadId, string displayTitle)
-    {
-        try
-        {
-            var source = _codex.FindById(threadId)
-                ?? throw new InvalidOperationException($"Codex 数据库里找不到会话 {threadId}");
-            await ImportAsync(source with { Name = displayTitle });
-        }
-        catch (Exception error)
-        {
-            BridgeDiagnostics.Write("import_by_id_failed", error.Message);
-            ShowBalloon("导入失败", error.Message, ToolTipIcon.Error);
-        }
+        BridgeDiagnostics.Write("native_menu_sidecar_closed", reason);
     }
 
     private async Task ImportAsync(CodexThread thread)
@@ -246,7 +229,7 @@ internal sealed class BridgeApplicationContext : ApplicationContext
         _attachCancellation?.Cancel();
         _attachCancellation?.Dispose();
         _hook.Dispose();
-        CloseSidecar();
+        CloseSidecar("application_exit");
         _menuMonitor.Dispose();
         _tray.Visible = false;
         _tray.Dispose();

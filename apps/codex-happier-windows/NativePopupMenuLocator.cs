@@ -6,6 +6,14 @@ namespace HappierCodexBridge;
 
 internal static class NativePopupMenuLocator
 {
+    public static void Dismiss(NativePopupMenu menu)
+    {
+        if (!NativeMethods.IsWindow(menu.Handle)) return;
+        NativeMethods.PostMessage(menu.Handle, NativeMethods.WmKeyDown, new IntPtr(NativeMethods.VkEscape), IntPtr.Zero);
+        NativeMethods.PostMessage(menu.Handle, NativeMethods.WmKeyUp, new IntPtr(NativeMethods.VkEscape), IntPtr.Zero);
+        NativeMethods.PostMessage(menu.Handle, NativeMethods.WmCancelMode, IntPtr.Zero, IntPtr.Zero);
+    }
+
     public static async Task<NativePopupMenu?> WaitForAsync(
         Point origin,
         int ownerProcessId,

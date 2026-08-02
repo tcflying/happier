@@ -50,6 +50,31 @@ internal sealed class CodexThreadStore
             """).FirstOrDefault();
     }
 
+    public IReadOnlyList<CodexThread> FindUnarchivedByIds(IReadOnlyList<string> ids)
+    {
+        var distinctIds = ids
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2_000)
+            .ToArray();
+        if (distinctIds.Length == 0) return [];
+        var literals = string.Join(", ", distinctIds.Select(id => $"'{EscapeSqlLiteral(id.Trim())}'"));
+        return Query($"""
+            SELECT id,
+                   CASE
+                     WHEN name IS NOT NULL AND trim(name) <> '' THEN name
+                     WHEN length(title) BETWEEN 1 AND 512 THEN title
+                     ELSE ''
+                   END AS display_name,
+                   preview,
+                   cwd,
+                   coalesce(updated_at_ms, updated_at * 1000, 0)
+              FROM threads
+             WHERE archived = 0
+               AND id IN ({literals})
+            """);
+    }
+
     internal static string SelectDisplayName(string? name, string? title, string preview, string id)
     {
         if (!string.IsNullOrWhiteSpace(name)) return name.Trim();

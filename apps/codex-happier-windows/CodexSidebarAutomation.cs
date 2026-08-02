@@ -21,11 +21,7 @@ internal static class CodexSidebarAutomation
             {
                 if (IsThreadListItem(current, automationPoint))
                 {
-                    var name = current.Current.Name?.Trim();
-                    if (!string.IsNullOrWhiteSpace(name) && name.Length <= 512)
-                    {
-                        return new CodexSidebarTarget(name, processId);
-                    }
+                    return CreateTarget(current, processId);
                 }
                 current = TreeWalker.ControlViewWalker.GetParent(current);
             }
@@ -35,6 +31,102 @@ internal static class CodexSidebarAutomation
             return null;
         }
         return null;
+    }
+
+    public static CodexSidebarTarget? FindTargetByTitle(string title)
+    {
+        var root = FindCodexRoot();
+        if (root is null) return null;
+        var elements = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+        for (var index = 0; index < elements.Count; index++)
+        {
+            try
+            {
+                var element = elements[index];
+                var current = element.Current;
+                if (current.ControlType != ControlType.ListItem
+                    || !IsThreadListItemRow(current))
+                {
+                    continue;
+                }
+                var stableTitle = ReadStableTitle(element);
+                if (!string.Equals(stableTitle, title.Trim(), StringComparison.Ordinal)) continue;
+                return CreateTarget(element, current.ProcessId);
+            }
+            catch (ElementNotAvailableException)
+            {
+                // Keep looking in the current render tree.
+            }
+        }
+        return null;
+    }
+
+    private static CodexSidebarTarget? CreateTarget(AutomationElement element, int processId)
+    {
+        var name = ReadStableTitle(element);
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 512) return null;
+        var parent = TreeWalker.ControlViewWalker.GetParent(element);
+        if (parent is null || parent.Current.ControlType != ControlType.List) return null;
+
+        var targetRuntimeId = element.GetRuntimeId();
+        var siblings = parent.FindAll(TreeScope.Children, Condition.TrueCondition);
+        var rows = new List<(AutomationElement Element, System.Windows.Rect Bounds)>();
+        for (var index = 0; index < siblings.Count; index++)
+        {
+            try
+            {
+                var sibling = siblings[index];
+                var current = sibling.Current;
+                if (IsThreadListItemRow(current)) rows.Add((sibling, current.BoundingRectangle));
+            }
+            catch (ElementNotAvailableException)
+            {
+                return null;
+            }
+        }
+        rows.Sort((left, right) => left.Bounds.Top.CompareTo(right.Bounds.Top));
+        var rowIndex = rows.FindIndex(row => row.Element.GetRuntimeId().SequenceEqual(targetRuntimeId));
+        if (rowIndex < 0) return null;
+        var bounds = element.Current.BoundingRectangle;
+        var drawingBounds = System.Drawing.Rectangle.FromLTRB(
+            checked((int)Math.Floor(bounds.Left)),
+            checked((int)Math.Floor(bounds.Top)),
+            checked((int)Math.Ceiling(bounds.Right)),
+            checked((int)Math.Ceiling(bounds.Bottom)));
+        return new CodexSidebarTarget(name, processId, rowIndex, rows.Count, drawingBounds);
+    }
+
+    private static string? ReadStableTitle(AutomationElement row)
+    {
+        try
+        {
+            var descendants = row.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            var candidates = new List<(string Name, System.Windows.Rect Bounds)>();
+            for (var index = 0; index < descendants.Count; index++)
+            {
+                var current = descendants[index].Current;
+                var name = current.Name?.Trim();
+                if (current.ControlType != ControlType.Button
+                    || !current.ClassName.Contains("sidebar-item", StringComparison.Ordinal)
+                    || current.IsOffscreen
+                    || string.IsNullOrWhiteSpace(name)
+                    || name.Length > 512)
+                {
+                    continue;
+                }
+                candidates.Add((name, current.BoundingRectangle));
+            }
+            var stable = candidates
+                .OrderBy(candidate => candidate.Bounds.Left)
+                .ThenByDescending(candidate => candidate.Bounds.Width)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(stable.Name)) return stable.Name;
+            return row.Current.Name?.Trim();
+        }
+        catch (ElementNotAvailableException)
+        {
+            return null;
+        }
     }
 
     private static bool IsThreadListItem(AutomationElement element, System.Windows.Point point)
@@ -47,6 +139,13 @@ internal static class CodexSidebarAutomation
             current.BoundingRectangle,
             point);
     }
+
+    private static bool IsThreadListItemRow(AutomationElement.AutomationElementInformation current)
+        => current.ControlType == ControlType.ListItem
+            && current.ClassName.Contains("touch-none", StringComparison.Ordinal)
+            && !current.IsOffscreen
+            && current.BoundingRectangle.Width is >= 100 and <= 500
+            && current.BoundingRectangle.Height is >= 20 and <= 60;
 
     internal static bool IsThreadListItemCandidate(
         bool isListItem,

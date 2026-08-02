@@ -1,4 +1,6 @@
 using System.Drawing;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace HappierCodexBridge;
@@ -18,7 +20,6 @@ internal sealed class HappierMenuSidecar : Form
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        TopMost = true;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
 
         var workingArea = Screen.FromRectangle(nativeMenuBounds).WorkingArea;
@@ -26,6 +27,36 @@ internal sealed class HappierMenuSidecar : Form
     }
 
     protected override bool ShowWithoutActivation => true;
+
+    public void ShowAttachedTo(IntPtr nativeMenuHandle)
+    {
+        var handle = Handle;
+        Marshal.SetLastPInvokeError(0);
+        var previousOwner = NativeMethods.SetWindowLongPtr(handle, NativeMethods.GwlpHwndParent, nativeMenuHandle);
+        var ownerError = Marshal.GetLastPInvokeError();
+        if (previousOwner == IntPtr.Zero && ownerError != 0)
+        {
+            throw new Win32Exception(ownerError, "无法把 Happier 追加行绑定到 Codex 原生菜单");
+        }
+
+        Show();
+        if (!NativeMethods.SetWindowPos(
+                handle,
+                NativeMethods.HwndTopmost,
+                Left,
+                Top,
+                Width,
+                Height,
+                NativeMethods.SwpNoActivate | NativeMethods.SwpShowWindow))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "无法显示 Happier 菜单追加行");
+        }
+        Update();
+        if (!NativeMethods.IsWindowVisible(handle))
+        {
+            throw new InvalidOperationException("Happier 菜单追加行创建后仍不可见");
+        }
+    }
 
     protected override CreateParams CreateParams
     {

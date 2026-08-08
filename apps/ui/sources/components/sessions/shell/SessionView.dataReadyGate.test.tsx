@@ -347,6 +347,9 @@ vi.mock('@/sync/domains/session/activeViewingSession', () => ({
     clearActiveViewingSessionId: () => {},
     markSessionVisible: () => {},
     markSessionHidden: () => {},
+    registerSessionVisibleSurface: () => () => {},
+    subscribeActiveViewingSessionReset: () => () => {},
+    getActiveViewingSessionResetVersion: () => 0,
 }));
 vi.mock('@/sync/sync', () => ({
     sync: {

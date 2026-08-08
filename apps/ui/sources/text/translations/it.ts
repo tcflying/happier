@@ -10223,6 +10223,9 @@ settingsSession: {
     detachLocalTerminal: "Scollega terminale",
     directSessionTakeoverAvailable:
       "Questa sessione diretta è disponibile sulla tua macchina. Prendila in carico in Happier per controllarla qui.",
+    directSessionControlledByCurrentHappier: ({ session, pid }: { session: string; pid: string | number }) => `Controllata da questa sessione Happier (${session}, processo ${pid}).`,
+    directSessionControlledByOtherHappier: ({ session, pid }: { session: string; pid: string | number }) => `Controllata da un'altra sessione Happier (${session}, processo ${pid}).`,
+    directSessionControlledElsewhere: 'Questa sessione diretta è controllata altrove. Prendila in carico in Happier per rispondere.',
     directSessionMachineOffline:
       "Questa sessione diretta non è attualmente disponibile perché la macchina è offline.",
     switchingToDirectTakeover: "Presa in carico di questa sessione diretta…",

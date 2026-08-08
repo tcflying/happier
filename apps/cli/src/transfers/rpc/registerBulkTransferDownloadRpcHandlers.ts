@@ -6,17 +6,75 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { TransferSessionStore } from '../core/transferSessionStore';
 import { resolveWorkspaceFileDownloadSource } from '../targets/resolveWorkspaceFileDownloadSource';
 import { registerDownloadTransferLifecycleHandlers } from './registerDownloadTransferLifecycleHandlers';
+import { resolveDirectCodexSessionMedia } from '@/backends/codex/directSessions/directCodexSessionMedia';
+import type { Metadata } from '@/api/types';
+import { join } from 'node:path';
+import { getDirectSessionProviderOps } from '@/backends/catalog';
 
 type BulkTransferDownloadInitRequest = Readonly<{
   t: 'session_file_download_v1';
   path: string;
   asZip?: boolean;
   recipientPublicKeyBase64?: string;
+}> | Readonly<{
+  t: 'direct_codex_session_media_preview_v1';
+  directMediaId: string;
+  path: string;
+  recipientPublicKeyBase64?: string;
 }>;
 
 type BulkTransferDownloadInitResponse =
   | Readonly<{ success: true; downloadId: string; chunkSizeBytes: number; sizeBytes: number; name: string }>
   | Readonly<{ success: false; error: string }>;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function envelopePublishesDirectMedia(envelopeValue: unknown, mediaId: string, path: string): boolean {
+  const envelope = asRecord(envelopeValue);
+  if (envelope?.kind !== 'direct_session_media.v1') return false;
+  const payload = asRecord(envelope.payload);
+  const media = Array.isArray(payload?.media) ? payload.media : [];
+  return media.some((value) => {
+    const item = asRecord(value);
+    return item?.id === mediaId && item.path === path;
+  });
+}
+
+function transcriptItemPublishesDirectMedia(itemValue: unknown, mediaId: string, path: string): boolean {
+  const item = asRecord(itemValue);
+  const raw = asRecord(item?.raw);
+  const meta = asRecord(raw?.meta);
+  return envelopePublishesDirectMedia(meta?.happier, mediaId, path)
+    || envelopePublishesDirectMedia(meta?.happierMedia, mediaId, path);
+}
+
+async function linkedTranscriptPublishesDirectMedia(params: Readonly<{
+  source: NonNullable<Metadata['directSessionV1']>['source'];
+  remoteSessionId: string;
+  mediaId: string;
+  path: string;
+}>): Promise<boolean> {
+  const providerOps = await getDirectSessionProviderOps('codex');
+  let cursor: string | undefined;
+  for (let pageIndex = 0; pageIndex < 10_000; pageIndex += 1) {
+    const page = await providerOps.pageTranscript({
+      source: params.source,
+      remoteSessionId: params.remoteSessionId,
+      direction: 'older',
+      ...(cursor ? { cursor } : {}),
+      maxBytes: 512_000,
+      maxItems: 500,
+    });
+    if (page.items.some((item) => transcriptItemPublishesDirectMedia(item, params.mediaId, params.path))) {
+      return true;
+    }
+    if (!page.hasMore || !page.nextCursor) return false;
+    cursor = page.nextCursor;
+  }
+  return false;
+}
 
 export function registerBulkTransferDownloadRpcHandlers(
   rpcHandlerManager: RpcHandlerRegistrar,
@@ -26,6 +84,7 @@ export function registerBulkTransferDownloadRpcHandlers(
     store: TransferSessionStore;
     getAdditionalAllowedReadDirs?: () => ReadonlyArray<string>;
     sessionRpcTransferMaxBytes?: number | null;
+    getSessionMetadata?: () => Metadata | null;
   }>,
 ): void {
   registerDownloadTransferLifecycleHandlers<BulkTransferDownloadInitResponse>({
@@ -39,7 +98,7 @@ export function registerBulkTransferDownloadRpcHandlers(
     },
     resolveInit: async (data) => {
       const request = data as BulkTransferDownloadInitRequest | null;
-      if (!request || request.t !== 'session_file_download_v1') {
+      if (!request || (request.t !== 'session_file_download_v1' && request.t !== 'direct_codex_session_media_preview_v1')) {
         return {
           kind: 'rejected',
           response: {
@@ -71,6 +130,41 @@ export function registerBulkTransferDownloadRpcHandlers(
             success: false,
             error: error instanceof Error ? error.message : 'Invalid recipientPublicKeyBase64',
           },
+        };
+      }
+      if (request.t === 'direct_codex_session_media_preview_v1') {
+        const metadata = deps.getSessionMetadata?.();
+        if (metadata?.directSessionV1?.providerId !== 'codex') {
+          return { kind: 'rejected', response: { success: false, error: 'Direct Codex media preview is unavailable for this session' } };
+        }
+        const directMediaId = typeof request.directMediaId === 'string' ? request.directMediaId.trim() : '';
+        if (!directMediaId || directMediaId.length > 512) {
+          return { kind: 'rejected', response: { success: false, error: 'Direct Codex media identity is invalid' } };
+        }
+        const source = metadata.directSessionV1.source;
+        const published = await linkedTranscriptPublishesDirectMedia({
+          source,
+          remoteSessionId: metadata.directSessionV1.remoteSessionId,
+          mediaId: directMediaId,
+          path: request.path,
+        }).catch(() => false);
+        if (!published) {
+          return { kind: 'rejected', response: { success: false, error: 'Direct Codex media was not published by this session' } };
+        }
+        const sourceHome = source?.kind === 'codexHome' && typeof source.homePath === 'string' ? source.homePath.trim() : '';
+        const codexHome = sourceHome || (typeof process.env.CODEX_HOME === 'string' ? process.env.CODEX_HOME.trim() : '');
+        const item = codexHome ? resolveDirectCodexSessionMedia({
+          codexHome,
+          sourcePath: join(codexHome, request.path),
+          id: 'preview',
+          maxBytes: deps.sessionRpcTransferMaxBytes ?? undefined,
+        }) : null;
+        if (!item) return { kind: 'rejected', response: { success: false, error: 'Direct Codex media path is unavailable' } };
+        return {
+          kind: 'accepted',
+          source: { filePath: join(codexHome, item.path), sizeBytes: item.sizeBytes, name: item.name, deleteFileOnClose: false },
+          recipientPublicKeyBase64,
+          logContext: { path: item.path, directCodexPreview: true },
         };
       }
       const source = await resolveWorkspaceFileDownloadSource({

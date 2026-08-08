@@ -64,7 +64,7 @@ export function localSettingsParse(settings: unknown): LocalSettings {
     const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
     const UI_FONT_SCALE_MIN = 0.5;
-    const UI_FONT_SCALE_MAX = 2.5;
+    const UI_FONT_SCALE_MAX = 3;
 
     const data = stripDeprecatedLocalSettingsKeys(parsed.data) as LocalSettingsParseInput;
     const nextUiFontScaleRaw =

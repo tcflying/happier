@@ -6,6 +6,14 @@ import {
 } from './resolveToolCallsGroupAutoExpandPolicy';
 
 describe('resolveToolCallsGroupAutoExpandPolicy', () => {
+    it('never auto-expands when collapsed preview rows are disabled', () => {
+        expect(shouldAutoExpandToolCallsGroupForShortTranscript({
+            toolMessageCount: 1,
+            collapsedPreviewCount: 0,
+            maxTurnEntriesPerListItem: 8,
+        })).toBe(false);
+    });
+
     it('does not auto-expand groups with no hidden tools', () => {
         expect(shouldAutoExpandToolCallsGroupForShortTranscript({
             toolMessageCount: 5,

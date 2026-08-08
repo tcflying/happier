@@ -1632,6 +1632,7 @@ describe('useTranscriptScrollObservationHost identity stability', () => {
     });
 
     it.each([
+        ['input', () => document.createElement('input')],
         ['textarea', () => document.createElement('textarea')],
         ['contenteditable', () => {
             const element = document.createElement('div');
@@ -1667,6 +1668,7 @@ describe('useTranscriptScrollObservationHost identity stability', () => {
             scrollTop: 600,
         });
         const notifyViewportInput = vi.fn();
+        const onWebArrowDown = vi.fn();
         members.listRef.current = {
             notifyViewportInput,
             scrollToIndex: vi.fn(),
@@ -1674,15 +1676,16 @@ describe('useTranscriptScrollObservationHost identity stability', () => {
         };
         const hook = await renderHook(
             (deps: ScrollObservationHostDeps) => useTranscriptScrollObservationHost(deps),
-            { initialProps: buildDeps(members) },
+            { initialProps: { ...buildDeps(members), onWebArrowDown } },
         );
 
         excludedElement.dispatchEvent(new KeyboardEvent('keydown', {
             bubbles: true,
             cancelable: true,
-            key: 'PageDown',
+            key: 'ArrowDown',
         }));
         expect(notifyViewportInput).not.toHaveBeenCalled();
+        expect(onWebArrowDown).not.toHaveBeenCalled();
 
         excludedElement.setAttribute('tabindex', '0');
         excludedElement.focus();
@@ -1690,9 +1693,10 @@ describe('useTranscriptScrollObservationHost identity stability', () => {
         document.body.dispatchEvent(new KeyboardEvent('keydown', {
             bubbles: true,
             cancelable: true,
-            key: 'PageDown',
+            key: 'ArrowDown',
         }));
         expect(notifyViewportInput).not.toHaveBeenCalled();
+        expect(onWebArrowDown).not.toHaveBeenCalled();
 
         await hook.unmount();
     });

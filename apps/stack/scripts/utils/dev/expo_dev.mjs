@@ -9,6 +9,7 @@ import {
   getExpoStatePaths,
   isStateProcessRunning,
   readPidState,
+  readWindowsExpoProcessIdentity,
   resolveExpoTmpDir,
   restoreExpoPidStatePublication,
   wantsExpoClearCache,
@@ -425,6 +426,10 @@ export async function ensureDevExpoServer({
   getProcessGroupIdForCleanup = getProcessGroupId,
   killOwnedProcessGroup = killProcessGroupOwnedByStack,
   readStateProcessIdentityLine = null,
+  readSpawnedProcessIdentity = readWindowsExpoProcessIdentity,
+  stateProcessPlatform = process.platform,
+  spawnExpoProcess = expoSpawn,
+  waitForExpoMetroRunningImpl = waitForExpoMetroRunning,
   stopTailscaleProcessTree = stopExpoProcessTree,
 } = {}) {
   const wantWeb = Boolean(startUi);
@@ -469,10 +474,23 @@ export async function ensureDevExpoServer({
   const running = await isStateProcessRunning(
     paths.statePath,
     readStateProcessIdentityLine
-      ? { readProcessIdentityLineImpl: readStateProcessIdentityLine }
-      : undefined,
+      ? { platform: stateProcessPlatform, readProcessIdentityLineImpl: readStateProcessIdentityLine }
+      : { platform: stateProcessPlatform },
   );
   const alreadyRunning = Boolean(running.running);
+  const statePid = Number(running.state?.pid);
+  const legacyStateHasLivePid = running.reason === 'pid_identity_unverifiable_legacy'
+    && Number.isFinite(statePid)
+    && statePid > 1
+    && isPidAlive(statePid);
+  if (legacyStateHasLivePid && !restart) {
+    const error = new Error(
+      `[expo] refusing to start a second Expo process because legacy state references a live, unverifiable pid=${statePid}.\n` +
+      'Fix: re-run with --restart so canonical ownership checks can stop the old process before replacement.'
+    );
+    error.code = 'EEXPOLEGACYPIDSTATE';
+    throw error;
+  }
   let desiredApiServerUrl = normalizeApiServerUrl(env.EXPO_PUBLIC_HAPPIER_SERVER_URL || apiServerUrl);
   const cliHomeDir = (baseEnv?.HAPPIER_STACK_CLI_HOME_DIR ?? '').toString().trim();
   // Always publish runtime metadata when we can.
@@ -611,11 +629,12 @@ export async function ensureDevExpoServer({
     if (prevPidAlive) {
       const res = await killOwnedProcessGroup(prevPid, { stackName, envPath, cliHomeDir, label: 'expo', json: true });
       if (!res.killed) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[local] expo: not stopping existing Expo pid=${prevPid} because it does not look stack-owned.\n` +
-            `[local] expo: continuing by starting a new Expo process on a free port.`
+        const error = new Error(
+          `[expo] refusing to start a replacement because pid=${prevPid} could not be proven stack-owned and stopped.\n` +
+          'Stop the process manually after verifying ownership, then retry.'
         );
+        error.code = 'EEXPOPIDOWNERSHIPUNVERIFIED';
+        throw error;
       }
     }
   }
@@ -727,6 +746,17 @@ export async function ensureDevExpoServer({
     assertCurrentCertificate(certificate);
     await runPublicationBarrier('runtime', certificate);
     const proc = certificate.currentProc;
+    let processInstanceFingerprint = null;
+    if (process.platform === 'win32') {
+      const processIdentity = await readSpawnedProcessIdentity(proc.pid);
+      processInstanceFingerprint = String(processIdentity?.processInstanceFingerprint ?? '').trim() || null;
+      if (!processInstanceFingerprint) {
+        const error = new Error(`[expo] unable to certify Windows process identity for pid=${proc.pid}`);
+        error.code = 'EEXPOPIDIDENTITYUNAVAILABLE';
+        throw error;
+      }
+      assertCurrentCertificate(certificate);
+    }
     await publishRuntime({
       generation: certificate.generation,
       publicationToken: certificate.publicationToken,
@@ -746,6 +776,7 @@ export async function ensureDevExpoServer({
       generation: certificate.generation,
       state: {
         pid: proc.pid,
+        processInstanceFingerprint,
         port: metroPort,
         uiDir,
         projectDir,
@@ -783,7 +814,7 @@ export async function ensureDevExpoServer({
 
   const spawnTrackedExpo = async ({ restartAttempt = 0, forceClearCache = false } = {}) => {
     const outputTracker = createExpoCrashOutputTracker();
-    const proc = await expoSpawn({
+    const proc = await spawnExpoProcess({
       label: 'expo',
       dir: uiDir,
       projectDir,
@@ -891,7 +922,7 @@ export async function ensureDevExpoServer({
   };
 
   const certifyTrackedSpawn = async (trackedSpawn) => {
-    const ready = await waitForExpoMetroRunning({
+    const ready = await waitForExpoMetroRunningImpl({
       port: metroPort,
       ownerPid: trackedSpawn.pid,
       ownerProc: trackedSpawn.currentProc,

@@ -394,27 +394,30 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
     const recentWindowMs = resolveRecentActivityWindowMs();
     let activityValue: 'running' | 'active_recently' | 'idle' | 'unknown' = 'unknown';
     let lastKnownActivityAtMs: number | undefined = undefined;
+    let activityTailCharacter: string | null = null;
     let runnerActive = false;
     let trustedPid: number | null = null;
+    let ownerPid: number | null = null;
+    let ownerHappierSessionId: string | null = null;
     let canForceStop = false;
 
     const markers = await listSessionMarkers().catch(() => []);
     const liveMarkers = markers.filter((m) => Number.isFinite(m.pid) && m.pid > 0 && isPidAlive(m.pid));
 
-    runnerActive = liveMarkers.some((m) => m.happySessionId === parsed.data.sessionId);
+    const directSessionOwner = findTrustedDirectSessionOwner({
+      markers: liveMarkers,
+      providerId: parsed.data.providerId,
+      remoteSessionId: parsed.data.remoteSessionId,
+      isPidAlive,
+    });
+    ownerPid = directSessionOwner?.pid ?? null;
+    ownerHappierSessionId = directSessionOwner?.happySessionId?.trim() || null;
+    runnerActive = ownerHappierSessionId === parsed.data.sessionId;
     await followLeaseManager.reconcileRuntimeOwnership(parsed.data.sessionId, runnerActive);
 
-    if (!runnerActive) {
-      const owner = findTrustedDirectSessionOwner({
-        markers: liveMarkers,
-        providerId: parsed.data.providerId,
-        remoteSessionId: parsed.data.remoteSessionId,
-        isPidAlive,
-      });
-      if (owner) {
-        trustedPid = owner.pid;
+    if (!runnerActive && directSessionOwner) {
+        trustedPid = directSessionOwner.pid;
         canForceStop = true;
-      }
     }
 
     try {
@@ -427,6 +430,9 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
         const ageMs = nowMs - res.lastActivityAtMs;
         activityValue = Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= recentWindowMs ? 'active_recently' : 'idle';
       }
+      activityTailCharacter = typeof res.activityTailCharacter === 'string' && res.activityTailCharacter.length > 0
+        ? res.activityTailCharacter
+        : null;
       if (res.isRunning) {
         activityValue = 'running';
       }
@@ -472,7 +478,10 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
       canTakeOverPersist,
       canForceStop,
       trustedPid,
+      ownerPid,
+      ownerHappierSessionId,
       ...(lastKnownActivityAtMs !== undefined ? { lastKnownActivityAtMs } : {}),
+      ...(activityTailCharacter ? { activityTailCharacter } : {}),
     } satisfies DirectSessionStatusGetResponse;
   });
 

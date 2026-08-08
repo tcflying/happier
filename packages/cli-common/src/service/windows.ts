@@ -112,7 +112,14 @@ export function renderWindowsScheduledTaskWrapperPs1(params: Readonly<{
     '$ErrorActionPreference = "Stop"',
     wd ? `Set-Location -LiteralPath ${psQuoted(wd)}` : '',
     envLines,
+    '$ErrorActionPreference = "Continue"',
+    '$LASTEXITCODE = 0',
     cmd ? `${cmd}${redirect}` : '',
+    'if (-not $?) {',
+    '  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
+    '  exit 1',
+    '}',
+    'exit $LASTEXITCODE',
     '',
   ]
     .filter(Boolean)

@@ -40,6 +40,7 @@ import { AttachmentsMessageRow } from '@/components/sessions/attachments/message
 import { SessionMediaInlineImages } from '@/components/sessions/sessionMedia/SessionMediaInlineImages';
 import { SessionMediaUnavailableItems } from '@/components/sessions/sessionMedia/SessionMediaUnavailableItems';
 import { parseSessionMediaMessageMeta } from '@/sync/domains/sessionMedia/sessionMediaMessageMeta';
+import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 import { forkSession } from '@/sync/ops';
 import { canForkFromMessage } from '@/sync/domains/sessionFork/forkUiSupport';
 import { resolveForkFromMessageSemantics } from '@/sync/domains/sessionFork/forkFromMessageSemantics';
@@ -259,6 +260,14 @@ function resolveMessageTimestampPresentation(input: {
 function buildStreamingMarkdownParseCacheKey(messageId: string, revision: number | null | undefined): string | null {
   if (typeof revision !== 'number' || !Number.isFinite(revision)) return null;
   return `message:${messageId}:revision:${Math.trunc(revision)}`;
+}
+
+function stripDirectCodexMarkdownImages(markdown: string, media: readonly { path: string; previewSource?: string }[]): string {
+  const directPaths = new Set(media.filter((item) => item.previewSource === 'direct-codex').map((item) => item.path));
+  if (directPaths.size === 0) return markdown;
+  return markdown.replace(/!\[[^\]]*\]\(([^\s)]+)(?:\s+[^)]*)?\)/g, (whole, destination: string) => (
+    directPaths.has(destination) ? '' : whole
+  ));
 }
 
 type MessageViewProps = {
@@ -532,9 +541,10 @@ function UserTextBlock(props: {
   });
   const isStructuredOnly = structuredNode != null;
 
+  const directCodexLinked = readDirectSessionLink(props.metadata)?.providerId === 'codex';
   const parsedSessionMediaMeta = React.useMemo(
-    () => parseSessionMediaMessageMeta(props.message.meta),
-    [props.message.meta],
+    () => parseSessionMediaMessageMeta(props.message.meta, { allowDirectCodexMedia: directCodexLinked }),
+    [directCodexLinked, props.message.meta],
   );
   const attachmentsMeta = parsedSessionMediaMeta.legacyAttachments;
   const sessionMediaInlineImages = parsedSessionMediaMeta.inlineImages;
@@ -571,7 +581,10 @@ function UserTextBlock(props: {
     if (attachmentsMeta) return stripLegacyAttachmentsBlock(props.message.text);
     return props.message.text;
   }, [attachmentsMeta, isVoiceAgentTurn, props.message.displayText, props.message.text, unsupportedContentText]);
-  const renderedMarkdownText = markdownText ?? props.message.displayText ?? props.message.text;
+  const renderedMarkdownText = stripDirectCodexMarkdownImages(
+    markdownText ?? props.message.displayText ?? props.message.text,
+    directCodexLinked ? sessionMediaInlineImages : [],
+  );
 
   const linkedWorkspaceFiles = React.useMemo(
     () => extractWorkspaceFileMentions(renderedMarkdownText),
@@ -1004,9 +1017,10 @@ function AgentTextBlock(props: {
     onJumpToAnchor: handleJumpToAnchor,
   });
   const isStructuredOnly = structuredNode != null;
+  const directCodexLinked = readDirectSessionLink(props.metadata)?.providerId === 'codex';
   const parsedSessionMediaMeta = React.useMemo(
-    () => parseSessionMediaMessageMeta(props.message.meta),
-    [props.message.meta],
+    () => parseSessionMediaMessageMeta(props.message.meta, { allowDirectCodexMedia: directCodexLinked }),
+    [directCodexLinked, props.message.meta],
   );
   const sessionMediaInlineImages = parsedSessionMediaMeta.inlineImages;
   const unavailableSessionMedia = parsedSessionMediaMeta.unavailableMedia;
@@ -1032,9 +1046,9 @@ function AgentTextBlock(props: {
     return null;
   }
   const markdownSource = baseMarkdownText ?? props.message.text;
-  const markdown = (!unsupportedContentMeta && props.message.isThinking)
+  const markdown = stripDirectCodexMarkdownImages((!unsupportedContentMeta && props.message.isThinking)
     ? unwrapLegacyThinkingWrapper(markdownSource)
-    : markdownSource;
+    : markdownSource, directCodexLinked ? sessionMediaInlineImages : []);
   const deriveThinkingSummary = (text: string) => {
     const trimmed = String(text ?? '').trim();
     if (!trimmed) return '';

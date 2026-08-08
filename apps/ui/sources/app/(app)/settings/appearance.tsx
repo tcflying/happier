@@ -32,24 +32,15 @@ import {
 import type { ThemeProfileMode, ThemeProfilesLocalStateV1 } from '@/theme/profiles/themeProfileTypes';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { Icon } from '@/components/ui/icons/Icon';
+import {
+    APPEARANCE_UI_FONT_SCALE_PRESETS,
+    findClosestUiFontScalePreset,
+    formatUiFontScalePercent,
+    getUiFontScalePreset,
+} from '@/components/ui/text/uiFontScalePresets';
 
-const UI_FONT_SCALE_PRESETS = {
-    xxsmall: 0.8,
-    xsmall: 0.85,
-    small: 0.93,
-    default: 1,
-    large: 1.1,
-    xlarge: 1.2,
-    xxlarge: 1.3,
-} as const;
-
-type UiFontScalePresetId = keyof typeof UI_FONT_SCALE_PRESETS;
 type UiItemDensity = LocalSettings['uiItemDensity'];
 type DetailsPaneTabsBehavior = LocalSettings['detailsPaneTabsBehavior'];
-
-const isUiFontScalePresetId = (value: string): value is UiFontScalePresetId => (
-    Object.prototype.hasOwnProperty.call(UI_FONT_SCALE_PRESETS, value)
-);
 
 const isUiItemDensity = (value: string): value is UiItemDensity => (
     value === 'comfortable' || value === 'cozy' || value === 'compact'
@@ -123,15 +114,10 @@ export default React.memo(function AppearanceSettingsScreen() {
         return `${activeLightThemeProfile?.name ?? defaultTheme} / ${activeDarkThemeProfile?.name ?? defaultTheme}`;
     }, [activeDarkThemeProfile?.name, activeLightThemeProfile?.name]);
     const textSizeMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
-        return [
-            { id: 'xxsmall', title: t('settingsAppearance.textSizeOptions.xxsmall') },
-            { id: 'xsmall', title: t('settingsAppearance.textSizeOptions.xsmall') },
-            { id: 'small', title: t('settingsAppearance.textSizeOptions.small') },
-            { id: 'default', title: t('settingsAppearance.textSizeOptions.default') },
-            { id: 'large', title: t('settingsAppearance.textSizeOptions.large') },
-            { id: 'xlarge', title: t('settingsAppearance.textSizeOptions.xlarge') },
-            { id: 'xxlarge', title: t('settingsAppearance.textSizeOptions.xxlarge') },
-        ];
+        return APPEARANCE_UI_FONT_SCALE_PRESETS.map((preset) => ({
+            id: preset.id,
+            title: preset.translationKey ? t(preset.translationKey) : formatUiFontScalePercent(preset.scale),
+        }));
     }, []);
 
     const detailsTabsMenuItems = React.useMemo(() => {
@@ -214,22 +200,13 @@ export default React.memo(function AppearanceSettingsScreen() {
     }, []);
 
     const selectedTextSizeId = React.useMemo(() => {
-        const entries = Object.entries(UI_FONT_SCALE_PRESETS) as Array<[UiFontScalePresetId, number]>;
-        let best: UiFontScalePresetId = 'default';
-        let bestDist = Number.POSITIVE_INFINITY;
-        for (const [id, scale] of entries) {
-            const dist = Math.abs((uiFontScale ?? 1) - scale);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = id;
-            }
-        }
-        return best;
+        return findClosestUiFontScalePreset(uiFontScale).id;
     }, [uiFontScale]);
 
     const selectUiFontSize = React.useCallback((itemId: string) => {
-        if (!isUiFontScalePresetId(itemId)) return;
-        setUiFontScale(UI_FONT_SCALE_PRESETS[itemId]);
+        const preset = getUiFontScalePreset(itemId);
+        if (!preset) return;
+        setUiFontScale(preset.scale);
     }, [setUiFontScale]);
 
     const applyThemeSelection = React.useCallback((nextThemePreference: 'adaptive' | 'light' | 'dark', nextThemeProfiles: ThemeProfilesLocalStateV1) => {

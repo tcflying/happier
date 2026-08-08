@@ -67,7 +67,7 @@ const { createSessionFilePreviewSource } = await import('./createSessionFilePrev
 
 type DownloadMockParams = Readonly<{
     sessionId: string;
-    request: Readonly<{ path: string; asZip: boolean }>;
+    request: Readonly<{ path: string; asZip: boolean; directCodexMediaPreview?: boolean; directMediaId?: string }>;
     destination: Readonly<{
         writeBytes: (bytes: Uint8Array) => Promise<void>;
         close: () => Promise<void>;
@@ -170,6 +170,30 @@ describe('createSessionFilePreviewSource', () => {
         expect(memory.chunks).toEqual([]);
         expect(memory.destination.cleanup).toHaveBeenCalled();
         expect(memory.destination.buildSource).not.toHaveBeenCalled();
+    });
+
+    it('binds a direct Codex preview request to the published media id and path', async () => {
+        const memory = createMemoryDestination();
+        downloadDaemonSessionFileToDestination.mockResolvedValue({ ok: false, error: 'denied by test boundary' });
+
+        await createSessionFilePreviewSource({
+            sessionId: 'linked-session-1',
+            filePath: 'images/generated.png',
+            mimeType: 'image/png',
+            directCodexMediaPreview: true,
+            directMediaId: 'image-published',
+            createDestination: () => ({ ok: true, destination: memory.destination }),
+        });
+
+        expect(downloadDaemonSessionFileToDestination).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 'linked-session-1',
+            request: {
+                path: 'images/generated.png',
+                asZip: false,
+                directCodexMediaPreview: true,
+                directMediaId: 'image-published',
+            },
+        }));
     });
 
     it('writes native previews to a cache file and exposes decoded svg xml for native rendering', async () => {

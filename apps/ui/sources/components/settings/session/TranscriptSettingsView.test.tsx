@@ -19,6 +19,12 @@ installSessionSettingsCommonModuleMocks({
             importOriginal,
             overrides: {
                 useSettingMutable: (name: string) => {
+                    if (name === 'transcriptGroupToolCalls') {
+                        return [true, vi.fn()];
+                    }
+                    if (name === 'toolViewTimelineChromeMode') {
+                        return ['activity_feed', vi.fn()];
+                    }
                     if (name === 'transcriptMessageTimestampDisplayMode') {
                         return ['hover_web_hidden_mobile', setTranscriptMessageTimestampDisplayMode];
                     }
@@ -156,5 +162,16 @@ describe('TranscriptSettingsView', () => {
         dropdown?.props?.onSelect?.('always');
 
         expect(setTranscriptMessageTimestampDisplayMode).toHaveBeenCalledWith('always');
+    });
+
+    it('uses the collapsed tool-group default when the setting is unavailable', async () => {
+        const { TranscriptSettingsView } = await import('./TranscriptSettingsView');
+        const screen = await renderSettingsView(React.createElement(TranscriptSettingsView));
+
+        const dropdown = screen.findAll((node) =>
+            node.props?.itemTrigger?.title === 'settingsSession.transcript.advanced.toolCallsCollapsedPreviewCountTitle'
+        )[0];
+
+        expect(dropdown?.props?.selectedId).toBe('0');
     });
 });

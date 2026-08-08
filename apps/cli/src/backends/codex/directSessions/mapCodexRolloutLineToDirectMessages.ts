@@ -2,6 +2,10 @@ import type { DirectTranscriptRawMessageV1 } from '@happier-dev/protocol';
 
 import type { CodexRolloutAction } from '../localControl/rolloutMapper';
 import { projectCodexRolloutActions } from '../rollout/projectCodexRolloutActions';
+import {
+  DIRECT_CODEX_SESSION_MEDIA_META_KIND_V1,
+  resolveDirectCodexSessionMedia,
+} from './directCodexSessionMedia';
 
 function shouldFilterHarnessBlob(text: string): boolean {
   const t = text.trim();
@@ -38,6 +42,7 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
   lineValue: unknown;
   actions: ReadonlyArray<CodexRolloutAction>;
   sidechainId?: string | null;
+  codexHome: string;
 }>): DirectTranscriptRawMessageV1[] {
   const createdAtMs = extractEnvelopeTimestampMs(params.lineValue);
   // Direct transcript rendering should include "debug-only" tool calls (e.g., Codex-internal read/write tools),
@@ -48,6 +53,25 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
   );
 
   const out: DirectTranscriptRawMessageV1[] = [];
+  const directMedia = readDirectCodexImageMedia({
+    lineValue: params.lineValue,
+    codexHome: params.codexHome,
+    id: stableOffsetId(`codex:${params.fileRelPath}:media`, params.lineStartOffsetBytes, 0),
+  });
+  if (directMedia) {
+    out.push({
+      id: stableOffsetId(`codex:${params.fileRelPath}:media`, params.lineStartOffsetBytes, 0),
+      localId: stableOffsetId(`codex:${params.fileRelPath}:media`, params.lineStartOffsetBytes, 0),
+      createdAtMs,
+      raw: {
+        role: 'agent',
+        // Use the existing Codex message shape so normalization keeps this
+        // media-only row silent instead of emitting an unsupported-output marker.
+        content: { type: 'codex', data: { type: 'message', message: '' } },
+        meta: { happier: { kind: DIRECT_CODEX_SESSION_MEDIA_META_KIND_V1, payload: { media: [directMedia] } } },
+      },
+    });
+  }
   for (let i = 0; i < projected.length; i++) {
     const action = projected[i]!;
     const idPrefix = `codex:${params.fileRelPath}`;
@@ -160,4 +184,18 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
   }
 
   return out;
+}
+
+function readDirectCodexImageMedia(params: Readonly<{ lineValue: unknown; codexHome: string; id: string }>) {
+  if (!params.lineValue || typeof params.lineValue !== 'object' || Array.isArray(params.lineValue)) return null;
+  const payload = (params.lineValue as { payload?: unknown }).payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const record = payload as Record<string, unknown>;
+  const type = typeof record.type === 'string' ? record.type : '';
+  if (type !== 'image_generation_call' && type !== 'image_generation') return null;
+  const status = typeof record.status === 'string' ? record.status.toLowerCase() : '';
+  if (status && status !== 'completed' && status !== 'succeeded') return null;
+  const path = typeof record.saved_path === 'string' ? record.saved_path : typeof record.savedPath === 'string' ? record.savedPath : null;
+  const imageId = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : params.id;
+  return path ? resolveDirectCodexSessionMedia({ codexHome: params.codexHome, sourcePath: path, id: imageId }) : null;
 }

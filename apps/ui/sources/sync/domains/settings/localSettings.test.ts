@@ -233,7 +233,7 @@ describe('localSettingsParse', () => {
         expect(tooSmall.uiFontScale).toBeGreaterThanOrEqual(0.5);
 
         const tooBig = localSettingsParse({ uiFontScale: 100 });
-        expect(tooBig.uiFontScale).toBeLessThanOrEqual(2.5);
+        expect(tooBig.uiFontScale).toBe(3);
     });
 
     it('accepts direct sessions list tab selection', () => {

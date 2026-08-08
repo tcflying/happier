@@ -35,6 +35,13 @@ describe('ACCOUNT_TRANSCRIPT_TOOL_SETTING_DEFINITIONS message actions', () => {
         expect(definition.analytics?.valueKind).toBe('enum');
     });
 
+    it('defaults collapsed tool groups to their one-line summary without preview rows', () => {
+        const definition = ACCOUNT_TRANSCRIPT_TOOL_SETTING_DEFINITIONS.transcriptToolCallsCollapsedPreviewCount;
+
+        expect(definition.default).toBe(0);
+        expect(definition.schema.safeParse(0).success).toBe(true);
+    });
+
     it('defines the bulk copy format enum', () => {
         const definition = ACCOUNT_TRANSCRIPT_TOOL_SETTING_DEFINITIONS.transcriptBulkCopyFormat;
 

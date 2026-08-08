@@ -142,4 +142,24 @@ describe('parseSessionMediaMessageMeta', () => {
         expect(JSON.stringify(parsed.unavailableMedia)).not.toContain('cursor');
         expect(JSON.stringify(parsed.unavailableMedia)).not.toContain('toolCallId');
     });
+
+    it('accepts direct Codex media only when the linked-Codex caller explicitly enables it', () => {
+        const meta = {
+            happier: { kind: 'direct_session_media.v1', payload: { media: [{
+                id: 'image-1', name: 'generated.png', path: 'images/generated.png', mimeType: 'image/png', sizeBytes: 10,
+            }] } },
+        };
+        expect(parseSessionMediaMessageMeta(meta).inlineImages).toEqual([]);
+        expect(parseSessionMediaMessageMeta(meta, { allowDirectCodexMedia: true }).inlineImages).toEqual([
+            expect.objectContaining({ path: 'images/generated.png', previewSource: 'direct-codex' }),
+        ]);
+    });
+
+    it.each(['../escape.png', 'file:///tmp/x.png', 'https://example.test/x.png', 'data:image/png;base64,AAAA', '\\\\server\\share.png'])
+    ('rejects an unsafe direct Codex path %s', (path) => {
+        const meta = { happier: { kind: 'direct_session_media.v1', payload: { media: [{
+            id: 'image-1', name: 'generated.png', path, mimeType: 'image/png', sizeBytes: 10,
+        }] } } };
+        expect(parseSessionMediaMessageMeta(meta, { allowDirectCodexMedia: true }).inlineImages).toEqual([]);
+    });
 });

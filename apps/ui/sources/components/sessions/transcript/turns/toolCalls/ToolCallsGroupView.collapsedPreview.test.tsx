@@ -323,7 +323,7 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
         expect(screen.findAllByTestId('transcript-tool-calls-preview-row')).toHaveLength(2);
     });
 
-    it('defaults to the newest three tool previews when the setting is unavailable', async () => {
+    it('defaults to no tool previews when the setting is unavailable', async () => {
         collapsedPreviewCount = null;
 
         const toolMessages = [
@@ -343,7 +343,7 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
             .map((p) => (p.props as any).children?.props?.messageId)
             .filter(Boolean);
 
-        expect(previewIds).toEqual(['m2', 'm3', 'm4']);
+        expect(previewIds).toEqual([]);
         expect(screen.findAllByTestId('transcript-tool-calls-preview-more')).toHaveLength(1);
     });
 
@@ -469,7 +469,7 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
         expect(setExpanded).toHaveBeenCalledWith(true);
     });
 
-    it('does not request expansion when tapping the header while collapsed and hidden rows remain', async () => {
+    it('requests expansion when tapping the header while collapsed and hidden rows remain', async () => {
         collapsedPreviewCount = 1;
 
         const toolMessages = [
@@ -485,8 +485,11 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
         });
 
         const header = screen.findByTestId('transcript-tool-calls-header');
-        expect(header?.props.onPress).toBeUndefined();
-        expect(setExpanded).not.toHaveBeenCalled();
+        await act(async () => {
+            header?.props.onPress?.();
+        });
+
+        expect(setExpanded).toHaveBeenCalledWith(true);
     });
 
     it('does not pass nested tool message ids when tool navigation is disabled', async () => {

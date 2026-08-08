@@ -12,6 +12,11 @@ import {
 } from '@/backends/codex/appServer/testkit/fakeCodexAppServer';
 import { pageCodexTranscript } from './pageCodexTranscript';
 
+const pngBytes = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lU6w9wAAAABJRU5ErkJggg==',
+  'base64',
+);
+
 function sessionMetaLine(payload: Record<string, unknown>): string {
   return `${JSON.stringify({ type: 'session_meta', payload })}\n`;
 }
@@ -493,13 +498,14 @@ describe('pageCodexTranscript', () => {
     );
   });
 
-  it('does not materialize provider-owned image generation files while browsing direct transcripts', async () => {
+  it('maps a valid Codex-owned image into isolated direct media without materializing it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-page-media-'));
     const codexHome = join(root, 'codex-home');
     const sessionsDir = join(codexHome, 'sessions');
-    const providerImagePath = join(root, 'provider-owned.png');
+    const providerImagePath = join(codexHome, 'images', 'provider-owned.png');
     await mkdir(sessionsDir, { recursive: true });
-    await writeFile(providerImagePath, Buffer.from('provider image bytes'), 'utf8');
+    await mkdir(join(codexHome, 'images'), { recursive: true });
+    await writeFile(providerImagePath, pngBytes);
 
     const sessionId = '77777777-7777-7777-7777-777777777777';
     const filePath = join(sessionsDir, `rollout-2026-01-02T00-00-00-${sessionId}.jsonl`);
@@ -529,8 +535,20 @@ describe('pageCodexTranscript', () => {
       maxItems: 10,
     });
 
-    expect(JSON.stringify(page.items)).not.toContain('session_media.v1');
+    expect(JSON.stringify(page.items)).not.toContain('"kind":"session_media.v1"');
+    expect(page.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        raw: expect.objectContaining({
+          meta: {
+            happier: expect.objectContaining({
+              kind: 'direct_session_media.v1',
+              payload: expect.objectContaining({ media: [expect.objectContaining({ path: 'images/provider-owned.png' })] }),
+            }),
+          },
+        }),
+      }),
+    ]));
     await expect(stat(join(root, '.happier', 'uploads', 'generated'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(readFile(providerImagePath, 'utf8')).resolves.toBe('provider image bytes');
+    await expect(readFile(providerImagePath)).resolves.toEqual(pngBytes);
   });
 });

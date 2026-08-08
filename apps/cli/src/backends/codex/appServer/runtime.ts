@@ -6,6 +6,7 @@ import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import type { Metadata, PermissionMode } from '@/api/types';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import type { StreamedTranscriptWriterSession } from '@/api/session/streamedTranscriptWriter';
+import { createToolCallTranscriptIdentity } from '@/agent/acp/bridge/toolCallTranscriptIdentity';
 import { configuration } from '@/configuration';
 import {
     type SessionRollbackRpcParams,
@@ -306,6 +307,7 @@ type DeferredUnacknowledgedTerminalNotification = Readonly<{
 type StreamUpdateContext = Readonly<{
     sidechainId: string | null;
     streamScopeId: string;
+    providerTurnId: string | null;
 }>;
 
 const BLOCKING_CODEX_APP_SERVER_ITEM_TYPES = new Set([
@@ -1374,6 +1376,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const assistantTextByItemId = new Map<string, string>();
     const reasoningTextByItemId = new Map<string, string>();
     const latestAssistantItemIdByStreamScope = new Map<string, string>();
+    const toolResultStreamByItemKey = new Map<string, {
+        localId: string;
+        output: string;
+        tick: number;
+        createdAt: number;
+    }>();
 
     const readLiveAccountIdentity = async (): Promise<CodexLiveAccountIdentity> => {
         const client = await ensureClient();
@@ -2068,6 +2076,15 @@ export function createCodexAppServerRuntime(params: Readonly<{
         `${scopeId}:${kind}:${itemId}`;
     const buildAssistantItemStreamKey = (scopeId: string, itemId: string): string =>
         buildItemStreamKey(scopeId, 'assistant', itemId);
+    const buildToolResultItemKey = (context: StreamUpdateContext, callId: string): string =>
+        buildItemStateKey(context.streamScopeId, `${context.providerTurnId ?? '*'}:${callId}`);
+    const buildToolResultLocalId = (context: StreamUpdateContext, callId: string): string =>
+        createToolCallTranscriptIdentity({
+            provider: 'codex',
+            namespace: context.sidechainId ? { type: 'sidechain', sidechainId: context.sidechainId } : { type: 'main' },
+            toolCallId: `${context.providerTurnId ?? '*'}:${callId}`,
+            message: 'result',
+        });
     const hasNormalizedAssistantFinalInScope = (streamScopeId: string): boolean => {
         const keyPrefix = `${streamScopeId}:`;
         for (const itemKey of normalizedAssistantFinalItemKeys) {
@@ -2461,24 +2478,93 @@ export function createCodexAppServerRuntime(params: Readonly<{
             return;
         }
 
+        if (update.type === 'tool-result-delta') {
+            const itemKey = buildToolResultItemKey(context, update.callId);
+            const previous = toolResultStreamByItemKey.get(itemKey);
+            const createdAt = previous?.createdAt ?? Date.now();
+            const tick = (previous?.tick ?? 0) + 1;
+            const localId = previous?.localId ?? buildToolResultLocalId(context, update.callId);
+            const output = `${previous?.output ?? ''}${update.output}`;
+            const body: ACPMessageData = {
+                type: 'tool-call-result',
+                callId: update.callId,
+                output: update.output,
+                id: localId,
+                ...(context.sidechainId ? { sidechainId: context.sidechainId } : {}),
+            };
+            const transcriptSession = params.transcriptSession ?? params.session;
+            if (typeof transcriptSession.sendAgentMessageEphemeralDelta === 'function') {
+                transcriptSession.sendAgentMessageEphemeralDelta('codex', body, {
+                    localId,
+                    tick,
+                    baseLength: previous?.output.length ?? 0,
+                    createdAt,
+                    updatedAt: Date.now(),
+                });
+            } else if (typeof transcriptSession.sendAgentMessageEphemeral === 'function') {
+                transcriptSession.sendAgentMessageEphemeral('codex', {
+                    ...body,
+                    output,
+                }, {
+                    localId,
+                    tick,
+                    createdAt,
+                    updatedAt: Date.now(),
+                });
+            }
+            toolResultStreamByItemKey.set(itemKey, { localId, output, tick, createdAt });
+            return;
+        }
+
         if (update.type === 'tool-result') {
             const completedTitleName = pendingHappierTitleToolNamesByCallId.get(update.callId) ?? null;
             pendingHappierTitleToolNamesByCallId.delete(update.callId);
-            if (context.sidechainId) {
-                params.session.sendAgentMessage('codex', {
-                    type: 'tool-call-result',
-                    callId: update.callId,
-                    output: update.output,
-                    id: randomUUID(),
-                    sidechainId: context.sidechainId,
-                });
+            const itemKey = buildToolResultItemKey(context, update.callId);
+            const activeStream = toolResultStreamByItemKey.get(itemKey);
+            if (!activeStream) {
+                if (context.sidechainId) {
+                    params.session.sendAgentMessage('codex', {
+                        type: 'tool-call-result',
+                        callId: update.callId,
+                        output: update.output,
+                        id: randomUUID(),
+                        sidechainId: context.sidechainId,
+                    });
+                } else {
+                    params.session.sendCodexMessage({
+                        type: 'tool-call-result',
+                        callId: update.callId,
+                        output: update.output,
+                        id: randomUUID(),
+                    });
+                }
             } else {
-                params.session.sendCodexMessage({
+                const localId = activeStream.localId;
+                const body: ACPMessageData = {
                     type: 'tool-call-result',
                     callId: update.callId,
                     output: update.output,
-                    id: randomUUID(),
-                });
+                    id: localId,
+                    ...(context.sidechainId ? { sidechainId: context.sidechainId } : {}),
+                };
+                try {
+                    if (context.sidechainId) {
+                        const commitSession = params.transcriptSession ?? params.session;
+                        if (typeof commitSession.sendAgentMessageCommitted === 'function') {
+                            await commitSession.sendAgentMessageCommitted('codex', body, { localId });
+                        } else {
+                            params.session.sendAgentMessage('codex', body);
+                        }
+                    } else {
+                        if (typeof params.session.sendCodexMessageCommitted === 'function') {
+                            await params.session.sendCodexMessageCommitted(body, { localId });
+                        } else {
+                            params.session.sendCodexMessage(body);
+                        }
+                    }
+                } finally {
+                    toolResultStreamByItemKey.delete(itemKey);
+                }
             }
             if (completedTitleName && didHappierTitleToolSucceed(update.output) && threadId && !context.sidechainId) {
                 try {
@@ -2502,6 +2588,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         nativeReviewCompletionTextByStreamScope.clear();
         rawAssistantFinalByItemKey.clear();
         pendingHappierTitleToolNamesByCallId.clear();
+        toolResultStreamByItemKey.clear();
         await itemTranscriptBridge.flushAll({
             reason,
             ...(reason === 'abort' ? { interruptedReason: 'app-server-turn-interrupted' } : {}),
@@ -3427,6 +3514,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             return {
                 sidechainId: notificationThreadId,
                 streamScopeId: notificationThreadId,
+                providerTurnId: notificationTurnId,
             };
         }
         if (notificationTurnId && activeTurn.turnId && notificationTurnId !== activeTurn.turnId) {
@@ -3438,6 +3526,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         return {
             sidechainId: null,
             streamScopeId: activeTurn.threadId,
+            providerTurnId: activeTurn.turnId ?? notificationTurnId,
         };
     };
 
@@ -3645,9 +3734,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         });
                     });
                     registerActiveTurnStreamNotificationHandler(client, 'item/agentMessage/delta', attachedClientGeneration);
+                    registerActiveTurnStreamNotificationHandler(client, 'item/plan/delta', attachedClientGeneration);
                     registerActiveTurnStreamNotificationHandler(client, 'turn/diff/updated', attachedClientGeneration);
                     registerActiveTurnStreamNotificationHandler(client, 'item/reasoning/summaryTextDelta', attachedClientGeneration);
                     registerActiveTurnStreamNotificationHandler(client, 'item/reasoning/textDelta', attachedClientGeneration);
+                    registerActiveTurnStreamNotificationHandler(client, 'item/commandExecution/outputDelta', attachedClientGeneration);
+                    registerActiveTurnStreamNotificationHandler(client, 'item/fileChange/outputDelta', attachedClientGeneration);
+                    registerActiveTurnStreamNotificationHandler(client, 'item/mcpToolCall/progress', attachedClientGeneration);
                     registerActiveTurnStreamNotificationHandler(client, 'item/started', attachedClientGeneration);
                     registerActiveTurnStreamNotificationHandler(client, 'item/completed', attachedClientGeneration);
                     registerActiveTurnStreamNotificationHandler(client, 'rawResponseItem/completed', attachedClientGeneration);

@@ -458,6 +458,34 @@ describe('buildTranscriptTurnUnits', () => {
         expect(result).toEqual([]);
     });
 
+    it('keeps only real tool-call ids in grouped units', () => {
+        const messagesById = indexMessages([
+            toolMessage('tool-1', 1, 1),
+            agentMessage('text-shell', 2, 2),
+        ]);
+
+        const result = buildTranscriptTurnUnits({
+            items: [turnItem({
+                id: 'turn:x',
+                userMessageId: null,
+                content: [{
+                    kind: 'tool_calls',
+                    id: 'toolCalls:turn:x:tool-1',
+                    toolMessageIds: ['text-shell', 'missing-shell', 'tool-1'],
+                }],
+            })],
+            getMessageById: lookupIn(messagesById),
+            isGroupExpanded: expandedAlways,
+            collapsedPreviewCount: 0,
+        });
+
+        expect(result).toMatchObject([
+            { kind: 'tool-group-header', toolMessageIds: ['tool-1'] },
+            { kind: 'tool-group-tool', toolMessageId: 'tool-1', toolMessageIds: ['tool-1'] },
+            { kind: 'tool-group-footer', toolMessageIds: ['tool-1'] },
+        ]);
+    });
+
     it('keeps two tool_calls contents in one turn as two separate header..footer spans (R5)', () => {
         const messagesById = indexMessages([
             toolMessage('t1', 1, 1),

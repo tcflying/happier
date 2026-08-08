@@ -20,6 +20,7 @@ export type DirectSessionCandidatesPage = Readonly<{
 export type DirectSessionActivitySample = Readonly<{
   lastActivityAtMs: number | null;
   isRunning: boolean;
+  activityTailCharacter?: string | null;
 }>;
 
 export type DirectSessionTranscriptPage = Readonly<{

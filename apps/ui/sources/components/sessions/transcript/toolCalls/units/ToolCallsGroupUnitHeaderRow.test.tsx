@@ -117,7 +117,7 @@ describe('ToolCallsGroupUnitHeaderRow', () => {
         expect(screen.findByTestId('icon:check-circle')).not.toBeNull();
     });
 
-    it('keeps the header non-pressable while collapsed and collapses via setExpanded(false) when expanded', async () => {
+    it('toggles the group from both collapsed and expanded header states', async () => {
         const setExpanded = vi.fn();
         const collapsed = await renderHeaderRow({
             toolMessages: [createToolCallMessageFixture({ id: 'm1', createdAt: 1 })],
@@ -126,7 +126,8 @@ describe('ToolCallsGroupUnitHeaderRow', () => {
         });
 
         const collapsedHeader = collapsed.findByTestId('transcript-tool-calls-header') as any;
-        expect(collapsedHeader?.props.onPress).toBeUndefined();
+        await collapsed.pressByTestIdAsync('transcript-tool-calls-header');
+        expect(setExpanded).toHaveBeenCalledWith(true);
 
         const expanded = await renderHeaderRow({
             toolMessages: [createToolCallMessageFixture({ id: 'm1', createdAt: 1 })],

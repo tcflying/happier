@@ -7,6 +7,7 @@ import type { Metadata } from '@/sync/domains/state/storageTypes';
 
 import { getToolViewComponent } from '@/components/tools/renderers/core/_registry';
 import { StructuredResultView } from '@/components/tools/renderers/system/StructuredResultView';
+import { UnknownToolView } from '@/components/tools/renderers/system/UnknownToolView';
 import { knownTools } from '@/components/tools/catalog';
 import { ToolHeaderActionsContext } from '@/components/tools/shell/presentation/ToolHeaderActionsContext';
 import { ToolError } from '@/components/tools/shell/presentation/ToolError';
@@ -126,6 +127,14 @@ function buildToolPayloadPreview(value: unknown, maxChars: number): ToolPayloadP
 
 function buildFullToolPayloadCode(value: unknown): string {
     return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+}
+
+export function hasToolPayloadForRendering(value: unknown): boolean {
+    if (value == null) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value).length > 0;
+    return true;
 }
 
 const ToolPayloadCodeView = React.memo(function ToolPayloadCodeView(props: {
@@ -269,7 +278,7 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
                             interaction={props.interaction}
                         />
                     </ToolHeaderActionsContext.Provider>
-                    {tool.state === 'error' && tool.result && !hideDefaultError && (
+                    {tool.state === 'error' && tool.result && !hideDefaultError && SpecificToolView !== UnknownToolView && (
                         <ToolError
                             message={
                                 typeof tool.result === 'string'
@@ -285,7 +294,7 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
 
     // Minimal tools don't show default INPUT/OUTPUT blocks.
     if (minimal) {
-        if (tool.result) {
+        if (hasToolPayloadForRendering(tool.result)) {
             return (
                 <ToolSectionSpacingProvider spacing={sectionSpacing}>
                     <StructuredResultView
@@ -301,7 +310,7 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
     }
 
     // Show error state if present (not a tool-use error)
-    if (tool.state === 'error' && tool.result && !isToolUseError) {
+    if (tool.state === 'error' && hasToolPayloadForRendering(tool.result) && !isToolUseError) {
         if (shouldUseSubAgentRunErrorFallback) {
             return (
                 <StructuredResultView
@@ -329,7 +338,7 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
 
     // Fall back to default view
     if (props.mode === 'timeline' && props.detailLevel === 'summary') {
-        if (tool.input) {
+        if (hasToolPayloadForRendering(tool.input)) {
             return (
                 <TextSelectabilityScope selectable>
                     <ToolSectionSpacingProvider spacing={sectionSpacing}>
@@ -350,7 +359,7 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
     return (
         <TextSelectabilityScope selectable>
             <ToolSectionSpacingProvider spacing={sectionSpacing}>
-                {tool.input ? (
+                {hasToolPayloadForRendering(tool.input) ? (
                     <ToolSectionView title={t('toolView.input')}>
                         <ToolPayloadCodeView
                             value={tool.input}
@@ -359,7 +368,7 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
                         />
                     </ToolSectionView>
                 ) : null}
-                {tool.state === 'running' && tool.result ? (
+                {tool.state === 'running' && hasToolPayloadForRendering(tool.result) ? (
                     <StructuredResultView
                         tool={tool}
                         metadata={props.metadata}
@@ -367,7 +376,7 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
                         sessionId={props.sessionId}
                     />
                 ) : null}
-                {tool.state === 'completed' && tool.result ? (
+                {tool.state === 'completed' && hasToolPayloadForRendering(tool.result) ? (
                     <ToolSectionView title={t('toolView.output')}>
                         <ToolPayloadCodeView
                             value={tool.result}

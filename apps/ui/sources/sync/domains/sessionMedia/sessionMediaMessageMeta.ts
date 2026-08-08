@@ -21,6 +21,7 @@ export type SessionMediaInlineImageSummary = Readonly<{
     description?: string;
     category?: 'attachment' | 'generated' | 'tool-artifact';
     role?: 'input' | 'output';
+    previewSource?: 'session-media' | 'direct-codex';
 }>;
 
 export type SessionMediaUnavailableSummary = Readonly<{
@@ -85,6 +86,31 @@ function parseSessionMediaEnvelope(envelope: HappierMetaEnvelope | null): Readon
     };
 }
 
+function parseDirectCodexSessionMediaEnvelope(envelope: HappierMetaEnvelope | null, enabled: boolean): readonly SessionMediaInlineImageSummary[] {
+    if (!enabled || envelope?.kind !== 'direct_session_media.v1' || !isRecord(envelope.payload)) return [];
+    const media = Array.isArray(envelope.payload.media) ? envelope.payload.media : [];
+    if (media.length === 0 || media.length > 64) return [];
+    return media.flatMap((value) => {
+        if (!isRecord(value)) return [];
+        const id = typeof value.id === 'string' ? value.id.trim() : '';
+        const name = typeof value.name === 'string' ? value.name.trim() : '';
+        const path = typeof value.path === 'string' ? value.path.trim() : '';
+        const mimeType = typeof value.mimeType === 'string' ? value.mimeType.trim().toLowerCase() : '';
+        const sizeBytes = typeof value.sizeBytes === 'number' && Number.isSafeInteger(value.sizeBytes) ? value.sizeBytes : 0;
+        if (!id || id.length > 512 || !name || name.length > 512 || !isDirectCodexRelativePath(path)
+            || !DIRECT_IMAGE_MIME_TYPES.has(mimeType) || sizeBytes <= 0 || sizeBytes > 25 * 1024 * 1024) return [];
+        return [{ id, name, path, mimeType, sizeBytes, category: 'generated' as const, role: 'output' as const, previewSource: 'direct-codex' as const }];
+    });
+}
+
+const DIRECT_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml']);
+
+function isDirectCodexRelativePath(value: string): boolean {
+    if (!value || value.startsWith('/') || value.startsWith('\\') || value.includes('\\') || /^[a-zA-Z]:/.test(value)
+        || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return false;
+    return value.split('/').every((segment) => segment && segment !== '.' && segment !== '..');
+}
+
 export function normalizeAttachmentMetaToSessionMedia(
     attachments: AttachmentsMessageMetaV1['attachments'],
 ): readonly SessionMediaInlineImageSummary[] {
@@ -110,17 +136,32 @@ function parseLegacyAttachmentsMeta(meta: unknown): AttachmentsMessageMetaV1 | n
     return parsed.data;
 }
 
-export function parseSessionMediaMessageMeta(meta: unknown): ParsedSessionMediaMessageMeta {
+export function parseSessionMediaMessageMeta(meta: unknown, options?: Readonly<{ allowDirectCodexMedia?: boolean }>): ParsedSessionMediaMessageMeta {
     const primaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happier'));
     const secondaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happierMedia'));
     const legacyAttachments = parseLegacyAttachmentsMeta(meta);
     const legacyMedia = legacyAttachments ? normalizeAttachmentMetaToSessionMedia(legacyAttachments.attachments) : [];
+    const directCodexMedia = parseDirectCodexSessionMediaEnvelope(primaryEnvelope(meta), options?.allowDirectCodexMedia === true);
 
     return {
-        inlineImages: [...primaryMedia.inlineImages, ...secondaryMedia.inlineImages, ...legacyMedia],
+        inlineImages: dedupeMedia([...primaryMedia.inlineImages, ...secondaryMedia.inlineImages, ...legacyMedia, ...directCodexMedia]),
         unavailableMedia: [...primaryMedia.unavailableMedia, ...secondaryMedia.unavailableMedia],
         legacyAttachments,
     };
+}
+
+function primaryEnvelope(meta: unknown): HappierMetaEnvelope | null {
+    return readEnvelope(meta, 'happier');
+}
+
+function dedupeMedia(items: readonly SessionMediaInlineImageSummary[]): readonly SessionMediaInlineImageSummary[] {
+    const seen = new Set<string>();
+    return items.filter((item) => {
+        const key = `${item.previewSource ?? 'session-media'}:${item.path}:${item.sha256 ?? item.id ?? item.name}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 }
 
 export function hasSessionMediaRenderItems(meta: unknown): boolean {

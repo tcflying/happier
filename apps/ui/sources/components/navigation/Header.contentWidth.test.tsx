@@ -68,6 +68,10 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: any) => React.createElement('Text', props, props.children),
 }));
 
+vi.mock('./HeaderFontScaleAction', () => ({
+    HeaderFontScaleAction: () => React.createElement('HeaderFontScaleAction'),
+}));
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
         return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
@@ -93,5 +97,20 @@ describe('Header content width', () => {
 
         expect(flattenStyle(screen.findByTestId('desktop-route-header-content')?.props.style).maxWidth)
             .toBe(Number.POSITIVE_INFINITY);
+    });
+
+    it('keeps the font-scale action in the header action row with route-specific right actions', async () => {
+        const { Header } = await import('./Header');
+        const screen = await renderScreen(
+            <Header
+                safeAreaEnabled={false}
+                headerRight={() => React.createElement('RouteHeaderAction', { testID: 'route-header-action' })}
+            />,
+        );
+
+        const actions = screen.findByTestId('desktop-route-header-actions');
+        expect(flattenStyle(actions?.props.style).flexDirection).toBe('row');
+        expect(screen.findByType('HeaderFontScaleAction' as any)).toBeTruthy();
+        expect(screen.findByTestId('route-header-action')).toBeTruthy();
     });
 });

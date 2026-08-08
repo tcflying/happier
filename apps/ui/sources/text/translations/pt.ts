@@ -10017,6 +10017,9 @@ settingsSession: {
     detachLocalTerminal: "Desconectar terminal",
     directSessionTakeoverAvailable:
       "Esta sessão direta está disponível na sua máquina. Assuma o controle no Happier para controlá-la aqui.",
+    directSessionControlledByCurrentHappier: ({ session, pid }: { session: string; pid: string | number }) => `Controlada por esta sessão Happier (${session}, processo ${pid}).`,
+    directSessionControlledByOtherHappier: ({ session, pid }: { session: string; pid: string | number }) => `Controlada por outra sessão Happier (${session}, processo ${pid}).`,
+    directSessionControlledElsewhere: 'Esta sessão direta é controlada em outro lugar. Assuma o controle no Happier para responder.',
     directSessionMachineOffline:
       "Esta sessão direta está indisponível no momento porque a máquina está offline.",
     switchingToDirectTakeover: "Assumindo o controle desta sessão direta…",

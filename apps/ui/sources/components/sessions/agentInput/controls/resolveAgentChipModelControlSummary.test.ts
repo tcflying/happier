@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AcpConfigOptionControl } from '@/sync/acp/configOptionsControl';
+import type { SessionConfigOptionControl } from '@/sync/domains/sessionControl/configOptionsControl';
 import { resolveAgentChipModelControlSummary } from './resolveAgentChipModelControlSummary';
 
 function control(params: Readonly<{
     id: string;
     value: string;
     options?: ReadonlyArray<Readonly<{ value: string; name: string }>>;
-}>): AcpConfigOptionControl {
+}>): SessionConfigOptionControl {
     return {
         option: {
             id: params.id,

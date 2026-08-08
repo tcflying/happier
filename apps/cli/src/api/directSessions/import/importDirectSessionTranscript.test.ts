@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import type { LoadedLinkedDirectSession } from '@/api/directSessions/takeover/loadLinkedDirectSession';
+import { decryptStoredSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 
 const getDirectSessionProviderOpsMock = vi.fn();
 const commitSessionStoredMessageMock = vi.fn();
@@ -27,11 +28,12 @@ const pngBytes = Buffer.from(
 function createLinkedSession(params: Readonly<{
   sessionPath?: string | null;
   remoteSessionId?: string;
+  encryptionMode?: 'plain' | 'e2ee';
 }>): LoadedLinkedDirectSession {
   return {
     rawSession: {
       id: 'sess_direct_import',
-      encryptionMode: 'plain',
+      encryptionMode: params.encryptionMode ?? 'plain',
       metadataVersion: 1,
       metadata: '{}',
     } as RawSessionRecord,
@@ -134,5 +136,89 @@ describe('importDirectSessionTranscript', () => {
       await rm(workingDirectory, { recursive: true, force: true });
       await rm(providerDirectory, { recursive: true, force: true });
     }
+  });
+
+  it('strips transient direct media envelopes before a plain commit when no workspace path is available', async () => {
+    const absoluteProviderPath = 'C:\\Users\\owner\\.codex\\images\\secret.png';
+    const item: DirectTranscriptRawMessageV1 = {
+      id: 'direct-item-no-workspace',
+      localId: 'direct-item-no-workspace',
+      createdAtMs: 456,
+      raw: {
+        role: 'agent',
+        content: { type: 'codex', data: { type: 'message', message: '' } },
+        meta: {
+          vendor: { keep: true },
+          happier: {
+            kind: 'direct_session_media.v1',
+            payload: { media: [directMediaItem(absoluteProviderPath)] },
+          },
+          happierMedia: {
+            kind: 'direct_session_media.v1',
+            payload: { media: [directMediaItem('../escape.png')] },
+          },
+        },
+      },
+    };
+    getDirectSessionProviderOpsMock.mockResolvedValue({
+      pageTranscript: vi.fn(async () => ({ items: [item], nextCursor: null, hasMore: false })),
+    });
+    commitSessionStoredMessageMock.mockResolvedValue({ didWrite: true, messageId: 'msg-plain', seq: 1, createdAt: 456 });
+
+    const { importDirectSessionTranscript } = await import('./importDirectSessionTranscript');
+    await importDirectSessionTranscript({
+      linked: createLinkedSession({ sessionPath: null }),
+      credentials: { token: 'token-plain', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(3) } },
+      sessionId: 'sess_direct_import',
+    });
+
+    const committed = commitSessionStoredMessageMock.mock.calls[0]?.[0];
+    expect(committed.content.t).toBe('plain');
+    const committedRaw = committed.content.v as Record<string, unknown>;
+    expect(committedRaw).toMatchObject({ meta: { vendor: { keep: true } } });
+    expect((committedRaw.meta as Record<string, unknown>).happier).toBeUndefined();
+    expect((committedRaw.meta as Record<string, unknown>).happierMedia).toBeUndefined();
+    expect(JSON.stringify(committedRaw)).not.toContain('direct_session_media.v1');
+    expect(JSON.stringify(committedRaw)).not.toContain(absoluteProviderPath);
+  });
+
+  it('strips transient direct media before encrypting a commit without a workspace path', async () => {
+    const secret = new Uint8Array(32).fill(7);
+    const absoluteProviderPath = '/home/owner/.codex/images/secret.png';
+    const item: DirectTranscriptRawMessageV1 = {
+      id: 'direct-item-encrypted-no-workspace',
+      localId: 'direct-item-encrypted-no-workspace',
+      createdAtMs: 789,
+      raw: {
+        role: 'agent',
+        content: { type: 'codex', data: { type: 'message', message: '' } },
+        meta: {
+          vendor: { keep: 'encrypted' },
+          happier: { kind: 'direct_session_media.v1', payload: { media: [directMediaItem(absoluteProviderPath)] } },
+        },
+      },
+    };
+    getDirectSessionProviderOpsMock.mockResolvedValue({
+      pageTranscript: vi.fn(async () => ({ items: [item], nextCursor: null, hasMore: false })),
+    });
+    commitSessionStoredMessageMock.mockResolvedValue({ didWrite: true, messageId: 'msg-encrypted', seq: 1, createdAt: 789 });
+
+    const { importDirectSessionTranscript } = await import('./importDirectSessionTranscript');
+    await importDirectSessionTranscript({
+      linked: createLinkedSession({ sessionPath: null, encryptionMode: 'e2ee' }),
+      credentials: { token: 'token-encrypted', encryption: { type: 'legacy', secret } },
+      sessionId: 'sess_direct_import',
+    });
+
+    const committed = commitSessionStoredMessageMock.mock.calls[0]?.[0];
+    expect(committed.content.t).toBe('encrypted');
+    const decrypted = decryptStoredSessionPayload({
+      mode: 'e2ee',
+      ctx: { encryptionKey: secret, encryptionVariant: 'legacy' },
+      value: committed.content.c,
+    }) as Record<string, unknown>;
+    expect(decrypted).toMatchObject({ meta: { vendor: { keep: 'encrypted' } } });
+    expect(JSON.stringify(decrypted)).not.toContain('direct_session_media.v1');
+    expect(JSON.stringify(decrypted)).not.toContain(absoluteProviderPath);
   });
 });

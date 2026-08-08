@@ -145,6 +145,7 @@ type WebViewportTelemetryDiagnosticsInput = Readonly<{
 }>;
 
 export type TranscriptScrollObservationHostDeps = Readonly<{
+    onWebArrowDown?: () => void;
     activeTargetWindowTargetRef: MutableRef<TranscriptJumpTarget | null>;
     applyBlankRecoveryEffects: (effects: readonly TranscriptBlankRecoveryEffect[]) => void;
     applyNativeBottomFollowCompletionHostEffects: (effects: ScrollObservationPlan['nativeBottomFollowCompletionEffects']) => void;
@@ -587,7 +588,8 @@ export function useTranscriptScrollObservationHost(
         // scrolling; the renderer preserves only follow-affirming movement toward a held end.
         markUserScrollIntentOnWeb();
         deps.listRef.current?.notifyViewportInput?.({ kind: 'keyboard', verticalDirection });
-    }, [deps.listRef, deps.platformOS, markUserScrollIntentOnWeb]);
+        if (verticalDirection === 'toward-end') deps.onWebArrowDown?.();
+    }, [deps.listRef, deps.onWebArrowDown, deps.platformOS, markUserScrollIntentOnWeb]);
     React.useEffect(() => {
         if (deps.platformOS !== 'web' || typeof document === 'undefined') return;
         return registerWebTranscriptKeyboardOwner({

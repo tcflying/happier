@@ -98,6 +98,12 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
         next.transcriptMessageTimestampDisplayMode = 'hover_web_hidden_mobile';
     }
 
+    // Changing the default must affect accounts that did not persist a choice while
+    // preserving an explicit preview count selected in an existing account blob.
+    if (!Object.prototype.hasOwnProperty.call(input, 'transcriptToolCallsCollapsedPreviewCount')) {
+        next.transcriptToolCallsCollapsedPreviewCount = 0;
+    }
+
     if (next.transcriptListImplementation === 'flatlist_legacy') {
         next.transcriptListImplementation = 'flash_v2';
     }

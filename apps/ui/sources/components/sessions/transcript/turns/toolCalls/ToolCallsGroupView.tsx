@@ -151,7 +151,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
     const showExpandButton = !expanded && hiddenCount > 0;
     const showCollapsedPreview = previewMessages.length > 0;
     const { setExpanded } = props;
-    const onCollapse = React.useCallback(() => setExpanded(false), [setExpanded]);
+    const onToggle = React.useCallback(() => setExpanded(!expanded), [expanded, setExpanded]);
     const onExpand = React.useCallback(() => setExpanded(true), [setExpanded]);
     const previewSidechainIds = React.useMemo(() => {
         return resolveGroupedPreviewSidechainIds({
@@ -214,7 +214,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
                 status={props.status}
                 count={count}
                 expanded={expanded}
-                onCollapse={onCollapse}
+                onToggle={onToggle}
             />
 
             <View style={[styles.contentRow, normalizedChromeMode === 'activity_feed' ? styles.contentRowFeed : styles.contentRowCards]}>

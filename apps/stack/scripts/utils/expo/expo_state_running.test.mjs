@@ -11,6 +11,7 @@ import {
   commitExpoPidStatePublication,
   isStateProcessRunning,
   readPidState,
+  readWindowsExpoProcessIdentity,
   restoreExpoPidStatePublication,
 } from './expo.mjs';
 
@@ -186,6 +187,7 @@ test('isStateProcessRunning does not trust a live pid whose Expo isolation belon
           pid: child.pid,
           port: 19000,
           projectDir: join(tmp, 'expected-project'),
+          processInstanceFingerprint: 'win32-cim:expected-process',
         },
         null,
         2
@@ -213,4 +215,166 @@ test('isStateProcessRunning does not trust a live pid whose Expo isolation belon
     }
     await rm(tmp, { recursive: true, force: true });
   }
+});
+
+test('isStateProcessRunning fails closed when the Windows CIM PID identity observation is unavailable', async (t) => {
+  const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-state-pid-identity-windows-'));
+  t.after(async () => rm(tmp, { recursive: true, force: true }));
+  const statePath = join(tmp, 'expo.state.json');
+  await writeFile(
+    statePath,
+    JSON.stringify({
+      pid: process.pid,
+      projectDir: join(tmp, 'project'),
+      processInstanceFingerprint: 'win32-cim:expected-process',
+    }, null, 2) + '\n',
+    'utf-8'
+  );
+
+  const res = await isStateProcessRunning(statePath, {
+    platform: 'win32',
+    readProcessIdentityLineImpl: async () => null,
+  });
+
+  assert.equal(res.running, false);
+  assert.equal(res.reason, 'pid_identity_mismatch');
+});
+
+test('isStateProcessRunning distinguishes a live legacy Windows PID state without a fingerprint', async (t) => {
+  const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-state-pid-identity-legacy-'));
+  t.after(async () => rm(tmp, { recursive: true, force: true }));
+  const statePath = join(tmp, 'expo.state.json');
+  await writeFile(statePath, JSON.stringify({
+    pid: process.pid,
+    projectDir: join(tmp, 'project'),
+  }), 'utf8');
+
+  const res = await isStateProcessRunning(statePath, {
+    platform: 'win32',
+    readProcessIdentityLineImpl: async () => ({
+      commandLine: 'node.exe expo start --port 8081',
+      executablePath: 'C:\\Program Files\\nodejs\\node.exe',
+      processInstanceFingerprint: 'win32-cim:live-process',
+    }),
+  });
+
+  assert.equal(res.running, false);
+  assert.equal(res.reason, 'pid_identity_unverifiable_legacy');
+});
+
+test('isStateProcessRunning accepts a matching Windows process-instance fingerprint without command-line path markers', async (t) => {
+  const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-state-pid-fingerprint-match-'));
+  t.after(async () => rm(tmp, { recursive: true, force: true }));
+  const statePath = join(tmp, 'expo.state.json');
+  const fingerprint = 'win32-cim:2026-08-09T01:02:03.0000000Z';
+  await writeFile(statePath, JSON.stringify({
+    pid: process.pid,
+    projectDir: join(tmp, 'project'),
+    processInstanceFingerprint: fingerprint,
+  }), 'utf8');
+
+  const res = await isStateProcessRunning(statePath, {
+    platform: 'win32',
+    readProcessIdentityLineImpl: async () => ({
+      commandLine: 'node.exe expo start --port 8081',
+      executablePath: 'C:\\Program Files\\nodejs\\node.exe',
+      processInstanceFingerprint: fingerprint,
+    }),
+  });
+
+  assert.equal(res.running, true);
+  assert.equal(res.reason, 'pid');
+});
+
+test('isStateProcessRunning rejects a reused Windows PID with a different process-instance fingerprint', async (t) => {
+  const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-state-pid-fingerprint-mismatch-'));
+  t.after(async () => rm(tmp, { recursive: true, force: true }));
+  const projectDir = join(tmp, 'project');
+  const statePath = join(tmp, 'expo.state.json');
+  await writeFile(statePath, JSON.stringify({
+    pid: process.pid,
+    projectDir,
+    processInstanceFingerprint: 'win32-cim:old-process',
+  }), 'utf8');
+
+  const res = await isStateProcessRunning(statePath, {
+    platform: 'win32',
+    readProcessIdentityLineImpl: async () => ({
+      commandLine: `node.exe expo start "${projectDir}"`,
+      executablePath: 'C:\\Program Files\\nodejs\\node.exe',
+      processInstanceFingerprint: 'win32-cim:new-process',
+    }),
+  });
+
+  assert.equal(res.running, false);
+  assert.equal(res.reason, 'pid_identity_mismatch');
+});
+
+test('readWindowsExpoProcessIdentity derives the CreationDate fingerprint with a bounded CIM query', async () => {
+  const calls = [];
+  const identity = await readWindowsExpoProcessIdentity(4242, {
+    runCaptureImpl: async (...args) => {
+      calls.push(args);
+      return JSON.stringify({
+        commandLine: 'node.exe expo start --port 8081',
+        executablePath: 'C:\\Program Files\\nodejs\\node.exe',
+        creationDate: '2026-08-09T01:02:03.0000000Z',
+      });
+    },
+  });
+
+  assert.deepEqual(identity, {
+    commandLine: 'node.exe expo start --port 8081',
+    executablePath: 'C:\\Program Files\\nodejs\\node.exe',
+    processInstanceFingerprint: 'win32-cim:2026-08-09T01:02:03.0000000Z',
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'powershell.exe');
+  assert.match(calls[0][1].at(-1), /CommandLine/);
+  assert.match(calls[0][1].at(-1), /ExecutablePath/);
+  assert.match(calls[0][1].at(-1), /CreationDate/);
+  assert.deepEqual(calls[0][2], { timeoutMs: 4000 });
+});
+
+test('isStateProcessRunning re-reads and matches a live Windows CIM CreationDate fingerprint', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-state-live-cim-match-'));
+  t.after(async () => rm(tmp, { recursive: true, force: true }));
+  const identity = await readWindowsExpoProcessIdentity(process.pid);
+  assert.ok(identity?.processInstanceFingerprint);
+  const statePath = join(tmp, 'expo.state.json');
+  await writeFile(statePath, JSON.stringify({
+    pid: process.pid,
+    projectDir: join(tmp, 'not-present-in-command-line'),
+    processInstanceFingerprint: identity.processInstanceFingerprint,
+  }), 'utf8');
+
+  const res = await isStateProcessRunning(statePath, { platform: 'win32' });
+  assert.equal(res.running, true);
+  assert.equal(res.reason, 'pid');
+});
+
+test('readWindowsExpoProcessIdentity fails closed on CIM timeout or empty identity fields', async (t) => {
+  await t.test('timeout', async () => {
+    const identity = await readWindowsExpoProcessIdentity(4242, {
+      runCaptureImpl: async () => {
+        const error = new Error('timed out');
+        error.code = 'ETIMEDOUT';
+        throw error;
+      },
+    });
+    assert.equal(identity, null);
+  });
+
+  await t.test('empty identity', async () => {
+    const identity = await readWindowsExpoProcessIdentity(4242, {
+      runCaptureImpl: async () => JSON.stringify({
+        commandLine: '',
+        executablePath: '',
+        creationDate: '',
+      }),
+    });
+    assert.equal(identity, null);
+  });
 });

@@ -9,5 +9,12 @@ describe('resolveCodeEditorFontMetrics', () => {
         expect(m.lineHeight).toBe(50);
         expect(m.scale).toBeCloseTo(2.5, 5);
     });
+
+    it('keeps the global 300% font scale in the code editor', () => {
+        const m = resolveCodeEditorFontMetrics({ uiFontScale: 3, osFontScale: 1 });
+        expect(m.scale).toBe(3);
+        expect(m.fontSize).toBe(39);
+        expect(m.lineHeight).toBe(60);
+    });
 });
 

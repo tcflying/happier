@@ -99,6 +99,8 @@ test('renderWindowsScheduledTaskWrapperPs1 sets env and runs program args', () =
   });
   assert.match(ps1, /\$env:PORT = "3005"/);
   assert.match(ps1, /Set-Location -LiteralPath/);
+  assert.match(ps1, /\$ErrorActionPreference = "Continue"/);
+  assert.match(ps1, /exit \$LASTEXITCODE/);
   assert.match(ps1, /happier-server\.exe/);
 });
 

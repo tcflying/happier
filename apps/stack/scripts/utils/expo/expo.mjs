@@ -336,10 +336,41 @@ export async function readPidState(statePath) {
   }
 }
 
+export async function readWindowsExpoProcessIdentity(pid, { runCaptureImpl = runCapture } = {}) {
+  const n = Number(pid);
+  if (!Number.isFinite(n) || n <= 1) return null;
+  const script = [
+    '$ErrorActionPreference = "Stop"',
+    `$process = Get-CimInstance Win32_Process -Filter "ProcessId=${n}" -ErrorAction Stop`,
+    'if ($null -eq $process) { exit 3 }',
+    '$creationDate = if ($null -ne $process.CreationDate) { $process.CreationDate.ToUniversalTime().ToString("O") } else { "" }',
+    '[pscustomobject]@{ commandLine = [string]$process.CommandLine; executablePath = [string]$process.ExecutablePath; creationDate = $creationDate } | ConvertTo-Json -Compress',
+  ].join('; ');
+  try {
+    const raw = await runCaptureImpl(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeoutMs: 4000 },
+    );
+    const observation = JSON.parse(String(raw ?? '').trim());
+    const commandLine = String(observation?.commandLine ?? '').trim();
+    const executablePath = String(observation?.executablePath ?? '').trim();
+    const creationDate = String(observation?.creationDate ?? '').trim();
+    if (!commandLine || !executablePath || !creationDate) return null;
+    return {
+      commandLine,
+      executablePath,
+      processInstanceFingerprint: `win32-cim:${creationDate}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function readProcessIdentityLine(pid) {
   const n = Number(pid);
   if (!Number.isFinite(n) || n <= 1) return null;
-  if (process.platform === 'win32') return null;
+  if (process.platform === 'win32') return await readWindowsExpoProcessIdentity(n);
   if (process.platform === 'linux') {
     const [cmdline, environ] = await Promise.all([
       readFile(`/proc/${n}/cmdline`, 'utf-8')
@@ -363,10 +394,41 @@ async function readProcessIdentityLine(pid) {
   }
 }
 
-async function verifyStatePidIdentity({ pid, state, statePath, readProcessIdentityLineImpl = readProcessIdentityLine }) {
-  const line = await readProcessIdentityLineImpl(pid);
-  if (!line) {
-    return { ok: process.platform === 'win32', reason: 'pid_unverified' };
+async function verifyStatePidIdentity({
+  pid,
+  state,
+  statePath,
+  platform = process.platform,
+  readProcessIdentityLineImpl = readProcessIdentityLine,
+}) {
+  if (platform === 'win32' && !String(state?.processInstanceFingerprint ?? '').trim()) {
+    return { ok: false, reason: 'pid_identity_unverifiable_legacy' };
+  }
+  const observation = await readProcessIdentityLineImpl(pid);
+  if (!observation) {
+    return {
+      ok: platform !== 'win32',
+      reason: platform === 'win32' ? 'pid_identity_mismatch' : 'pid_unverified',
+    };
+  }
+
+  let line;
+  if (typeof observation === 'string') {
+    line = observation;
+  } else {
+    const commandLine = String(observation?.commandLine ?? '').trim();
+    const executablePath = String(observation?.executablePath ?? '').trim();
+    const expectedFingerprint = String(state?.processInstanceFingerprint ?? '').trim();
+    const observedFingerprint = String(observation?.processInstanceFingerprint ?? '').trim();
+    if (!commandLine || !executablePath || !expectedFingerprint || !observedFingerprint) {
+      return { ok: false, reason: 'pid_identity_mismatch' };
+    }
+    if (platform === 'win32') {
+      return expectedFingerprint === observedFingerprint
+        ? { ok: true, reason: 'pid' }
+        : { ok: false, reason: 'pid_identity_mismatch' };
+    }
+    line = commandLine;
   }
 
   const expectedExpoHomeDir = join(dirname(statePath), 'expo-home');
@@ -393,13 +455,13 @@ async function verifyStatePidIdentity({ pid, state, statePath, readProcessIdenti
 
 export async function isStateProcessRunning(
   statePath,
-  { readProcessIdentityLineImpl = readProcessIdentityLine } = {},
+  { platform = process.platform, readProcessIdentityLineImpl = readProcessIdentityLine } = {},
 ) {
   const state = await readPidState(statePath);
   if (!state) return { running: false, state: null };
   const pid = Number(state.pid);
   if (isPidAlive(pid)) {
-    const identity = await verifyStatePidIdentity({ pid, state, statePath, readProcessIdentityLineImpl });
+    const identity = await verifyStatePidIdentity({ pid, state, statePath, platform, readProcessIdentityLineImpl });
     if (!identity.ok) {
       return { running: false, state, reason: identity.reason };
     }

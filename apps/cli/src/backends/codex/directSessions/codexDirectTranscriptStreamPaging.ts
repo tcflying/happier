@@ -220,7 +220,7 @@ async function collectReadAfterRecords(params: Readonly<{
         let childStreams = streamsByThreadId.get(threadId) ?? [];
         if (childStreams.length === 0) {
           const childFiles = await collectCodexSessionRolloutFiles({ codexHome: params.codexHome, remoteSessionId: threadId });
-          childStreams = childFiles.map((file) => ({ ...file, threadId, sidechainId: threadId }));
+          childStreams = childFiles.map((file) => ({ ...file, codexHome: params.codexHome, threadId, sidechainId: threadId }));
           streamsByThreadId.set(threadId, childStreams);
           for (const childStream of childStreams) {
             streamsById.set(childStream.fileRelPath, childStream);

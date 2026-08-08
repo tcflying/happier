@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 
 import {
   SESSION_MEDIA_MESSAGE_META_KIND_V1,
@@ -19,6 +20,10 @@ import { getDirectSessionProviderOps } from '@/backends/catalog';
 import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
 import { persistSessionMediaItem, type PersistSessionMediaInput } from '@/session/sessionMedia/persistSessionMediaItem';
 import type { SessionMediaOrigin } from '@/session/sessionMedia/sessionMediaIngestionSource';
+import {
+  DIRECT_CODEX_SESSION_MEDIA_META_KIND_V1,
+  resolveDirectCodexSessionMedia,
+} from '@/backends/codex/directSessions/directCodexSessionMedia';
 
 function sha256(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex');
@@ -149,10 +154,18 @@ async function adoptDirectSessionMediaEnvelope(params: Readonly<{
   envelope: unknown;
   sessionId: string;
   messageLocalId: string;
-  workingDirectory: string;
+  workingDirectory: string | null;
+  linked: LoadedLinkedDirectSession;
 }>): Promise<unknown> {
   const envelope = asRecord(params.envelope);
-  if (!envelope || envelope.kind !== SESSION_MEDIA_MESSAGE_META_KIND_V1) return params.envelope;
+  if (!envelope) return params.envelope;
+  if (envelope.kind === DIRECT_CODEX_SESSION_MEDIA_META_KIND_V1) {
+    return params.workingDirectory
+      ? await adoptDirectCodexSessionMediaEnvelope({ ...params, workingDirectory: params.workingDirectory }, envelope)
+      : undefined;
+  }
+  if (envelope.kind !== SESSION_MEDIA_MESSAGE_META_KIND_V1) return params.envelope;
+  if (!params.workingDirectory) return params.envelope;
   const payload = asRecord(envelope.payload);
   const media = Array.isArray(payload?.media) ? payload.media : [];
   if (media.length === 0) return params.envelope;
@@ -207,13 +220,62 @@ async function adoptDirectSessionMediaEnvelope(params: Readonly<{
   };
 }
 
+async function adoptDirectCodexSessionMediaEnvelope(
+  params: Readonly<{ sessionId: string; messageLocalId: string; workingDirectory: string; linked: LoadedLinkedDirectSession }>,
+  envelope: Record<string, unknown>,
+): Promise<unknown> {
+  // The direct envelope is transient provider metadata. It may only cross the
+  // import boundary after the linked Codex session's real CODEX_HOME validates
+  // it and the normal persister adopts it into canonical .happier/uploads.
+  if (params.linked.providerId !== 'codex') return undefined;
+  const codexHome = resolveLinkedCodexHome(params.linked);
+  const payload = asRecord(envelope.payload);
+  const media = Array.isArray(payload?.media) ? payload.media.slice(0, 64) : [];
+  if (!codexHome || media.length === 0) return undefined;
+  const pathAllowanceRegistry = createTransferPathAllowanceRegistry();
+  const adoptedMedia: unknown[] = [];
+  for (const value of media) {
+    const item = asRecord(value);
+    const path = readString(item?.path);
+    const id = readString(item?.id);
+    if (!item || !path || !id) continue;
+    const source = resolveDirectCodexSessionMedia({
+      codexHome,
+      sourcePath: join(codexHome, path),
+      id,
+    });
+    if (!source) continue;
+    const result = await persistSessionMediaItem({
+      workingDirectory: params.workingDirectory,
+      pathAllowanceRegistry,
+      input: {
+        sessionId: params.sessionId,
+        messageLocalId: params.messageLocalId,
+        role: 'output',
+        category: 'generated',
+        source: { kind: 'local-file', path: join(codexHome, source.path), mimeType: source.mimeType, suggestedName: source.name },
+        origin: { source: 'provider-generated', agentId: 'codex', generationId: source.id },
+      },
+    });
+    if (result.success) adoptedMedia.push(result.item);
+  }
+  return adoptedMedia.length > 0
+    ? { kind: SESSION_MEDIA_MESSAGE_META_KIND_V1, payload: { media: adoptedMedia } }
+    : undefined;
+}
+
+function resolveLinkedCodexHome(linked: LoadedLinkedDirectSession): string | null {
+  if (linked.providerId !== 'codex' || linked.source.kind !== 'codexHome') return null;
+  return readString(linked.source.homePath) ?? readString(process.env.CODEX_HOME);
+}
+
 async function adoptDirectSessionMediaForImport(params: Readonly<{
   raw: Record<string, unknown>;
   sessionId: string;
   messageLocalId: string;
   workingDirectory: string | null;
+  linked: LoadedLinkedDirectSession;
 }>): Promise<Record<string, unknown>> {
-  if (!params.workingDirectory) return params.raw;
   const meta = asRecord(params.raw.meta);
   if (!meta) return params.raw;
 
@@ -223,12 +285,14 @@ async function adoptDirectSessionMediaForImport(params: Readonly<{
     sessionId: params.sessionId,
     messageLocalId: params.messageLocalId,
     workingDirectory: params.workingDirectory,
+    linked: params.linked,
   });
   const secondary = await adoptDirectSessionMediaEnvelope({
     envelope: nextMeta.happierMedia,
     sessionId: params.sessionId,
     messageLocalId: params.messageLocalId,
     workingDirectory: params.workingDirectory,
+    linked: params.linked,
   });
 
   if (primary === undefined) {
@@ -282,6 +346,7 @@ export async function importDirectSessionTranscript(params: Readonly<{
       sessionId: params.sessionId,
       messageLocalId: item.localId ?? item.id,
       workingDirectory,
+      linked: params.linked,
     });
     const content = buildStoredMessageContent({
       rawSession: params.linked.rawSession,

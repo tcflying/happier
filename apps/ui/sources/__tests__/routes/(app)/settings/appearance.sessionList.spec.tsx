@@ -60,6 +60,13 @@ describe('AppearanceSettingsScreen (focused groups after redistribution)', () =>
         expect(dropdownTitles).toContain('settingsAppearance.itemDensity');
         expect(dropdownTitles).toContain('settingsAppearance.contentWidth');
 
+        const textSizeDropdown = dropdowns.find((node: any) => (
+            node.props?.itemTrigger?.title === 'settingsAppearance.textSize'
+        ));
+        expect(textSizeDropdown?.props.items.map((item: { id: string }) => item.id)).toEqual([
+            'xxsmall', 'xsmall', 'small', 'default', 'large', 'xlarge', 'xxlarge', 'xhuge', 'xxhuge', 'xxxhuge',
+        ]);
+
         // Session list settings moved to session.tsx — should NOT be here
         expect(titles).not.toContain('settingsFeatures.hideInactiveSessions');
         expect(titles).not.toContain('settingsFeatures.sessionListActiveGrouping');

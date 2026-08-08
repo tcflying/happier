@@ -303,6 +303,7 @@ export function registerSessionHandlers(
         getAdditionalAllowedReadDirs: () => [...pathAllowanceRegistry.getAdditionalAllowedReadDirs()],
         getAdditionalAllowedWriteDirs: () => [...pathAllowanceRegistry.getAdditionalAllowedWriteDirs()],
         sessionRpcTransferMaxBytes,
+        getSessionMetadata: opts?.getSessionMetadata,
         attachmentUpload: {
             pathAllowanceRegistry,
         },

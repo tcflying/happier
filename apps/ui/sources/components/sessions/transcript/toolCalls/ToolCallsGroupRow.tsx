@@ -103,8 +103,12 @@ export const ToolCallsGroupRowWithSessionCommon = React.memo(function ToolCallsG
     const createdAt = toolMessagesForSession[0]?.createdAt ?? Date.now();
 
     const setExpanded = React.useCallback((expanded: boolean) => {
-        props.onSetExpanded({ toolCallsGroupId: props.toolCallsGroupId, toolMessageIds: props.toolMessageIds, expanded });
-    }, [props.onSetExpanded, props.toolCallsGroupId, props.toolMessageIds]);
+        props.onSetExpanded({
+            toolCallsGroupId: props.toolCallsGroupId,
+            toolMessageIds: toolMessagesForSession.map((message) => message.id),
+            expanded,
+        });
+    }, [props.onSetExpanded, props.toolCallsGroupId, toolMessagesForSession]);
     const webPrependAnchorId = toolMessagesForSession[toolMessagesForSession.length - 1]?.id ?? props.toolCallsGroupId;
 
     if (toolMessagesForSession.length === 0) return null;

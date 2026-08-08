@@ -9797,6 +9797,9 @@ settingsSession: {
     detachLocalTerminal: "Отсоединить терминал",
     directSessionTakeoverAvailable:
       "Эта прямая сессия доступна на вашей машине. Возьмите её под контроль в Happier, чтобы управлять ею здесь.",
+    directSessionControlledByCurrentHappier: ({ session, pid }: { session: string; pid: string | number }) => `Управляется этой сессией Happier (${session}, процесс ${pid}).`,
+    directSessionControlledByOtherHappier: ({ session, pid }: { session: string; pid: string | number }) => `Управляется другой сессией Happier (${session}, процесс ${pid}).`,
+    directSessionControlledElsewhere: 'Эта прямая сессия управляется в другом месте. Перехватите её в Happier, чтобы ответить.',
     directSessionMachineOffline:
       "Эта прямая сессия сейчас недоступна, потому что машина офлайн.",
     switchingToDirectTakeover: "Берём эту прямую сессию под контроль…",

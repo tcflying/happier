@@ -146,15 +146,19 @@ function SessionMediaInlineImagePreviewTile(props: Readonly<{
         cacheKey: props.media.sha256 ?? null,
         mimeType: props.mimeType,
         sizeBytes: props.media.sizeBytes,
+        directCodexMediaPreview: props.media.previewSource === 'direct-codex',
+        directMediaId: props.media.previewSource === 'direct-codex' ? props.media.id ?? null : null,
     });
     const accessibilityLabel = resolveSessionMediaAccessibilityLabel(props.media);
+    const isDirectCodexMedia = props.media.previewSource === 'direct-codex';
 
     return (
         <Pressable
             testID={`${props.imageTestIDPrefix}:${props.media.path}`}
-            accessibilityRole="imagebutton"
+            accessibilityRole={isDirectCodexMedia ? "image" : "imagebutton"}
             accessibilityLabel={accessibilityLabel}
             onPress={() => {
+                if (isDirectCodexMedia) return;
                 if (preview.status === 'error') {
                     if (props.fileOpenEnabled) {
                         props.onOpenPath(props.media.path);

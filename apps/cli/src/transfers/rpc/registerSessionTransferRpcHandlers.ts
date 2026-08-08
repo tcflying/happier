@@ -33,6 +33,7 @@ export function registerSessionTransferRpcHandlers(
     attachmentUpload?: Readonly<{
       pathAllowanceRegistry: TransferPathAllowanceRegistry;
     }>;
+    getSessionMetadata?: () => import('@/api/types').Metadata | null;
   }>,
 ): SessionTransferRpcHandlerRegistration {
   const ownsStore = !deps.store;
@@ -53,6 +54,7 @@ export function registerSessionTransferRpcHandlers(
     store,
     getAdditionalAllowedReadDirs: () => normalizeTransferDirectories(deps.getAdditionalAllowedReadDirs),
     sessionRpcTransferMaxBytes: deps.sessionRpcTransferMaxBytes ?? null,
+    getSessionMetadata: deps.getSessionMetadata,
   });
 
   return {

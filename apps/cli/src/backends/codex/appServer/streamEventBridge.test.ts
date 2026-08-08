@@ -674,6 +674,61 @@ describe('createCodexAppServerStreamEventBridge', () => {
         ]);
     });
 
+    it('maps command, file-change, and MCP progress to tool-result deltas until terminal completion', () => {
+        const bridge = createCodexAppServerStreamEventBridge();
+
+        expect(bridge.onNotification({
+            method: 'item/started',
+            params: { item: { id: 'cmd_progress', type: 'commandExecution', command: 'yarn test', cwd: '/repo' } },
+        })).toEqual([expect.objectContaining({ type: 'tool-call', callId: 'cmd_progress' })]);
+        expect(bridge.onNotification({
+            method: 'item/commandExecution/outputDelta',
+            params: { itemId: 'cmd_progress', delta: 'running\n' },
+        })).toEqual([{
+            type: 'tool-result-delta',
+            toolKind: 'command',
+            callId: 'cmd_progress',
+            output: 'running\n',
+        }]);
+
+        expect(bridge.onNotification({
+            method: 'item/started',
+            params: { item: { id: 'patch_progress', type: 'fileChange', changes: [] } },
+        })).toEqual([expect.objectContaining({ type: 'tool-call', callId: 'patch_progress' })]);
+        expect(bridge.onNotification({
+            method: 'item/fileChange/outputDelta',
+            params: { itemId: 'patch_progress', delta: 'patching\n' },
+        })).toEqual([{
+            type: 'tool-result-delta',
+            toolKind: 'file-change',
+            callId: 'patch_progress',
+            output: 'patching\n',
+        }]);
+
+        expect(bridge.onNotification({
+            method: 'item/started',
+            params: { item: { id: 'mcp_progress', type: 'mcpToolCall', server: 'playwright', tool: 'browser_navigate', arguments: {} } },
+        })).toEqual([expect.objectContaining({ type: 'tool-call', callId: 'mcp_progress' })]);
+        expect(bridge.onNotification({
+            method: 'item/mcpToolCall/progress',
+            params: { itemId: 'mcp_progress', message: 'navigating' },
+        })).toEqual([{
+            type: 'tool-result-delta',
+            toolKind: 'mcp',
+            callId: 'mcp_progress',
+            output: 'navigating',
+        }]);
+
+        expect(bridge.onNotification({
+            method: 'item/completed',
+            params: { item: { id: 'cmd_progress', type: 'commandExecution', stdout: 'done', exitCode: 0 } },
+        })).toEqual([expect.objectContaining({ type: 'tool-result', callId: 'cmd_progress' })]);
+        expect(bridge.onNotification({
+            method: 'item/commandExecution/outputDelta',
+            params: { itemId: 'cmd_progress', delta: 'late' },
+        })).toEqual([]);
+    });
+
     it('maps turn diff update notifications', () => {
         const bridge = createCodexAppServerStreamEventBridge();
 

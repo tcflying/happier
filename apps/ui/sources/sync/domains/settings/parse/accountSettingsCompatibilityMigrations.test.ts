@@ -187,4 +187,34 @@ describe('applyAccountSettingsCompatibilityMigrations', () => {
 
         expect(migrated.codexBackendMode).toBe('acp');
     });
+
+    it('migrates an omitted old preview setting from its former default to zero', () => {
+        const migrated = applyAccountSettingsCompatibilityMigrations({
+            input: {},
+            settings: {
+                ...settingsDefaults,
+                transcriptToolCallsCollapsedPreviewCount: 3,
+            },
+            inputSchemaVersion: 7,
+            supportedSchemaVersion: 8,
+        });
+
+        expect(migrated.transcriptToolCallsCollapsedPreviewCount).toBe(0);
+    });
+
+    it('keeps an explicitly persisted tool-group preview choice instead of replacing it with the new default', () => {
+        const migrated = applyAccountSettingsCompatibilityMigrations({
+            input: {
+                transcriptToolCallsCollapsedPreviewCount: 3,
+            },
+            settings: {
+                ...settingsDefaults,
+                transcriptToolCallsCollapsedPreviewCount: 3,
+            },
+            inputSchemaVersion: 8,
+            supportedSchemaVersion: 8,
+        });
+
+        expect(migrated.transcriptToolCallsCollapsedPreviewCount).toBe(3);
+    });
 });

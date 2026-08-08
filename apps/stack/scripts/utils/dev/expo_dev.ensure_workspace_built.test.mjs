@@ -106,6 +106,7 @@ async function writeRunningExpoState({ tmp, uiDir, apiServerUrl }) {
   });
   await writePidState(paths.statePath, {
     pid: process.pid,
+    processInstanceFingerprint: 'win32-cim:test-running-expo',
     port: 8081,
     uiDir,
     projectDir: uiDir,

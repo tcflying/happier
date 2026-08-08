@@ -1,4 +1,4 @@
-import type { AcpConfigOptionControl } from '@/sync/acp/configOptionsControl';
+import type { SessionConfigOptionControl } from '@/sync/domains/sessionControl/configOptionsControl';
 
 const REASONING_CONTROL_IDS = new Set(['reasoning-effort']);
 const SPEED_CONTROL_IDS = new Set(['service-tier', 'speed', 'fast']);
@@ -7,7 +7,7 @@ function normalizeControlId(value: string): string {
     return value.trim().toLowerCase().replace(/[\s_]+/g, '-');
 }
 
-function resolveControlValueLabel(control: AcpConfigOptionControl): string | null {
+function resolveControlValueLabel(control: SessionConfigOptionControl): string | null {
     const optionLabel = control.option.options
         ?.find((option) => option.value === control.effectiveValue)
         ?.name
@@ -21,7 +21,7 @@ function resolveControlValueLabel(control: AcpConfigOptionControl): string | nul
 }
 
 function findControlLabel(
-    controls: ReadonlyArray<AcpConfigOptionControl>,
+    controls: ReadonlyArray<SessionConfigOptionControl>,
     ids: ReadonlySet<string>,
 ): string | null {
     const control = controls.find((candidate) => ids.has(normalizeControlId(candidate.option.id)));
@@ -34,7 +34,7 @@ function findControlLabel(
  * toggles stay in the model picker so this chip remains compact.
  */
 export function resolveAgentChipModelControlSummary(
-    controls: ReadonlyArray<AcpConfigOptionControl> | null | undefined,
+    controls: ReadonlyArray<SessionConfigOptionControl> | null | undefined,
 ): readonly string[] {
     if (!controls?.length) return [];
 

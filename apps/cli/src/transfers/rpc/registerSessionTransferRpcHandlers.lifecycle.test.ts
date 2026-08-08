@@ -3,13 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { createTransferRecipientKeyPair } from '@/machines/transfer/transferChunkEncryption';
 import { TransferSessionStore } from '@/transfers/core/transferSessionStore';
 
 import { registerSessionTransferRpcHandlers } from './registerSessionTransferRpcHandlers';
+
+const getDirectSessionProviderOpsMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/backends/catalog', () => ({
+  getDirectSessionProviderOps: (...args: unknown[]) => getDirectSessionProviderOpsMock(...args),
+}));
 
 function createRegistrar(): { handlers: Map<string, RpcHandler>; registrar: RpcHandlerRegistrar } {
   const handlers = new Map<string, RpcHandler>();
@@ -28,6 +34,9 @@ async function expectPathMissing(path: string): Promise<void> {
 }
 
 describe('registerSessionTransferRpcHandlers lifecycle ownership', () => {
+  beforeEach(() => {
+    getDirectSessionProviderOpsMock.mockReset();
+  });
   it('does not dispose a caller-owned injected store', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'happier-transfer-injected-store-'));
     const { registrar } = createRegistrar();
@@ -102,6 +111,104 @@ describe('registerSessionTransferRpcHandlers lifecycle ownership', () => {
       await expectPathMissing(downloadTempPath);
     } finally {
       await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('allows only the exact media id and path published by this linked Codex transcript', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-direct-codex-preview-gate-'));
+    const workspace = join(root, 'workspace');
+    const codexHome = join(root, 'codex-home');
+    const imagePath = join(codexHome, 'images', 'generated.png');
+    const pngBytes = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lU6w9wAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const { handlers, registrar } = createRegistrar();
+    let metadata: any = null;
+
+    try {
+      await mkdir(workspace, { recursive: true });
+      await mkdir(join(codexHome, 'images'), { recursive: true });
+      await writeFile(imagePath, pngBytes);
+      const registration = registerSessionTransferRpcHandlers(registrar, {
+        workingDirectory: workspace,
+        getSessionMetadata: () => metadata,
+      });
+      const init = handlers.get(RPC_METHODS.DAEMON_BULK_TRANSFER_DOWNLOAD_INIT);
+      if (!init) throw new Error('expected download init handler');
+      const recipient = createTransferRecipientKeyPair();
+      const request = {
+        t: 'direct_codex_session_media_preview_v1',
+        directMediaId: 'image-published',
+        path: 'images/generated.png',
+        recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
+      } as const;
+
+      await expect(init(request)).resolves.toMatchObject({ success: false });
+      metadata = {
+        directSessionV1: {
+          v: 1,
+          providerId: 'claude',
+          machineId: 'machine-1',
+          remoteSessionId: 'remote-1',
+          source: { kind: 'codexHome', home: 'user', homePath: codexHome },
+        },
+      };
+      await expect(init(request)).resolves.toMatchObject({ success: false });
+
+      metadata = {
+        directSessionV1: {
+          v: 1,
+          providerId: 'codex',
+          machineId: 'machine-1',
+          remoteSessionId: 'remote-1',
+          source: { kind: 'codexHome', home: 'user', homePath: codexHome },
+        },
+      };
+      const pageTranscript = vi.fn(async ({ remoteSessionId }: { remoteSessionId: string }) => ({
+        items: remoteSessionId === 'remote-1'
+          ? [{
+              id: 'message-1',
+              createdAtMs: 1,
+              raw: {
+                role: 'agent',
+                meta: {
+                  happier: {
+                    kind: 'direct_session_media.v1',
+                    payload: { media: [{ id: 'image-published', path: 'images/generated.png' }] },
+                  },
+                },
+              },
+            }]
+          : [],
+        nextCursor: null,
+        tailCursor: null,
+        hasMore: false,
+      }));
+      getDirectSessionProviderOpsMock.mockResolvedValue({ pageTranscript });
+      const accepted = await init(request);
+      expect(accepted).toMatchObject({
+        success: true,
+        downloadId: expect.any(String),
+        name: 'generated.png',
+        sizeBytes: pngBytes.byteLength,
+      });
+      expect(pageTranscript).toHaveBeenCalledWith(expect.objectContaining({ remoteSessionId: 'remote-1' }));
+
+      await expect(init({ ...request, directMediaId: 'image-forged' })).resolves.toMatchObject({ success: false });
+      await expect(init({ ...request, path: 'images/other.png' })).resolves.toMatchObject({ success: false });
+
+      metadata = {
+        directSessionV1: {
+          ...metadata.directSessionV1,
+          remoteSessionId: 'remote-2',
+        },
+      };
+      await expect(init(request)).resolves.toMatchObject({ success: false });
+
+      await registration.dispose();
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

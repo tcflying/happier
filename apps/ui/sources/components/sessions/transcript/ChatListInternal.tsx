@@ -2382,6 +2382,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         nativeMountSettleStable,
         nativePrependTelemetryStateRef,
         nativeTranscriptTouchStartYRef,
+        onWebArrowDown: jumpToBottom,
         observeNativeBlankRecovery,
         observeNativeConfirmation,
         observeNativeEntryRestoreHostFacts,

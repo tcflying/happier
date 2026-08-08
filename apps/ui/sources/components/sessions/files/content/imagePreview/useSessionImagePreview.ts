@@ -38,6 +38,8 @@ export function useSessionImagePreview(input: Readonly<{
     cacheKey?: string | null;
     mimeType?: string | null;
     sizeBytes?: number | null;
+    directCodexMediaPreview?: boolean;
+    directMediaId?: string | null;
 }>): SessionImagePreviewState {
     const sessionId = input.sessionId;
     const filePath = input.filePath;
@@ -149,6 +151,8 @@ export function useSessionImagePreview(input: Readonly<{
                     filePath,
                     mimeType: mime,
                     maxBytes: maxPreviewBytes > 0 ? maxPreviewBytes : undefined,
+                    directCodexMediaPreview: input.directCodexMediaPreview === true,
+                    directMediaId: input.directMediaId ?? null,
                 });
                 if (!res.ok) {
                     if (cancelled) return;
@@ -200,7 +204,7 @@ export function useSessionImagePreview(input: Readonly<{
         return () => {
             cancelled = true;
         };
-    }, [cacheKey, canCache, clearTransientPreview, enabled, filePath, maxPreviewBytes, mime, sessionId, sizeBytes]);
+    }, [cacheKey, canCache, clearTransientPreview, enabled, filePath, input.directCodexMediaPreview, input.directMediaId, maxPreviewBytes, mime, sessionId, sizeBytes]);
 
     React.useEffect(() => () => {
         clearTransientPreview();

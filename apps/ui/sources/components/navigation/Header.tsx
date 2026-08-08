@@ -10,6 +10,7 @@ import { shadowLevelStyle } from '@/shadowElevation';
 import { Text } from '@/components/ui/text/Text';
 import { useDesktopWindowDragMouseProps } from '@/components/navigation/desktopWindowChrome/DesktopWindowDragRegion';
 import { Icon } from '@/components/ui/icons/Icon';
+import { HeaderFontScaleAction } from '@/components/navigation/HeaderFontScaleAction';
 
 
 interface HeaderProps {
@@ -97,7 +98,10 @@ export const Header = React.memo((props: HeaderProps) => {
                     </View>
 
                     <View pointerEvents="box-none" style={styles.rightContainer}>
-                        {headerRight && headerRight()}
+                        <View testID="desktop-route-header-actions" pointerEvents="box-none" style={styles.rightActions}>
+                            <HeaderFontScaleAction />
+                            {headerRight && headerRight()}
+                        </View>
                     </View>
                 </View>
             </View>
@@ -240,6 +244,13 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexGrow: 0,
         flexShrink: 0,
         alignItems: 'flex-end',
+    },
+    rightActions: {
+        flexDirection: 'row',
+        flexGrow: 0,
+        flexShrink: 0,
+        alignItems: 'center',
+        gap: 4,
     },
     title: {
         fontSize: 16,

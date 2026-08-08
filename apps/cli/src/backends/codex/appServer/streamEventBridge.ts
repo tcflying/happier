@@ -37,6 +37,7 @@ export type CodexAppServerStreamUpdate =
     | Readonly<{ type: 'context-compaction'; phase: 'started' | 'completed'; itemId: string }>
     | Readonly<{ type: 'turn-diff-updated'; turnId: string | null; unifiedDiff: string }>
     | Readonly<{ type: 'tool-call'; toolKind: ToolKind; callId: string; name: string; input: unknown }>
+    | Readonly<{ type: 'tool-result-delta'; toolKind: ToolKind; callId: string; output: string }>
     | Readonly<{ type: 'tool-result'; toolKind: ToolKind; callId: string; name?: string; input?: unknown; output: unknown }>
     | Readonly<{
         type: 'approval-request';
@@ -242,6 +243,25 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
                 const itemId = readItemId(params);
                 const text = readText(params, ['delta', 'text']);
                 return itemId && text ? [{ type: 'reasoning-delta', itemId, text }] : [];
+            }
+
+            if (
+                notification.method === 'item/commandExecution/outputDelta'
+                || notification.method === 'item/fileChange/outputDelta'
+                || notification.method === 'item/mcpToolCall/progress'
+            ) {
+                const resolved = resolveToolContext(params);
+                const output = notification.method === 'item/mcpToolCall/progress'
+                    ? readText(params, ['message', 'delta', 'text'])
+                    : readText(params, ['delta', 'text', 'message']);
+                return resolved && output
+                    ? [{
+                        type: 'tool-result-delta',
+                        toolKind: resolved.toolContext.toolKind,
+                        callId: resolved.callId,
+                        output,
+                    }]
+                    : [];
             }
 
             if (notification.method === 'item/started') {

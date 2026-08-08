@@ -174,7 +174,7 @@ export async function uploadDaemonSessionFileFromReader(params: Readonly<{
 
 export async function downloadDaemonSessionFileToDestination(params: Readonly<{
     sessionId: string;
-    request: Readonly<{ path: string; asZip: boolean }>;
+    request: Readonly<{ path: string; asZip: boolean; directCodexMediaPreview?: boolean; directMediaId?: string }>;
     destination: BulkTransferFileDestination;
     onInit?: ((init: Readonly<{ name: string; sizeBytes: number }>) => Promise<void | BulkTransferFailureResponse>) | null;
     signal?: AbortSignal | null;
@@ -187,7 +187,7 @@ export async function downloadDaemonSessionFileToDestination(params: Readonly<{
         sessionId: params.sessionId,
     });
 
-    if (!params.request.asZip) {
+    if (!params.request.asZip && params.request.directCodexMediaPreview !== true) {
         const stat = await initTransferClient.call<SessionStatFileResponse, SessionStatFileRequest>({
             request: { path: params.request.path },
             machineMethod: RPC_METHODS.STAT_FILE,
@@ -222,12 +222,15 @@ export async function downloadDaemonSessionFileToDestination(params: Readonly<{
         init: async (request) => {
             const init = await bulkTransferClient.call<
                 SessionFileDownloadInitResponse,
-                Readonly<{ t: 'session_file_download_v1'; path: string; asZip: boolean; recipientPublicKeyBase64: string }>
+                Readonly<{ t: 'session_file_download_v1' | 'direct_codex_session_media_preview_v1'; path: string; asZip?: boolean; directMediaId?: string; recipientPublicKeyBase64: string }>
             >({
                 request: {
-                    t: 'session_file_download_v1',
+                    t: params.request.directCodexMediaPreview === true ? 'direct_codex_session_media_preview_v1' : 'session_file_download_v1',
                     path: params.request.path,
-                    asZip: params.request.asZip,
+                    ...(params.request.directCodexMediaPreview === true ? {} : { asZip: params.request.asZip }),
+                    ...(params.request.directCodexMediaPreview === true && params.request.directMediaId
+                        ? { directMediaId: params.request.directMediaId }
+                        : {}),
                     recipientPublicKeyBase64: request.recipientPublicKeyBase64,
                 },
                 machineMethod: RPC_METHODS.DAEMON_BULK_TRANSFER_DOWNLOAD_INIT,

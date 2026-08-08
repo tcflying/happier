@@ -11,6 +11,10 @@ export type ChatFooterDirectControlState = Readonly<{
     activity: 'running' | 'active_recently' | 'idle' | 'unknown';
     canTakeOverDirect: boolean;
     canTakeOverPersist: boolean;
+    providerLabel: string;
+    trustedPid?: number | null;
+    ownerPid?: number | null;
+    ownerHappierSessionId?: string | null;
     takeoverInFlight: 'direct' | 'persisted' | null;
     onRequestTakeOverDirect?: () => void | Promise<void>;
     onRequestTakeOverPersist?: () => void | Promise<void>;
@@ -110,11 +114,13 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
     ]);
 
     const directModeBanner = React.useMemo(() => {
-        if (!props.directControl) return null;
-        if (props.directControl.runnerActive) return null;
+        if (!props.directControl || props.directControl.runnerActive) return null;
 
         const switchingToDirect = props.directControl.takeoverInFlight === 'direct';
         const switchingToPersisted = props.directControl.takeoverInFlight === 'persisted';
+        const ownerHappierSessionId = props.directControl.ownerHappierSessionId?.trim() ?? '';
+        const ownerPid = props.directControl.ownerPid;
+        const authoritativeOtherOwner = ownerHappierSessionId.length > 0 && typeof ownerPid === 'number';
         const showDirectAction =
             !switchingToDirect
             && !switchingToPersisted
@@ -128,11 +134,17 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
             && props.directControl.canTakeOverPersist
             && typeof props.directControl.onRequestTakeOverPersist === 'function';
 
-        const textKey = (() => {
-            if (switchingToPersisted) return 'chatFooter.switchingToPersistedTakeover';
-            if (switchingToDirect) return 'chatFooter.switchingToDirectTakeover';
-            if (!props.directControl.machineOnline) return 'chatFooter.directSessionMachineOffline';
-            return 'chatFooter.directSessionTakeoverAvailable';
+        const body = (() => {
+            if (switchingToPersisted) return t('chatFooter.switchingToPersistedTakeover');
+            if (switchingToDirect) return t('chatFooter.switchingToDirectTakeover');
+            if (!props.directControl.machineOnline) return t('chatFooter.directSessionMachineOffline');
+            if (authoritativeOtherOwner) {
+                return t('chatFooter.directSessionControlledByOtherHappier', {
+                    session: ownerHappierSessionId,
+                    pid: ownerPid,
+                });
+            }
+            return t('chatFooter.directSessionTakeoverAvailable');
         })();
 
         return (
@@ -140,7 +152,7 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
                 <SessionWarningActionBanner
                     testID="session-chatFooter-directControl"
                     iconName="info"
-                    body={t(textKey)}
+                    body={body}
                     secondaryActions={showPersistAction
                         ? [{
                             key: 'takeOverPersist',

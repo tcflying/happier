@@ -41,7 +41,9 @@ installTranscriptCommonModuleMocks({
         });
     },
     text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
-        translate: (key: string) => key,
+        translate: (key: string, params?: Record<string, unknown>) => key === 'chatFooter.directSessionControlledByOtherHappier'
+            ? `${key}:${String(params?.session ?? '')}:${String(params?.pid ?? '')}`
+            : key,
     }),
 });
 
@@ -238,6 +240,62 @@ describe('ChatFooter (local control)', () => {
 
         expect(onRequestTakeOverDirect).toHaveBeenCalledTimes(1);
         expect(onRequestTakeOverPersist).toHaveBeenCalledTimes(1);
+    });
+
+    it('identifies another Happier owner only from the authoritative session id and pid pair', async () => {
+        const screen = await renderFooter({
+            directControl: {
+                machineOnline: true,
+                runnerActive: false,
+                activity: 'running',
+                canTakeOverDirect: true,
+                canTakeOverPersist: true,
+                trustedPid: 9999,
+                ownerHappierSessionId: 'session-other',
+                ownerPid: 4321,
+                takeoverInFlight: null,
+            },
+        } as any);
+
+        expect(screen.getTextContent()).toContain('chatFooter.directSessionControlledByOtherHappier');
+    });
+
+    it('does not claim another Happier owner from a legacy trusted pid alone', async () => {
+        const screen = await renderFooter({
+            directControl: {
+                machineOnline: true,
+                runnerActive: false,
+                activity: 'running',
+                canTakeOverDirect: true,
+                canTakeOverPersist: true,
+                trustedPid: 4321,
+                takeoverInFlight: null,
+            },
+        } as any);
+
+        expect(screen.getTextContent()).toContain('chatFooter.directSessionTakeoverAvailable');
+        expect(screen.getTextContent()).not.toContain('chatFooter.directSessionControlledByOtherHappier');
+    });
+
+    it('hides takeover actions while the current Happier session owns the runner', async () => {
+        const screen = await renderFooter({
+            directControl: {
+                machineOnline: true,
+                runnerActive: true,
+                activity: 'running',
+                canTakeOverDirect: true,
+                canTakeOverPersist: true,
+                ownerHappierSessionId: 'session-current',
+                ownerPid: 1234,
+                takeoverInFlight: null,
+                onRequestTakeOverDirect: vi.fn(),
+                onRequestTakeOverPersist: vi.fn(),
+            },
+        } as any);
+
+        expect(screen.findByTestId('session-chatFooter-directControl')).toBeNull();
+        expect(screen.findByTestId('session-chatFooter-takeOverDirect')).toBeNull();
+        expect(screen.findByTestId('session-chatFooter-takeOverPersist')).toBeNull();
     });
 
     it('renders a takeover-in-flight message and hides direct takeover actions while a direct switch is pending', async () => {

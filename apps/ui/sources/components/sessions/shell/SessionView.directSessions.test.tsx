@@ -3518,6 +3518,111 @@ describe('SessionView (direct sessions)', () => {
     }
   });
 
+  it('locks input and renders the authoritative other Happier owner', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: false,
+      activity: 'running',
+      canTakeOverDirect: true,
+      canTakeOverPersist: true,
+      canForceStop: true,
+      trustedPid: 4321,
+      ownerPid: 4321,
+      ownerHappierSessionId: 'session-other',
+    });
+
+    const screen = await renderSessionViewAndSettle();
+    const agentInput = findAgentInput(screen);
+
+    expect(agentInput.props.disabled).toBe(true);
+    expect(agentInput.props.isSendDisabled).toBe(true);
+    expect(agentInput.props.placeholder).toBe('chatFooter.directSessionControlledElsewhere');
+    expect(agentInput.props.statusBadges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'direct-session-owner', testID: 'session-direct-owner-status-badge', tone: 'warning' }),
+    ]));
+    await act(async () => {
+      await agentInput.props.onSend({ inputTextOverride: 'must not send' });
+    });
+    expect(showDirectSessionTakeoverDialogSpy).not.toHaveBeenCalled();
+    expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not lock input without both authoritative owner fields', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: false,
+      activity: 'running',
+      canTakeOverDirect: true,
+      canTakeOverPersist: true,
+      canForceStop: true,
+      trustedPid: 4321,
+      ownerPid: null,
+      ownerHappierSessionId: 'session-unproven',
+    });
+
+    const screen = await renderSessionViewAndSettle();
+    const agentInput = findAgentInput(screen);
+
+    expect(agentInput.props.disabled).toBe(false);
+    expect(agentInput.props.placeholder).toBe('session.inputPlaceholder');
+    expect(agentInput.props.statusBadges).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'direct-session-owner' }),
+    ]));
+  });
+
+  it('keeps the current authoritative owner editable and renders its status badge', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: true,
+      activity: 'running',
+      canTakeOverDirect: false,
+      canTakeOverPersist: true,
+      canForceStop: false,
+      ownerPid: 1234,
+      ownerHappierSessionId: 's1',
+    });
+
+    const screen = await renderSessionViewAndSettle();
+    const agentInput = findAgentInput(screen);
+
+    expect(agentInput.props.disabled).toBe(false);
+    expect(agentInput.props.isSendDisabled).toBe(false);
+    expect(agentInput.props.statusBadges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'direct-session-owner', testID: 'session-direct-owner-status-badge', tone: 'complete' }),
+    ]));
+    await act(async () => {
+      await agentInput.props.onSend({ inputTextOverride: 'owner can send' });
+    });
+    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
+      's1',
+      'owner can send',
+      undefined,
+      undefined,
+      expectDirectSendProjectionOptions(),
+    );
+  });
+
+  it('prefers the raw rollout tail over the materialized transcript fallback', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({
+      ok: true,
+      machineOnline: true,
+      runnerActive: true,
+      activity: 'running',
+      canTakeOverDirect: false,
+      canTakeOverPersist: true,
+      canForceStop: false,
+      activityTailCharacter: '新',
+    });
+    sessionMessagesState.current = [{ kind: 'agent-text', id: 'a1', localId: null, createdAt: 1, text: '旧正文' }];
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.connectionStatus?.detailText).toBe('新');
+  });
+
   it('prompts for takeover on send and submits after taking over the direct session', async () => {
     showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
     const screen = await renderSessionView();

@@ -64,6 +64,7 @@ export async function collectCodexDirectTranscriptRolloutStreams(params: Readonl
 
     streams.push(...files.map((file) => ({
       ...file,
+      codexHome: params.codexHome,
       threadId: current.threadId,
       sidechainId: current.sidechainId,
     })));

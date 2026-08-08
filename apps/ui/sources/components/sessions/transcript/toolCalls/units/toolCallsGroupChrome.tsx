@@ -131,7 +131,7 @@ export function ToolCallsGroupUnitRowScaffold(props: Readonly<{ children: React.
 
 /**
  * The grouped tool-calls header row: icon, title + count, status indicator, and the
- * collapse affordance (chevron + press) when expanded. Shared between the whole-card
+ * expand/collapse affordance (chevron + press). Shared between the whole-card
  * ToolCallsGroupView and the per-unit header row.
  */
 export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHeaderChrome(props: Readonly<{
@@ -139,25 +139,23 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
     status: ToolCallsGroupStatus;
     count: number;
     expanded: boolean;
-    onCollapse: () => void;
+    onToggle: () => void;
 }>) {
     const { theme } = useUnistyles();
-    const headerPressable = props.expanded;
 
     return (
         <Pressable
             testID="transcript-tool-calls-header"
-            onPress={headerPressable ? props.onCollapse : undefined}
-            disabled={!headerPressable}
+            onPress={props.onToggle}
             style={({ pressed }) => [
                 chromeStyles.header,
-                headerPressable && pressed && (props.chromeMode === 'activity_feed' ? chromeStyles.headerFeedPressed : chromeStyles.headerCardsPressed),
+                pressed && (props.chromeMode === 'activity_feed' ? chromeStyles.headerFeedPressed : chromeStyles.headerCardsPressed),
             ]}
         >
             <View style={chromeStyles.headerGutter}>
                 <Icon name="stack-simple" size={16} color={theme.colors.text.secondary} />
             </View>
-            <Text style={chromeStyles.title}>
+            <Text style={chromeStyles.title} numberOfLines={1}>
                 {t('session.toolCalls')}
                 <Text style={chromeStyles.subtitle}> · {props.count}</Text>
             </Text>
@@ -171,13 +169,11 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
                         <Icon name="check-circle" size={GROUP_STATUS_ICON_SIZE_PX} color={theme.colors.state.success.foreground} />
                     )}
                 </View>
-                {props.expanded ? (
-                    <Icon
-                        name="caret-up"
-                        size={16}
-                        color={theme.colors.text.secondary}
-                    />
-                ) : null}
+                <Icon
+                    name={props.expanded ? 'caret-up' : 'caret-down'}
+                    size={16}
+                    color={theme.colors.text.secondary}
+                />
             </View>
         </Pressable>
     );
@@ -197,7 +193,7 @@ export const ToolCallsGroupExpandMoreChrome = React.memo(function ToolCallsGroup
             onPress={props.onExpand}
             style={({ pressed }) => [chromeStyles.previewMore, pressed && chromeStyles.previewMorePressed]}
         >
-            <Text style={chromeStyles.previewMoreText}>
+            <Text style={chromeStyles.previewMoreText} numberOfLines={1}>
                 {t('session.toolCallsCollapsedPreviewMore', { count: props.hiddenCount })}
             </Text>
         </Pressable>

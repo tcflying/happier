@@ -10125,6 +10125,9 @@ settingsSession: {
     detachLocalTerminal: "ターミナルを切り離す",
     directSessionTakeoverAvailable:
       "この直接セッションはあなたのマシンで利用できます。ここで操作するために Happier で引き継いでください。",
+    directSessionControlledByCurrentHappier: ({ session, pid }: { session: string; pid: string | number }) => `この Happier セッションが制御中です（${session}、プロセス ${pid}）。`,
+    directSessionControlledByOtherHappier: ({ session, pid }: { session: string; pid: string | number }) => `別の Happier セッションが制御中です（${session}、プロセス ${pid}）。`,
+    directSessionControlledElsewhere: 'この直接セッションは他で制御されています。返信するには Happier で引き継いでください。',
     directSessionMachineOffline:
       "この直接セッションは、マシンがオフラインのため現在利用できません。",
     switchingToDirectTakeover: "この直接セッションを引き継いでいます…",

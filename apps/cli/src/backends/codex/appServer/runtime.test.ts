@@ -722,6 +722,48 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 20);',
         '            continue;',
         '        }',
+        '        if (text === "bridge-tool-result-deltas") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/plan/delta", params: { threadId: msg.params?.threadId ?? null, turnId, itemId: "plan_progress", delta: "Plan draft" } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "cmd_progress", type: "commandExecution", command: "yarn test", cwd: "/repo" } } }) + "\\n");',
+        '            }, 7);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/commandExecution/outputDelta", params: { threadId: msg.params?.threadId ?? null, turnId, itemId: "cmd_progress", delta: "running\\n" } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "patch_progress", type: "fileChange", changes: [] } } }) + "\\n");',
+        '            }, 9);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/fileChange/outputDelta", params: { threadId: msg.params?.threadId ?? null, turnId, itemId: "patch_progress", delta: "patching\\n" } }) + "\\n");',
+        '            }, 10);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "mcp_progress", type: "mcpToolCall", server: "playwright", tool: "browser_navigate", arguments: {} } } }) + "\\n");',
+        '            }, 11);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/mcpToolCall/progress", params: { threadId: msg.params?.threadId ?? null, turnId, itemId: "mcp_progress", message: "navigating" } }) + "\\n");',
+        '            }, 12);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "plan_progress", type: "plan", text: "Plan final" } } }) + "\\n");',
+        '            }, 13);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "cmd_progress", type: "commandExecution", stdout: "done", exitCode: 0 } } }) + "\\n");',
+        '            }, 14);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/commandExecution/outputDelta", params: { threadId: msg.params?.threadId ?? null, turnId, itemId: "cmd_progress", delta: "late" } }) + "\\n");',
+        '            }, 15);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "patch_progress", type: "fileChange", stdout: "patched", success: true } } }) + "\\n");',
+        '            }, 16);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "mcp_progress", type: "mcpToolCall", result: { Ok: { status: "ok" } } } } }) + "\\n");',
+        '            }, 17);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 22);',
+        '            continue;',
+        '        }',
         '        if (text === "bridge-mcp-elicitation") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ id: "mcp-elicitation-request", method: "mcpServer/elicitation/request", params: { toolUseId: "mcp_tool_1", invocation: { server: "happier", tool: "change_title", arguments: { title: "New Title" } } } }) + "\\n");',
@@ -4717,6 +4759,65 @@ describe('createCodexAppServerRuntime', () => {
         expect(committedSegmentStates).toContain('streaming');
         expect(committedSegmentStates).toContain('complete');
         expect(session.sendAgentMessageCommitted).not.toHaveBeenCalled();
+    });
+
+    it('publishes tool output deltas ephemerally with stable result localIds before committing terminal results', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-tool-result-deltas-');
+        const session = {
+            updateMetadata: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+            sendCodexMessageCommitted: vi.fn(async () => {}),
+        };
+        const transcriptSession = {
+            sendAgentMessageEphemeral: vi.fn(),
+            sendAgentMessageEphemeralDelta: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+            transcriptSession: transcriptSession as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-tool-result-deltas');
+        await runtime.sendPrompt('bridge-tool-result-deltas');
+
+        const deltaCalls = transcriptSession.sendAgentMessageEphemeralDelta.mock.calls as Array<[
+            string,
+            { type: string; callId?: string; output?: unknown; id?: string },
+            { localId: string; tick: number; baseLength: number },
+        ]>;
+        expect(deltaCalls).toEqual(expect.arrayContaining([
+            ['codex', expect.objectContaining({ type: 'tool-call-result', callId: 'cmd_progress', output: 'running\n' }), expect.objectContaining({ baseLength: 0 })],
+            ['codex', expect.objectContaining({ type: 'tool-call-result', callId: 'patch_progress', output: 'patching\n' }), expect.objectContaining({ baseLength: 0 })],
+            ['codex', expect.objectContaining({ type: 'tool-call-result', callId: 'mcp_progress', output: 'navigating' }), expect.objectContaining({ baseLength: 0 })],
+        ]));
+        const commandDeltaCalls = deltaCalls.filter(([, body]) => body.callId === 'cmd_progress');
+        expect(commandDeltaCalls).toHaveLength(2);
+        expect(new Set(commandDeltaCalls.map(([, , options]) => options.localId)).size).toBe(2);
+
+        const committedResults = session.sendCodexMessageCommitted.mock.calls as unknown as Array<[
+            { type: string; callId?: string; output?: unknown; id?: string },
+            { localId: string },
+        ]>;
+        for (const callId of ['cmd_progress', 'patch_progress', 'mcp_progress']) {
+            const deltas = deltaCalls.filter(([, body]) => body.callId === callId);
+            const committed = committedResults.filter(([body]) => body.type === 'tool-call-result' && body.callId === callId);
+            expect(deltas).toHaveLength(2);
+            expect(committed).toHaveLength(2);
+            expect(new Set(committed.map(([, options]) => options.localId))).toEqual(new Set(deltas.map(([, , options]) => options.localId)));
+            expect(committed.map(([body]) => body.id)).toEqual(committed.map(([, options]) => options.localId));
+        }
+        expect(session.sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'tool-call-result' }));
+        expect(transcriptSession.sendAgentMessageCommitted).toHaveBeenCalledWith(
+            'codex',
+            expect.objectContaining({ type: 'message', message: 'Plan draft' }),
+            expect.anything(),
+        );
+        await runtime.reset();
     });
 
     it('does not append the full final assistant text into streaming drafts when the final text diverges from earlier deltas', async () => {

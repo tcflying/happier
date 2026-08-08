@@ -125,9 +125,10 @@ function appendToolGroupUnits(params: Readonly<{
     isGroupExpanded: (toolMessageIds: readonly string[]) => boolean;
     collapsedPreviewCount: number;
 }>): void {
-    if (params.toolMessageIds.length === 0) return;
-
-    const toolMessageIds = [...params.toolMessageIds];
+    const toolMessageIds = params.toolMessageIds.filter((toolMessageId) => (
+        params.getMessageById(toolMessageId)?.kind === 'tool-call'
+    ));
+    if (toolMessageIds.length === 0) return;
     const firstToolMessageId = toolMessageIds[0]!;
     const expanded = params.isGroupExpanded(toolMessageIds);
     const createdAt = normalizeCreatedAt(params.getMessageById(firstToolMessageId));

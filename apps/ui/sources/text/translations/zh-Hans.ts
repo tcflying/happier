@@ -9522,6 +9522,9 @@ settingsSession: {
     detachLocalTerminal: "断开终端",
     directSessionTakeoverAvailable:
       "此直连会话可在你的机器上使用。可在 Happier 中接管它并在这里控制。",
+    directSessionControlledByCurrentHappier: ({ session, pid }: { session: string; pid: string | number }) => `当前由本 Happier 会话独占（会话 ${session}，进程 ${pid}）。`,
+    directSessionControlledByOtherHappier: ({ session, pid }: { session: string; pid: string | number }) => `当前由另一个 Happier 会话操作（会话 ${session}，进程 ${pid}）。`,
+    directSessionControlledElsewhere: "此直连会话正由其他运行器操作；请先在 Happier 中接管后再发送。",
     directSessionMachineOffline:
       "此直连会话当前不可用，因为机器已离线。",
     switchingToDirectTakeover: "正在接管此直连会话…",

@@ -175,6 +175,8 @@ export async function createSessionFilePreviewSource(input: Readonly<{
     mimeType: string;
     maxBytes?: number | null;
     signal?: AbortSignal | null;
+    directCodexMediaPreview?: boolean;
+    directMediaId?: string | null;
     createDestination?: CreateSessionFilePreviewDestination;
 }>): Promise<CreateSessionFilePreviewSourceResult> {
     const maxBytes = normalizeMaxBytes(input.maxBytes);
@@ -188,7 +190,12 @@ export async function createSessionFilePreviewSource(input: Readonly<{
     let downloadedBytes = 0;
     const download = await downloadDaemonSessionFileToDestination({
         sessionId: input.sessionId,
-        request: { path: input.filePath, asZip: false },
+        request: {
+            path: input.filePath,
+            asZip: false,
+            ...(input.directCodexMediaPreview === true ? { directCodexMediaPreview: true } : {}),
+            ...(input.directCodexMediaPreview === true && input.directMediaId ? { directMediaId: input.directMediaId } : {}),
+        },
         destination: {
             writeBytes: async (bytes) => {
                 downloadedBytes += bytes.byteLength;

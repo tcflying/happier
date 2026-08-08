@@ -192,7 +192,7 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
     const normalizedCollapsedPreviewCount = clampInt(
         typeof transcriptToolCallsCollapsedPreviewCount === 'number'
             ? transcriptToolCallsCollapsedPreviewCount
-            : 5,
+            : 0,
         { min: 0, max: 15 },
     );
 

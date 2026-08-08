@@ -3569,7 +3569,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         });
                     });
                     client.registerNotificationHandler('thread/tokenUsage/updated', (notificationParams) => {
-                        if (attachedClientGeneration !== clientLifecycleGeneration) return;
                         void runBridgeWork(async () => {
                             if (attachedClientGeneration !== clientLifecycleGeneration) return;
                             const notificationThreadId = readThreadId(notificationParams);
@@ -3967,14 +3966,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 return await resumeThread(client, resumeId, {
                     preserveRequestedThreadId: false,
                     allowOversizedResponseRecovery: !importHistory,
-                    suppressTranscriptReplay: !importHistory,
                 });
             }
             if (existingSessionId) {
                 return await resumeThread(client, existingSessionId, {
                     preserveRequestedThreadId: false,
                     allowOversizedResponseRecovery: !importHistory,
-                    suppressTranscriptReplay: !importHistory,
                 });
             }
             const requestParams = {
